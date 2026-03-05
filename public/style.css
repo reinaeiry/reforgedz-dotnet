@@ -519,6 +519,73 @@ img { display: block; max-width: 100%; }
 
 .about-story p:last-child { margin-bottom: 0; }
 
+.dean-hall-section {
+  margin-top: 64px;
+  margin-bottom: 8px;
+}
+
+.dean-hall-inner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 48px 52px;
+  max-width: 900px;
+}
+
+.dean-hall-header {
+  margin-bottom: 32px;
+}
+
+.dean-hall-header h2 {
+  font-family: var(--display);
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #fff;
+  margin-top: 6px;
+}
+
+.dean-hall-body p {
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  line-height: 1.9;
+  margin-bottom: 16px;
+}
+
+.dean-hall-body p:last-child { margin-bottom: 0; }
+
+.dean-hall-stats {
+  display: flex;
+  gap: 48px;
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.dh-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dh-num {
+  font-family: var(--display);
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 1px;
+  line-height: 1;
+}
+
+.dh-label {
+  font-size: 0.75rem;
+  color: var(--text-ghost);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .about-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
