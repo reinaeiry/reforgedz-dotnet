@@ -3,266 +3,424 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ReforgedZ - Arma Reforger DayZ</title>
+  <title>ReforgedZ — Arma Reforger Survival</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
-  <div class="cursor-glow" id="cursorGlow"></div>
-  <div class="particles" id="particles"></div>
-
-  <!-- Nav -->
-  <nav class="nav" id="mainNav">
+  <nav class="nav" id="nav">
     <div class="nav-inner">
-      <div class="nav-brand">
-        <span class="brand-icon">Z</span>
-        <span class="brand-text">REFORGED<span class="brand-highlight">Z</span></span>
+      <a class="nav-brand" data-tab="home" href="#">
+        <span>REFORGED<span class="brand-z">Z</span></span>
+      </a>
+      <div class="nav-links">
+        <button class="nav-link active" data-tab="home">Home</button>
+        <button class="nav-link" data-tab="about">About</button>
+        <a class="nav-link" href="https://discord.gg/reforgedz" target="_blank">Community</a>
+        <button class="nav-link" data-tab="radio">Radio</button>
+        <button class="nav-link" data-tab="contact">Contact</button>
+        <a class="nav-link" href="https://wiki.reforgedz.net" target="_blank">Wiki</a>
       </div>
-      <div class="nav-tabs">
-        <button class="nav-tab active" data-tab="home">Home</button>
-        <button class="nav-tab" data-tab="about">About</button>
-        <a class="nav-tab" href="https://discord.gg/reforgedz" target="_blank">Community</a>
-        <button class="nav-tab" data-tab="radio">Radio</button>
-        <button class="nav-tab" data-tab="contact">Contact</button>
-      </div>
-      <div class="nav-actions">
-        <a href="https://wiki.reforgedz.net" target="_blank" class="nav-link-wiki">Wiki</a>
-        <a href="https://discord.gg/reforgedz" target="_blank" class="btn-join">
-          <span class="btn-join-bg"></span>
-          Join Discord
-        </a>
-      </div>
+      <a href="https://discord.gg/reforgedz" target="_blank" class="nav-cta">Join Discord</a>
     </div>
   </nav>
 
   <!-- HOME -->
-  <section class="tab-content active" id="tab-home">
-    <div class="hero">
-      <div class="hero-grid"></div>
-      <div class="hero-vignette"></div>
+  <div class="tab-content active" id="tab-home">
+
+    <section class="hero">
+      <div class="hero-bg" style="background-image: url('/reforgedz.jpg')"></div>
+      <div class="hero-overlay"></div>
       <div class="hero-content">
-        <div class="hero-badge">
-          <span class="badge-dot"></span>
-          ARMA REFORGER
-        </div>
-        <h1 class="hero-title" data-text="REFORGEDZ">
-          REFORGED<span class="hi">Z</span>
-        </h1>
-        <div class="hero-line"></div>
-        <p class="hero-subtitle">The DayZ experience, reborn in Enfusion.</p>
-        <p class="hero-desc">
-          Inspired by the legendary Arma 2 DayZ mod. Survive, loot, build, and fight
-          across Chernarus in a hardcore modded experience built from the ground up for Arma Reforger.
-        </p>
-        <div class="hero-buttons">
-          <a href="https://discord.gg/reforgedz" target="_blank" class="btn btn-primary">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
-            Join the Community
-          </a>
-          <a href="https://wiki.reforgedz.net" target="_blank" class="btn btn-secondary">
-            Explore the Wiki
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17l9.2-9.2M17 17V7H7"/></svg>
-          </a>
+        <p class="hero-eyebrow">Arma Reforger &nbsp;·&nbsp; Chernarus &nbsp;·&nbsp; Inspired by Arma 2</p>
+        <h1 class="hero-title">Reforged<span class="brand-z">Z</span></h1>
+        <p class="hero-desc">The Arma 2 survival experience, rebuilt for Enfusion.<br>Survive. Build. Fight. Or betray.</p>
+        <div class="hero-actions">
+          <a href="https://discord.gg/reforgedz" target="_blank" class="btn-filled">Join the Community</a>
+          <a href="https://wiki.reforgedz.net" target="_blank" class="btn-outline">Explore the Wiki</a>
         </div>
       </div>
-      <div class="hero-scroll-indicator">
-        <span>Scroll</span>
+      <div class="hero-scroll">
         <div class="scroll-line"></div>
       </div>
-    </div>
+      <p class="hero-img-credit">Image &copy; =OV=</p>
+    </section>
 
-    <div class="section section-dark">
+    <section class="section bg-dark">
       <div class="container">
-        <h2 class="section-title">The <span class="hi">Experience</span></h2>
+        <div class="section-header reveal">
+          <h2>Built from the ground up</h2>
+          <p>Every system in ReforgedZ is custom-built for Arma Reforger. Nothing ported, nothing recycled.</p>
+        </div>
         <div class="features-grid">
-          <div class="feature-card glow-border reveal">
-            <div class="feature-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-            </div>
+          <div class="feature reveal">
             <h3>Survival</h3>
-            <p>Scavenge for food, water, and medical supplies. Manage your health, hunger, and thirst as you navigate the harsh post-apocalyptic landscape.</p>
+            <p>Manage food, water, temperature, and health as you navigate the post-apocalyptic landscape. Every resource matters.</p>
           </div>
-          <div class="feature-card glow-border reveal">
-            <div class="feature-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-            </div>
+          <div class="feature reveal">
             <h3>Basebuilding</h3>
-            <p>Fortify your position with our custom building system. Construct walls, gates, and storage to create your own stronghold in the wasteland.</p>
+            <p>Construct walls, gates, and fortifications with our custom building system. Claim your corner of Chernarus.</p>
           </div>
-          <div class="feature-card glow-border reveal">
-            <div class="feature-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            </div>
+          <div class="feature reveal">
             <h3>Factions</h3>
-            <p>Choose your path. Build humanity as a hero helping survivors, or descend into banditry. Your actions shape your reputation and unlock unique content.</p>
+            <p>Hero or bandit, your choices build a reputation that unlocks faction-specific content and changes how the world treats you.</p>
           </div>
-          <div class="feature-card glow-border reveal">
-            <div class="feature-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-            </div>
+          <div class="feature reveal">
             <h3>Quests</h3>
-            <p>Take on missions from quest givers scattered across the map. Complete objectives, earn rewards, and progress through storylines tied to your faction.</p>
+            <p>Take on missions from quest givers across the map. Complete objectives, earn rewards, progress through faction storylines.</p>
           </div>
-          <div class="feature-card glow-border reveal">
-            <div class="feature-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-            </div>
+          <div class="feature reveal">
             <h3>Custom Systems</h3>
-            <p>Entirely bespoke systems built for Reforger: vehicles, traders, loot economy, zombie AI, medical system, and more. No recycled assets.</p>
+            <p>Bespoke vehicles, traders, loot economy, zombie AI, and a full medical system. Designed specifically for Reforger.</p>
           </div>
-          <div class="feature-card glow-border reveal">
-            <div class="feature-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            </div>
+          <div class="feature reveal">
             <h3>Active Development</h3>
-            <p>Constant updates driven by community feedback. New features, balance passes, and content drops on a regular basis. We listen, we build.</p>
+            <p>Regular updates, balance passes, and community-driven features. We ship, we listen, we improve.</p>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="section section-accent">
-      <div class="container">
-        <div class="wiki-cta glow-border reveal">
-          <div class="wiki-cta-text">
-            <h2>Need to know something?</h2>
-            <p>Our wiki has everything: crafting recipes, quest guides, map intel, server rules, and detailed breakdowns of every system.</p>
-          </div>
-          <a href="https://wiki.reforgedz.net" target="_blank" class="btn btn-wiki">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-            wiki.reforgedz.net
-          </a>
-        </div>
-      </div>
-    </div>
-
-    <div class="section section-dark">
+    <section class="section bg-black">
       <div class="container">
         <div class="stats-row">
           <div class="stat reveal">
-            <div class="stat-value" data-count="50">0+</div>
+            <div class="stat-num" data-count="50">0</div>
             <div class="stat-label">Custom Mods</div>
           </div>
           <div class="stat reveal">
-            <div class="stat-value">24/7</div>
+            <div class="stat-num">24/7</div>
             <div class="stat-label">Server Uptime</div>
           </div>
           <div class="stat reveal">
-            <div class="stat-value">Chernarus</div>
-            <div class="stat-label">Map</div>
+            <div class="stat-num">Chernarus</div>
+            <div class="stat-label">Operation Zone</div>
           </div>
           <div class="stat reveal">
-            <div class="stat-value">Active</div>
+            <div class="stat-num">Active</div>
             <div class="stat-label">Development</div>
           </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
+
+    <section class="section bg-dark">
+      <div class="container">
+        <div class="cta-banner reveal">
+          <div class="cta-text">
+            <h2>Everything you need to know</h2>
+            <p>Crafting recipes, quest walkthroughs, map intel, server rules. It's all in the wiki.</p>
+          </div>
+          <a href="https://wiki.reforgedz.net" target="_blank" class="btn-filled">wiki.reforgedz.net</a>
+        </div>
+      </div>
+    </section>
+
+  </div>
 
   <!-- ABOUT -->
-  <section class="tab-content" id="tab-about">
-    <div class="page-section">
+  <div class="tab-content" id="tab-about">
+    <div class="inner-page">
       <div class="container">
-        <h1 class="page-title">About <span class="hi">ReforgedZ</span></h1>
-        <div class="about-grid">
-          <div class="about-block glow-border reveal">
-            <h3>Our Story</h3>
-            <p>ReforgedZ was born from a love for the original Arma 2 DayZ mod - the tension of not knowing if the next player you meet is a friend or a bullet. We set out to recreate that feeling on Arma Reforger's Enfusion engine, building every system from scratch to deliver an authentic DayZ-inspired survival experience.</p>
+
+        <div class="inner-header reveal">
+          <p class="eyebrow">About</p>
+          <h1>Reforged<span class="brand-z">Z</span></h1>
+        </div>
+
+        <!-- Origin story -->
+        <div class="about-story reveal">
+          <h2>Where it started</h2>
+          <p>Before survival games were everywhere, a New Zealand developer named Dean Hall built a mod for Arma 2 that genuinely changed what people thought games could do. He called it DayZ. It dropped you on Chernarus with nothing. No tutorial, no waypoints, no safe zone. Just you, the map, and 40 other players doing whatever they wanted to stay alive. You didn't know if the guy coming over the hill was going to help you or shoot you in the face. That was the whole point. Dean Hall sparked an entire genre with that mod, and the best version of it lived inside Arma 2.</p>
+          <p>Then Epoch showed up and added structure to the chaos. Basebuilding, traders, vehicles, an actual economy. Suddenly you were playing for 8 hours straight defending a base you spent three days constructing. It was clunky as hell and absolutely brilliant. Between those two mods, a lot of us got our best gaming memories.</p>
+          <p>When Arma Reforger launched with the Enfusion engine, nobody had seriously tried to bring that era back. The tools were there, the map was there. We started building. Not a port, not a copy, something new that captures the same feeling. That's what ReforgedZ is.</p>
+        </div>
+
+        <!-- Two pillars -->
+        <div class="about-grid reveal-group" style="margin-top: 64px;">
+          <div class="about-block reveal">
+            <h3>Built for Enfusion</h3>
+            <p>The zombie AI, loot economy, medical system, basebuilding, vehicles, questing, trader networks, humanity and factions. All of it written from scratch for Arma Reforger. Nothing carried over from other games, nothing half-ported. It's built for this engine and this map.</p>
           </div>
-          <div class="about-block glow-border reveal">
-            <h3>What Makes Us Different</h3>
-            <p>Everything is custom. Our zombie AI, loot economy, medical system, basebuilding, vehicles, questing, humanity/faction system, and trader networks are all built specifically for Reforger. We don't port - we rebuild. The result is something that feels familiar but plays like a completely new experience.</p>
-          </div>
-          <div class="about-block glow-border reveal">
-            <h3>The Team</h3>
-            <p>A small, dedicated group of modders and developers who spend way too much time in the Enfusion Workbench. We're passionate about the project and actively develop new features, squash bugs, and push updates regularly. Community feedback drives our roadmap.</p>
-          </div>
-          <div class="about-block glow-border reveal">
+          <div class="about-block reveal">
             <h3>The Vision</h3>
-            <p>Build the definitive DayZ-style experience on Arma Reforger. Hardcore survival, meaningful player interaction, faction-driven content, and a world that feels alive and dangerous. Every update gets us closer.</p>
+            <p>A survival server where what you do actually matters. Player interaction that has stakes. Factions that change your experience. A world that pushes back. We're drawing on the best parts of Arma 2's modding era and building something that fits where Arma is now.</p>
           </div>
         </div>
+
+        <!-- Team -->
+        <div class="about-team-section">
+          <div class="team-section-header reveal">
+            <h2>The Team</h2>
+          </div>
+
+          <div class="team-label reveal">Founders</div>
+          <div class="team-grid founders-grid reveal-group">
+            <div class="team-card founder-card reveal">
+              <div class="team-name">Modest23</div>
+              <div class="team-role">Founder &amp; Lead Developer</div>
+            </div>
+            <div class="team-card founder-card reveal">
+              <div class="team-name">Nattii</div>
+              <div class="team-role">Founder</div>
+            </div>
+            <div class="team-card founder-card reveal">
+              <div class="team-name">Irish</div>
+              <div class="team-role">Founder</div>
+            </div>
+          </div>
+
+          <div class="team-label reveal">Core Team</div>
+          <div class="team-grid reveal-group">
+            <div class="team-card reveal">
+              <div class="team-name">EIry</div>
+              <div class="team-role">Head Admin &amp; Developer</div>
+            </div>
+            <div class="team-card reveal">
+              <div class="team-name">GrannySpliff</div>
+              <div class="team-role">Head Admin</div>
+            </div>
+          </div>
+
+          <div class="team-label reveal">Collaborators</div>
+          <div class="team-grid reveal-group">
+            <div class="team-card reveal">
+              <div class="team-name">Locky</div>
+              <div class="team-role">Collaborator</div>
+            </div>
+            <div class="team-card reveal">
+              <div class="team-name">bymark3</div>
+              <div class="team-role">Collaborator</div>
+            </div>
+            <div class="team-card reveal">
+              <div class="team-name">Andrew</div>
+              <div class="team-role">Collaborator</div>
+            </div>
+            <div class="team-card reveal">
+              <div class="team-name">FBIWatchlist</div>
+              <div class="team-role">Collaborator</div>
+            </div>
+            <div class="team-card reveal">
+              <div class="team-name">Bonzi</div>
+              <div class="team-role">Collaborator</div>
+            </div>
+            <div class="team-card reveal">
+              <div class="team-name">Soap</div>
+              <div class="team-role">Collaborator</div>
+            </div>
+          </div>
+
+          <p class="team-thanks reveal">Big thanks to our GameMasters and support staff who keep things running every day.</p>
+        </div>
+
+        <!-- Mod list -->
+        <div class="about-mods-section reveal">
+          <h2>Mod List</h2>
+          <p class="mods-desc">65 mods running on the server. Click any to view it on the Reforger Workshop.</p>
+          <div class="mods-legend">
+            <span class="mod-pill custom" style="pointer-events:none">ReforgedZ team</span>
+            <span class="mod-pill split" style="pointer-events:none">Collab contribution</span>
+            <span class="mod-pill collab" style="pointer-events:none">Collaborator</span>
+          </div>
+
+          <div class="mods-category">
+            <div class="mods-cat-label">ReforgedZ Custom</div>
+            <div class="mods-pills">
+              <a href="https://reforger.armaplatform.com/workshop/662B0CC4E8193CED" target="_blank" class="mod-pill custom">ReforgedZ Fortify</a>
+              <a href="https://reforger.armaplatform.com/workshop/651D0B869A894882" target="_blank" class="mod-pill custom">ReforgedZAssets</a>
+              <a href="https://reforger.armaplatform.com/workshop/669D67EB93BF0F75" target="_blank" class="mod-pill custom">ReforgedZ Zombies</a>
+              <a href="https://reforger.armaplatform.com/workshop/669307708C111B59" target="_blank" class="mod-pill custom">ReforgedZAdminMenu</a>
+              <a href="https://reforger.armaplatform.com/workshop/66AEC87292056116" target="_blank" class="mod-pill split">ReforgedZ Gear</a>
+              <a href="https://reforger.armaplatform.com/workshop/6649094D8C494079" target="_blank" class="mod-pill custom">ReforgedZMapAssets</a>
+              <a href="https://reforger.armaplatform.com/workshop/6878233A749EFD39" target="_blank" class="mod-pill custom">ReforgedZ KartBuggy</a>
+              <a href="https://reforger.armaplatform.com/workshop/6876208D7E446EDE" target="_blank" class="mod-pill custom">ReforgedZ Mosquito</a>
+              <a href="https://reforger.armaplatform.com/workshop/65E698A3DA4BD53C" target="_blank" class="mod-pill custom">ReforgedZEconomy</a>
+              <a href="https://reforger.armaplatform.com/workshop/670AFCD188D67B6D" target="_blank" class="mod-pill custom">ReforgedZ Chernarus NavMesh</a>
+              <a href="https://reforger.armaplatform.com/workshop/67C2A1B3E4F5D601" target="_blank" class="mod-pill custom">ReforgedZ Player Economy</a>
+              <a href="https://reforger.armaplatform.com/workshop/68AABA09702E1063" target="_blank" class="mod-pill split">ReforgedZWeapons</a>
+              <a href="https://reforger.armaplatform.com/workshop/670ACD4C81227911" target="_blank" class="mod-pill custom">ReforgedZ Chernarus</a>
+              <a href="https://reforger.armaplatform.com/workshop/68A480323C50D741" target="_blank" class="mod-pill custom">eirys questing</a>
+              <a href="https://reforger.armaplatform.com/workshop/661AB3AC94DB61E7" target="_blank" class="mod-pill custom">Modest Metabolism</a>
+              <a href="https://reforger.armaplatform.com/workshop/61A6B4C21F6FCF22" target="_blank" class="mod-pill custom">Modest AI Radio</a>
+              <a href="https://reforger.armaplatform.com/workshop/61B77B1E14183311" target="_blank" class="mod-pill custom">Maverick XR</a>
+              <a href="https://reforger.armaplatform.com/workshop/62B4A8E40D31F94B" target="_blank" class="mod-pill custom">WW2 Bicycle</a>
+              <a href="https://reforger.armaplatform.com/workshop/61081370197674F9" target="_blank" class="mod-pill custom">Beetle 1967</a>
+              <a href="https://reforger.armaplatform.com/workshop/5E440E8FBA164A4C" target="_blank" class="mod-pill custom">AModestBoat</a>
+              <a href="https://reforger.armaplatform.com/workshop/610C8532D3756F2D" target="_blank" class="mod-pill custom">Motorboat</a>
+            </div>
+          </div>
+
+          <div class="mods-category">
+            <div class="mods-cat-label">Maps &amp; Terrain</div>
+            <div class="mods-pills">
+              <a href="https://reforger.armaplatform.com/workshop/665D1AA55B5D8076" target="_blank" class="mod-pill collab">Chernarus Minus</a>
+              <a href="https://reforger.armaplatform.com/workshop/61F0D506562D9BC9" target="_blank" class="mod-pill">Outside Terrain Core</a>
+              <a href="https://reforger.armaplatform.com/workshop/672166DE5926F11F" target="_blank" class="mod-pill collab">Minus Building Pack</a>
+              <a href="https://reforger.armaplatform.com/workshop/5F0D245931200FD1" target="_blank" class="mod-pill">Railway Generator</a>
+              <a href="https://reforger.armaplatform.com/workshop/5DE612963E4B005A" target="_blank" class="mod-pill">Rail Enfusion Redux</a>
+            </div>
+          </div>
+
+          <div class="mods-category">
+            <div class="mods-cat-label">Weapons &amp; Optics</div>
+            <div class="mods-pills">
+              <a href="https://reforger.armaplatform.com/workshop/66789EF0D2A34ED9" target="_blank" class="mod-pill">YobananaboY Weapon Pack</a>
+              <a href="https://reforger.armaplatform.com/workshop/620E584B1D2C96A4" target="_blank" class="mod-pill">Big Chungus Shotguns</a>
+              <a href="https://reforger.armaplatform.com/workshop/60E6F54E174C53C5" target="_blank" class="mod-pill">Big Chungus SMGs</a>
+              <a href="https://reforger.armaplatform.com/workshop/62A711001B8FDEEA" target="_blank" class="mod-pill">Big Chungus Rifles</a>
+              <a href="https://reforger.armaplatform.com/workshop/61BD6595183FCEBD" target="_blank" class="mod-pill">Big Chungus Bolt Guns</a>
+              <a href="https://reforger.armaplatform.com/workshop/61344BDC155A5A28" target="_blank" class="mod-pill">Big Chungus LMGs</a>
+              <a href="https://reforger.armaplatform.com/workshop/66D6340C1D565C98" target="_blank" class="mod-pill">Chungus Core</a>
+              <a href="https://reforger.armaplatform.com/workshop/66BB768AC32D1A05" target="_blank" class="mod-pill">YobananaboY Vietnam Pack</a>
+              <a href="https://reforger.armaplatform.com/workshop/66BADB4ADCEBEECD" target="_blank" class="mod-pill">YobananaboY Sniper Pack</a>
+              <a href="https://reforger.armaplatform.com/workshop/6726936FC2DB9084" target="_blank" class="mod-pill">YobananaboY ScarH</a>
+              <a href="https://reforger.armaplatform.com/workshop/66DF6033DEE2A918" target="_blank" class="mod-pill">YobananaboY WW2 Weapons</a>
+              <a href="https://reforger.armaplatform.com/workshop/64F934469BC36E48" target="_blank" class="mod-pill collab">FBIWeaponPack</a>
+              <a href="https://reforger.armaplatform.com/workshop/65B356BAD593F93A" target="_blank" class="mod-pill collab">FBIWeaponPack 2.0</a>
+              <a href="https://reforger.armaplatform.com/workshop/66C454E5B8703D1B" target="_blank" class="mod-pill">SockOn Pistols Pack</a>
+              <a href="https://reforger.armaplatform.com/workshop/66C25C188777F7F2" target="_blank" class="mod-pill">SockOn Rifles Pack</a>
+              <a href="https://reforger.armaplatform.com/workshop/68B0EEEA6F3AA27E" target="_blank" class="mod-pill collab">AK Mod</a>
+              <a href="https://reforger.armaplatform.com/workshop/686D4A0760BC7F87" target="_blank" class="mod-pill collab">ARMA2 Skins Port</a>
+              <a href="https://reforger.armaplatform.com/workshop/68C4D6E347839563" target="_blank" class="mod-pill collab">Arma2 Port Part 2</a>
+              <a href="https://reforger.armaplatform.com/workshop/628F720BC527C143" target="_blank" class="mod-pill">Rayzis Optics</a>
+              <a href="https://reforger.armaplatform.com/workshop/6738DB574AAA1CB4" target="_blank" class="mod-pill">Advanced Zeroing System</a>
+              <a href="https://reforger.armaplatform.com/workshop/64722DADC53CB75E" target="_blank" class="mod-pill">NV-System</a>
+              <a href="https://reforger.armaplatform.com/workshop/687CD82F6E41D627" target="_blank" class="mod-pill">Attachment Framework Core</a>
+              <a href="https://reforger.armaplatform.com/workshop/645F08FA9E7CDEDE" target="_blank" class="mod-pill">Attachment Framework</a>
+              <a href="https://reforger.armaplatform.com/workshop/6632F94B46173164" target="_blank" class="mod-pill">Rayzi Utils</a>
+            </div>
+          </div>
+
+          <div class="mods-category">
+            <div class="mods-cat-label">Vehicles</div>
+            <div class="mods-pills">
+              <a href="https://reforger.armaplatform.com/workshop/61B84088181A8FA4" target="_blank" class="mod-pill">Big Chungus Motorbike</a>
+            </div>
+          </div>
+
+          <div class="mods-category">
+            <div class="mods-cat-label">Characters</div>
+            <div class="mods-pills">
+              <a href="https://reforger.armaplatform.com/workshop/64C912EF952E1075" target="_blank" class="mod-pill">ToH ReCharacters Core</a>
+              <a href="https://reforger.armaplatform.com/workshop/65FB50F7FA33DECA" target="_blank" class="mod-pill">ToH ReCharacters African</a>
+              <a href="https://reforger.armaplatform.com/workshop/65FB5184A09FE8A1" target="_blank" class="mod-pill">ToH ReCharacters Asian</a>
+              <a href="https://reforger.armaplatform.com/workshop/65FB5234B4A8E20B" target="_blank" class="mod-pill">ToH ReCharacters Livonian</a>
+              <a href="https://reforger.armaplatform.com/workshop/65FB4A6CFFC4079C" target="_blank" class="mod-pill">ToH ReCharacters European</a>
+              <a href="https://reforger.armaplatform.com/workshop/65FB51CDA61F1071" target="_blank" class="mod-pill">ToH ReCharacters Greek</a>
+              <a href="https://reforger.armaplatform.com/workshop/64B73652C12170E6" target="_blank" class="mod-pill">ToH ReCharacters Woman</a>
+              <a href="https://reforger.armaplatform.com/workshop/65FB5265B4F72F4B" target="_blank" class="mod-pill">ToH ReCharacters Russian</a>
+              <a href="https://reforger.armaplatform.com/workshop/65FB52DAABB24B05" target="_blank" class="mod-pill">ToH ReCharacters Tanoan</a>
+            </div>
+          </div>
+
+          <div class="mods-category">
+            <div class="mods-cat-label">Gameplay</div>
+            <div class="mods-pills">
+              <a href="https://reforger.armaplatform.com/workshop/669D29B6A22342D0" target="_blank" class="mod-pill">ToH Zombie</a>
+              <a href="https://reforger.armaplatform.com/workshop/5DAC39D2C3D4C8CD" target="_blank" class="mod-pill">BetterInventory</a>
+              <a href="https://reforger.armaplatform.com/workshop/60C4CE4888FF4621" target="_blank" class="mod-pill">ACE Core</a>
+              <a href="https://reforger.armaplatform.com/workshop/5DBD560C5148E1DA" target="_blank" class="mod-pill">ACE Carrying</a>
+              <a href="https://reforger.armaplatform.com/workshop/611CB1D409001EB0" target="_blank" class="mod-pill">ACE Magazine Repack</a>
+              <a href="https://reforger.armaplatform.com/workshop/646D52AF8BB3FF15" target="_blank" class="mod-pill">ACE Captives</a>
+            </div>
+          </div>
+
+        </div>
+
       </div>
     </div>
-  </section>
-
+  </div>
 
   <!-- RADIO -->
-  <section class="tab-content" id="tab-radio">
-    <div class="page-section">
+  <div class="tab-content" id="tab-radio">
+    <div class="inner-page">
       <div class="container">
-        <h1 class="page-title">ReforgedZ <span class="hi">Radio</span></h1>
-        <p class="page-desc">Tune in to Modest AI Radio while you loot, build, and survive.</p>
-        <div class="radio-wrapper">
-          <div class="radio-card glow-border reveal">
-            <div class="radio-visual">
-              <div class="radio-ring"></div>
-              <div class="radio-ring ring-2"></div>
-              <div class="radio-ring ring-3"></div>
-              <div class="radio-icon">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M9 18V5l12-2v13"/>
-                  <circle cx="6" cy="18" r="3"/>
-                  <circle cx="18" cy="16" r="3"/>
-                </svg>
-              </div>
+        <div class="inner-header reveal">
+          <p class="eyebrow">Tune In</p>
+          <h1>Radio</h1>
+        </div>
+        <div class="radio-card reveal">
+          <div class="radio-card-inner">
+            <div class="radio-wave">
+              <span></span><span></span><span></span><span></span><span></span>
             </div>
-            <h2>Modest AI Radio</h2>
-            <p>AI-generated tunes for the apocalypse. Open in a new tab and let it play in the background while you survive.</p>
-            <a href="#" target="_blank" class="btn btn-radio" id="radioLink">
-              Open Radio Player
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            </a>
+            <div class="radio-text">
+              <h2>Modest AI Radio</h2>
+              <p>AI-generated music for the apocalypse. Open it in a new tab and let it run while you loot, build, and survive.</p>
+              <a href="#" target="_blank" class="btn-filled" id="radioLink">Open Radio Player</a>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </section>
+  </div>
 
   <!-- CONTACT -->
-  <section class="tab-content" id="tab-contact">
-    <div class="page-section">
+  <div class="tab-content" id="tab-contact">
+    <div class="contact-hero">
       <div class="container">
-        <h1 class="page-title">Contact <span class="hi">Us</span></h1>
-        <p class="page-desc">Got a question, issue, or just want to reach out? Here's how.</p>
-        <div class="contact-grid">
-          <div class="contact-card glow-border reveal">
-            <div class="contact-icon">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            </div>
-            <h3>Email</h3>
-            <p>For business inquiries, partnership requests, or support.</p>
-            <a href="mailto:contact@reforgedz.net" class="contact-link">contact@reforgedz.net</a>
-          </div>
-          <div class="contact-card glow-border reveal">
-            <div class="contact-icon">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
-            </div>
-            <h3>Discord</h3>
-            <p>The fastest way to get help or chat with the team and community.</p>
-            <a href="https://discord.gg/reforgedz" target="_blank" class="contact-link">discord.gg/reforgedz</a>
-          </div>
+        <div class="contact-hero-text reveal">
+          <p class="eyebrow">Get in Touch</p>
+          <h1>Contact Us</h1>
+          <p class="contact-sub">Questions, partnerships, bug reports. We're here.</p>
         </div>
       </div>
     </div>
-  </section>
 
-  <!-- Footer -->
+    <div class="contact-body">
+      <div class="container">
+        <div class="contact-channels reveal-group">
+
+          <a href="https://discord.gg/reforgedz" target="_blank" class="contact-channel discord reveal">
+            <div class="contact-channel-icon">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
+                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+              </svg>
+            </div>
+            <div class="contact-channel-body">
+              <div class="contact-channel-label">Discord</div>
+              <div class="contact-channel-name">discord.gg/reforgedz</div>
+              <p class="contact-channel-desc">The fastest way to reach us. Player support, general chat, staff applications — it all happens here. Response times are usually same-day.</p>
+            </div>
+            <div class="contact-channel-cta">Join Server &rarr;</div>
+          </a>
+
+          <a href="mailto:contact@reforgedz.net" class="contact-channel email reveal">
+            <div class="contact-channel-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="32" height="32">
+                <rect x="2" y="4" width="20" height="16" rx="2"/>
+                <polyline points="2,4 12,13 22,4"/>
+              </svg>
+            </div>
+            <div class="contact-channel-body">
+              <div class="contact-channel-label">Email</div>
+              <div class="contact-channel-name">contact@reforgedz.net</div>
+              <p class="contact-channel-desc">For business inquiries, partnership requests, content licensing, or anything that needs to be on record. We check it regularly.</p>
+            </div>
+            <div class="contact-channel-cta">Send Email &rarr;</div>
+          </a>
+
+        </div>
+
+        <div class="contact-note reveal">
+          <p>For in-game issues, bans, or server rule questions — please use Discord. Email is not monitored for gameplay support.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <footer class="footer">
     <div class="container">
       <div class="footer-inner">
-        <div class="footer-brand">
-          <span class="brand-icon">Z</span>
-          <span>REFORGED<span class="hi">Z</span></span>
-        </div>
+        <span class="footer-brand">REFORGED<span class="brand-z">Z</span></span>
         <div class="footer-links">
           <a href="https://discord.gg/reforgedz" target="_blank">Discord</a>
           <a href="https://wiki.reforgedz.net" target="_blank">Wiki</a>
+          <a href="mailto:contact@reforgedz.net">Contact</a>
         </div>
-        <div class="footer-copy">&copy; 2026 ReforgedZ. Not affiliated with Bohemia Interactive.</div>
+        <span class="footer-copy">&copy; 2026 ReforgedZ. Not affiliated with Bohemia Interactive.</span>
       </div>
     </div>
   </footer>
