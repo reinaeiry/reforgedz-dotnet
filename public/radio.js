@@ -1,7 +1,28 @@
 // ---- ReforgedZ Radio Player ----
 (function() {
   const audio = new Audio();
+  audio.preload = 'auto';
   audio.volume = 0.8;
+
+  // Preloader for next track
+  const preloader = new Audio();
+  preloader.preload = 'auto';
+  preloader.volume = 0;
+  let preloadedSrc = '';
+
+  function preloadNext() {
+    let nextTrack = null;
+    if (queue.length > 0) {
+      nextTrack = queue[0];
+    } else if (isRadioMode && radioIndex + 1 < radioPlaylist.length) {
+      nextTrack = radioPlaylist[radioIndex + 1];
+    }
+    if (nextTrack && nextTrack.file !== preloadedSrc) {
+      preloadedSrc = nextTrack.file;
+      preloader.src = nextTrack.file;
+      preloader.load();
+    }
+  }
 
   let allTracks = {};
   let flatTracks = [];
@@ -210,6 +231,8 @@
     audio.play().catch(() => {});
     addToRecent(track);
     updatePlayerUI();
+    // Preload the next track after a short delay
+    setTimeout(preloadNext, 1000);
   }
 
   function updatePlayerUI() {
@@ -269,9 +292,10 @@
     }
   });
 
-  // Progress bar
+  // Progress bar - skip updates while user is dragging
+  let isDraggingProgress = false;
   audio.addEventListener('timeupdate', () => {
-    if (!audio.duration) return;
+    if (!audio.duration || isDraggingProgress) return;
     const pct = (audio.currentTime / audio.duration) * 100;
     progressFill.style.width = pct + '%';
     timeNow.textContent = formatTime(audio.currentTime);
@@ -282,7 +306,9 @@
   function makeDraggable(bar, onDrag, opts) {
     let dragging = false;
     const pauseAudio = opts && opts.pauseAudio;
+    const onCommit = opts && opts.onCommit;
     let wasPlaying = false;
+    let lastPct = 0;
 
     function getPct(e) {
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -298,16 +324,20 @@
       } else {
         wasPlaying = false;
       }
-      onDrag(getPct(e));
+      lastPct = getPct(e);
+      onDrag(lastPct);
     }
 
     function onMove(e) {
-      if (dragging) onDrag(getPct(e));
+      if (!dragging) return;
+      lastPct = getPct(e);
+      onDrag(lastPct);
     }
 
     function onEnd() {
       if (!dragging) return;
       dragging = false;
+      if (onCommit) onCommit(lastPct);
       if (pauseAudio && wasPlaying) {
         audio.play().catch(() => {});
         wasPlaying = false;
@@ -322,14 +352,21 @@
     document.addEventListener('touchend', onEnd);
   }
 
-  // Progress bar (drag + click, pauses audio while dragging)
+  // Progress bar - only update visuals while dragging, seek once on release
   if (progressBar) {
     makeDraggable(progressBar, (pct) => {
       if (!audio.duration) return;
-      audio.currentTime = pct * audio.duration;
+      isDraggingProgress = true;
       progressFill.style.width = (pct * 100) + '%';
       timeNow.textContent = formatTime(pct * audio.duration);
-    }, { pauseAudio: true });
+    }, {
+      pauseAudio: true,
+      onCommit: (pct) => {
+        if (!audio.duration) return;
+        audio.currentTime = pct * audio.duration;
+        isDraggingProgress = false;
+      }
+    });
   }
 
   // Volume bar (drag + click, no pause needed)
