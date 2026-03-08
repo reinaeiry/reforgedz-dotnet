@@ -374,25 +374,134 @@
 
   <!-- RADIO -->
   <div class="tab-content" id="tab-radio">
-    <div class="inner-page">
-      <div class="container">
-        <div class="inner-header reveal">
-          <p class="eyebrow">Tune In</p>
-          <h1>Radio</h1>
+    <div class="radio-app">
+
+      <!-- Sidebar -->
+      <aside class="radio-sidebar">
+        <div class="radio-sidebar-brand">
+          <div class="radio-logo-wave">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <span class="radio-brand-text">MODEST<span class="brand-z">AI</span> RADIO</span>
         </div>
-        <div class="radio-card reveal">
-          <div class="radio-card-inner">
-            <div class="radio-wave">
-              <span></span><span></span><span></span><span></span><span></span>
+
+        <nav class="radio-nav">
+          <button class="radio-nav-btn active" data-view="radio">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Radio
+          </button>
+          <button class="radio-nav-btn" data-view="library">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            Library
+          </button>
+          <button class="radio-nav-btn" data-view="queue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            Queue
+          </button>
+        </nav>
+
+        <!-- Genre filters in sidebar -->
+        <div class="radio-genres" id="radioGenres">
+          <div class="radio-sidebar-label">Genres</div>
+        </div>
+      </aside>
+
+      <!-- Main content area -->
+      <main class="radio-main">
+
+        <!-- Radio mode view -->
+        <div class="radio-view active" id="view-radio">
+          <div class="radio-hero-banner">
+            <div class="radio-hero-inner">
+              <div class="radio-hero-wave">
+                <span></span><span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span>
+              </div>
+              <h1>Modest AI Radio</h1>
+              <p>The authentic radio experience. Songs, jingles, and segments play continuously like a real station.</p>
+              <button class="btn-filled radio-play-btn" id="radioStartBtn">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Start Radio
+              </button>
             </div>
-            <div class="radio-text">
-              <h2>Modest AI Radio</h2>
-              <p>AI-generated music for the apocalypse. Open it in a new tab and let it run while you loot, build, and survive.</p>
-              <a href="#" target="_blank" class="btn-filled" id="radioLink">Open Radio Player</a>
+          </div>
+          <div class="radio-now-playing-hero" id="radioNowPlaying" style="display:none">
+            <div class="radio-np-label">NOW PLAYING</div>
+            <div class="radio-np-title" id="radioNpTitle">---</div>
+            <div class="radio-np-category" id="radioNpCategory">---</div>
+            <div class="radio-np-next">
+              <span class="radio-np-next-label">Up next:</span>
+              <span id="radioNpNext">---</span>
             </div>
           </div>
         </div>
+
+        <!-- Library view -->
+        <div class="radio-view" id="view-library">
+          <div class="radio-view-header">
+            <h2>Library</h2>
+            <p>Browse all tracks by genre. Click to play, or add to your queue.</p>
+          </div>
+          <div class="radio-search-bar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="radioSearch" placeholder="Search tracks...">
+          </div>
+          <div id="radioLibrary" class="radio-library"></div>
+        </div>
+
+        <!-- Queue view -->
+        <div class="radio-view" id="view-queue">
+          <div class="radio-view-header">
+            <h2>Queue</h2>
+            <div class="radio-queue-actions">
+              <button class="radio-queue-clear" id="queueClearBtn">Clear Queue</button>
+            </div>
+          </div>
+          <div id="radioQueue" class="radio-queue-list">
+            <div class="radio-queue-empty">Your queue is empty. Add songs from the Library.</div>
+          </div>
+        </div>
+
+      </main>
+
+      <!-- Bottom player bar -->
+      <div class="radio-player-bar" id="radioPlayerBar">
+        <div class="radio-player-track">
+          <div class="radio-player-art">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20" class="radio-player-art-icon"><path d="M9 18V5l12-2v13M6 18a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>
+          </div>
+          <div class="radio-player-info">
+            <div class="radio-player-title" id="playerTitle">No track selected</div>
+            <div class="radio-player-cat" id="playerCategory">---</div>
+          </div>
+        </div>
+        <div class="radio-player-controls">
+          <button class="radio-ctrl-btn" id="playerPrev" title="Previous">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+          <button class="radio-ctrl-btn radio-ctrl-play" id="playerPlayPause" title="Play">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24" id="playIcon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24" id="pauseIcon" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button class="radio-ctrl-btn" id="playerNext" title="Next">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+        </div>
+        <div class="radio-player-progress">
+          <span class="radio-time" id="playerTimeNow">0:00</span>
+          <div class="radio-progress-bar" id="playerProgressBar">
+            <div class="radio-progress-fill" id="playerProgressFill"></div>
+          </div>
+          <span class="radio-time" id="playerTimeDur">0:00</span>
+        </div>
+        <div class="radio-player-vol">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" id="volIcon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+          <div class="radio-vol-bar" id="playerVolBar">
+            <div class="radio-vol-fill" id="playerVolFill" style="width:80%"></div>
+          </div>
+        </div>
       </div>
+
     </div>
   </div>
 
@@ -465,5 +574,6 @@
   </footer>
 
   <script src="/script.js"></script>
+  <script src="/radio.js"></script>
 </body>
 </html>
