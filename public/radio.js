@@ -279,49 +279,60 @@
   });
 
   // Draggable scrubber helper
-  function makeDraggable(bar, onUpdate) {
+  function makeDraggable(bar, onDrag, opts) {
     let dragging = false;
+    const pauseAudio = opts && opts.pauseAudio;
+    let wasPlaying = false;
 
-    function handleMove(e) {
+    function getPct(e) {
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const rect = bar.getBoundingClientRect();
-      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      onUpdate(pct);
+      return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     }
 
-    bar.addEventListener('mousedown', (e) => {
+    function onStart(e) {
       dragging = true;
-      handleMove(e);
-      e.preventDefault();
-    });
+      if (pauseAudio && !audio.paused) {
+        wasPlaying = true;
+        audio.pause();
+      } else {
+        wasPlaying = false;
+      }
+      onDrag(getPct(e));
+    }
 
-    bar.addEventListener('touchstart', (e) => {
-      dragging = true;
-      handleMove(e);
-    }, { passive: true });
+    function onMove(e) {
+      if (dragging) onDrag(getPct(e));
+    }
 
-    document.addEventListener('mousemove', (e) => {
-      if (dragging) handleMove(e);
-    });
+    function onEnd() {
+      if (!dragging) return;
+      dragging = false;
+      if (pauseAudio && wasPlaying) {
+        audio.play().catch(() => {});
+        wasPlaying = false;
+      }
+    }
 
-    document.addEventListener('touchmove', (e) => {
-      if (dragging) handleMove(e);
-    }, { passive: true });
-
-    document.addEventListener('mouseup', () => { dragging = false; });
-    document.addEventListener('touchend', () => { dragging = false; });
+    bar.addEventListener('mousedown', (e) => { onStart(e); e.preventDefault(); });
+    bar.addEventListener('touchstart', (e) => { onStart(e); }, { passive: true });
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('touchmove', onMove, { passive: true });
+    document.addEventListener('mouseup', onEnd);
+    document.addEventListener('touchend', onEnd);
   }
 
-  // Progress bar (drag + click)
+  // Progress bar (drag + click, pauses audio while dragging)
   if (progressBar) {
     makeDraggable(progressBar, (pct) => {
       if (!audio.duration) return;
       audio.currentTime = pct * audio.duration;
       progressFill.style.width = (pct * 100) + '%';
-    });
+      timeNow.textContent = formatTime(pct * audio.duration);
+    }, { pauseAudio: true });
   }
 
-  // Volume bar (drag + click)
+  // Volume bar (drag + click, no pause needed)
   if (volBar) {
     makeDraggable(volBar, (pct) => {
       audio.volume = pct;
