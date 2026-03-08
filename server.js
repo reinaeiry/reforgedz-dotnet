@@ -132,16 +132,32 @@ app.get('/radio', (req, res) => {
 
   if (track) {
     const dur = track.duration ? `${Math.floor(track.duration / 60)}:${(track.duration % 60).toString().padStart(2, '0')}` : '';
-    const ogTags = `
-    <meta property="og:type" content="music.song">
-    <meta property="og:title" content="${escHtml(track.title)} - ${escHtml(track.artist)}">
-    <meta property="og:description" content="${escHtml(track.category)}${dur ? ' \u00b7 ' + dur : ''} | Modest AI Radio on ReforgedZ.net">
-    <meta property="og:url" content="https://reforgedz.net/radio?track=${encodeURIComponent(trackFile)}">
-    <meta property="og:site_name" content="Modest AI Radio">
-    <meta property="og:audio" content="https://reforgedz.net${trackFile}">
-    <meta property="og:audio:type" content="audio/mpeg">
-    <meta name="theme-color" content="#cc1f1f">`;
-    html = html.replace('</head>', ogTags + '\n  </head>');
+    const shareUrl = `https://reforgedz.net/radio?track=${encodeURIComponent(trackFile)}`;
+    const audioUrl = `https://reforgedz.net${trackFile}`;
+    const title = `${escHtml(track.title)} - ${escHtml(track.artist)}`;
+    const desc = `${escHtml(track.category)}${dur ? ' \u00b7 ' + dur : ''} | Modest AI Radio on ReforgedZ.net`;
+
+    // Strip existing OG tags so Discord doesn't read stale ones
+    html = html.replace(/\s*<!-- Open Graph \/ Discord embed -->[\s\S]*?<meta name="twitter:card"[^>]*>/m, `
+  <!-- Open Graph / Discord embed -->
+  <meta property="og:type" content="music.song">
+  <meta property="og:url" content="${shareUrl}">
+  <meta property="og:site_name" content="Modest AI Radio">
+  <meta property="og:title" content="${title}">
+  <meta property="og:description" content="${desc}">
+  <meta property="og:image" content="https://reforgedz.net/reforgedz.jpg">
+  <meta property="og:audio" content="${audioUrl}">
+  <meta property="og:audio:type" content="audio/mpeg">
+  <meta name="theme-color" content="#cc1f1f">
+  <meta name="twitter:card" content="player">
+  <meta name="twitter:title" content="${title}">
+  <meta name="twitter:description" content="${desc}">
+  <meta name="twitter:player" content="${audioUrl}">
+  <meta name="twitter:player:stream" content="${audioUrl}">
+  <meta name="twitter:player:stream:content_type" content="audio/mpeg">`);
+
+    // Update page title
+    html = html.replace(/<title>[^<]*<\/title>/, `<title>${escHtml(track.title)} - ${escHtml(track.artist)} | Modest AI Radio</title>`);
   }
 
   res.send(html);
