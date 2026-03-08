@@ -357,6 +357,7 @@
     makeDraggable(progressBar, (pct) => {
       if (!audio.duration) return;
       isDraggingProgress = true;
+      progressFill.style.transition = 'none';
       progressFill.style.width = (pct * 100) + '%';
       timeNow.textContent = formatTime(pct * audio.duration);
     }, {
@@ -365,6 +366,7 @@
         if (!audio.duration) return;
         audio.currentTime = pct * audio.duration;
         isDraggingProgress = false;
+        progressFill.style.transition = '';
       }
     });
   }
