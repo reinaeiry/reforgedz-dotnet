@@ -2,7 +2,6 @@
 (function() {
   const audio = new Audio();
   audio.preload = 'auto';
-  audio.volume = 0.8;
 
   // Preloader for next track
   const preloader = new Audio();
@@ -24,15 +23,20 @@
     }
   }
 
+  // State
   let allTracks = {};
   let flatTracks = [];
   let queue = [];
   let recentlyPlayed = [];
+  let favorites = [];
   let currentTrack = null;
   let currentIndex = -1;
   let isRadioMode = false;
   let radioPlaylist = [];
   let radioIndex = -1;
+  let loopMode = 'off';
+  let radioStarted = false;
+  let savedVolume = 0.8;
 
   const genreColors = {
     'Country': ['#b8860b', '#8b6914'],
@@ -63,8 +67,139 @@
   const libraryContainer = document.getElementById('radioLibrary');
   const genresContainer = document.getElementById('radioGenres');
   const searchInput = document.getElementById('radioSearch');
+  const playerHeart = document.getElementById('playerHeart');
+  const playerShare = document.getElementById('playerShare');
 
-  // Fetch tracks
+  // ---- localStorage persistence ----
+  function saveState() {
+    try {
+      localStorage.setItem('rz-radio', JSON.stringify({
+        volume: audio.volume,
+        recent: recentlyPlayed.slice(0, 10),
+        favorites: favorites,
+        queue: queue,
+        loopMode: loopMode,
+      }));
+    } catch (e) {}
+  }
+
+  function loadState() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('rz-radio'));
+      if (!saved) return;
+      audio.volume = saved.volume ?? 0.8;
+      savedVolume = audio.volume;
+      volFill.style.width = (audio.volume * 100) + '%';
+      recentlyPlayed = saved.recent || [];
+      favorites = saved.favorites || [];
+      queue = saved.queue || [];
+      loopMode = saved.loopMode || 'off';
+    } catch (e) {}
+  }
+
+  // ---- Favorites ----
+  function isFavorite(file) {
+    return favorites.some(f => f.file === file);
+  }
+
+  function toggleFavorite(track) {
+    const idx = favorites.findIndex(f => f.file === track.file);
+    if (idx >= 0) {
+      favorites.splice(idx, 1);
+    } else {
+      favorites.push({ title: track.title, file: track.file, category: track.category, artist: track.artist || 'Modest', duration: track.duration || 0 });
+    }
+    saveState();
+    updateHeartStates();
+    renderFavorites();
+  }
+
+  function updateHeartStates() {
+    if (playerHeart && currentTrack) {
+      playerHeart.classList.toggle('active', isFavorite(currentTrack.file));
+    }
+    libraryContainer.querySelectorAll('.radio-lib-heart').forEach(btn => {
+      btn.classList.toggle('active', isFavorite(btn.dataset.file));
+    });
+  }
+
+  function renderFavorites() {
+    const container = document.getElementById('radioFavorites');
+    if (!container) return;
+    if (favorites.length === 0) {
+      container.innerHTML = '<div class="radio-queue-empty">No favorites yet. Click the heart on any track.</div>';
+      return;
+    }
+    let html = '';
+    favorites.forEach((t, i) => {
+      const isPlaying = currentTrack && currentTrack.file === t.file;
+      html += `<div class="radio-fav-item${isPlaying ? ' playing' : ''}" data-file="${t.file}" data-title="${t.title}" data-cat="${t.category}" data-artist="${t.artist || 'Modest'}" data-dur="${t.duration || 0}">
+        <span class="radio-fav-idx">${i + 1}</span>
+        <div class="radio-fav-info">
+          <span class="radio-fav-title">${t.title}</span>
+          <span class="radio-fav-sub">${t.artist || 'Modest'} \u00b7 ${t.category}</span>
+        </div>
+        <span class="radio-fav-dur">${t.duration ? formatTime(t.duration) : ''}</span>
+        <button class="radio-fav-play" title="Play">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
+        <button class="radio-fav-add" title="Add to queue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="radio-fav-remove" title="Remove from favorites">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </button>
+      </div>`;
+    });
+    container.innerHTML = html;
+
+    container.querySelectorAll('.radio-fav-item').forEach(el => {
+      el.querySelector('.radio-fav-play').addEventListener('click', () => {
+        isRadioMode = false;
+        playTrack({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat, artist: el.dataset.artist, duration: parseInt(el.dataset.dur) || 0 });
+      });
+      el.querySelector('.radio-fav-add').addEventListener('click', () => {
+        addToQueue({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat, artist: el.dataset.artist, duration: parseInt(el.dataset.dur) || 0 });
+      });
+      el.querySelector('.radio-fav-remove').addEventListener('click', () => {
+        toggleFavorite({ file: el.dataset.file });
+      });
+    });
+  }
+
+  playerHeart?.addEventListener('click', () => {
+    if (currentTrack) toggleFavorite(currentTrack);
+  });
+
+  // ---- Share ----
+  function shareTrack(track) {
+    if (!track) return;
+    const url = window.location.origin + '/radio?track=' + encodeURIComponent(track.file);
+    navigator.clipboard.writeText(url).then(() => {
+      showToast('Link copied! Paste in Discord for a rich embed.');
+    }).catch(() => {
+      showToast('Could not copy link');
+    });
+  }
+
+  playerShare?.addEventListener('click', () => {
+    if (currentTrack) shareTrack(currentTrack);
+  });
+
+  // Auto-play from share link
+  function checkShareLink() {
+    const params = new URLSearchParams(window.location.search);
+    const trackFile = params.get('track');
+    if (trackFile) {
+      const track = flatTracks.find(t => t.file === trackFile);
+      if (track) {
+        playTrack(track);
+        showToast('Playing shared track');
+      }
+    }
+  }
+
+  // ---- Fetch tracks ----
   async function loadTracks() {
     try {
       const res = await fetch('/api/radio/tracks');
@@ -80,12 +215,17 @@
       buildStats();
       buildGenreCards();
       buildRandomPicks();
+      renderRecent();
+      renderQueue();
+      renderFavorites();
+      updateLoopBtn();
+      checkShareLink();
     } catch (e) {
       libraryContainer.innerHTML = '<p style="color:var(--text-dim);padding:24px;">Failed to load tracks.</p>';
     }
   }
 
-  // Build genre buttons in sidebar
+  // ---- Build genre buttons in sidebar ----
   function buildGenres() {
     const cats = Object.keys(allTracks).filter(c => c !== 'Radio Jingles').sort();
     let html = '<div class="radio-sidebar-label">Genres</div>';
@@ -100,13 +240,12 @@
         genresContainer.querySelectorAll('.radio-genre-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         buildLibrary(btn.dataset.genre);
-        // Switch to library view
         switchView('library');
       });
     });
   }
 
-  // Build library track listing
+  // ---- Build library track listing ----
   function buildLibrary(genre = 'all', filter = '') {
     let tracks = [];
     const filterLower = filter.toLowerCase();
@@ -114,7 +253,7 @@
       if (cat === 'Radio Jingles') continue;
       if (genre !== 'all' && cat !== genre) continue;
       for (const t of allTracks[cat]) {
-        if (filterLower && !t.title.toLowerCase().includes(filterLower)) continue;
+        if (filterLower && !t.title.toLowerCase().includes(filterLower) && !(t.artist && t.artist.toLowerCase().includes(filterLower))) continue;
         tracks.push(t);
       }
     }
@@ -124,7 +263,6 @@
       return;
     }
 
-    // Group by category
     const grouped = {};
     for (const t of tracks) {
       if (!grouped[t.category]) grouped[t.category] = [];
@@ -138,13 +276,25 @@
       html += `<div class="radio-lib-tracks">`;
       for (const t of grouped[cat]) {
         const isPlaying = currentTrack && currentTrack.file === t.file;
-        html += `<div class="radio-lib-track${isPlaying ? ' playing' : ''}" data-file="${t.file}" data-title="${t.title}" data-cat="${t.category}">
+        const fav = isFavorite(t.file);
+        const dur = t.duration ? formatTime(t.duration) : '';
+        html += `<div class="radio-lib-track${isPlaying ? ' playing' : ''}" data-file="${t.file}" data-title="${t.title}" data-cat="${t.category}" data-artist="${t.artist || 'Modest'}" data-dur="${t.duration || 0}">
           <button class="radio-lib-play" title="Play">
             <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           </button>
-          <span class="radio-lib-track-title">${t.title}</span>
+          <div class="radio-lib-track-info">
+            <span class="radio-lib-track-title">${t.title}</span>
+            <span class="radio-lib-track-artist">${t.artist || 'Modest'}</span>
+          </div>
+          <span class="radio-lib-dur">${dur}</span>
+          <button class="radio-lib-heart${fav ? ' active' : ''}" data-file="${t.file}" title="Favorite">
+            <svg viewBox="0 0 24 24" fill="${fav ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          </button>
           <button class="radio-lib-add" title="Add to queue">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+          <button class="radio-lib-playnext" title="Play next">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 4l10 8-10 8V4z"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
           </button>
         </div>`;
       }
@@ -152,15 +302,28 @@
     }
     libraryContainer.innerHTML = html;
 
-    // Attach click handlers
     libraryContainer.querySelectorAll('.radio-lib-track').forEach(el => {
+      const trackData = { title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat, artist: el.dataset.artist, duration: parseInt(el.dataset.dur) || 0 };
       el.querySelector('.radio-lib-play').addEventListener('click', () => {
         isRadioMode = false;
-        playTrack({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat });
+        playTrack(trackData);
       });
       el.querySelector('.radio-lib-add').addEventListener('click', (e) => {
         e.stopPropagation();
-        addToQueue({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat });
+        addToQueue(trackData);
+      });
+      el.querySelector('.radio-lib-playnext').addEventListener('click', (e) => {
+        e.stopPropagation();
+        addToQueue(trackData, true);
+      });
+      el.querySelector('.radio-lib-heart').addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleFavorite(trackData);
+        // Update this button immediately
+        const btn = el.querySelector('.radio-lib-heart');
+        const fav = isFavorite(trackData.file);
+        btn.classList.toggle('active', fav);
+        btn.querySelector('svg').setAttribute('fill', fav ? 'currentColor' : 'none');
       });
     });
   }
@@ -171,11 +334,17 @@
     buildLibrary(activeGenre, searchInput.value);
   });
 
-  // Queue management
-  function addToQueue(track) {
-    queue.push(track);
+  // ---- Queue management ----
+  function addToQueue(track, playNext) {
+    if (playNext) {
+      queue.unshift(track);
+      showToast(`"${track.title}" plays next`);
+    } else {
+      queue.push(track);
+      showToast(`Added "${track.title}" to queue`);
+    }
     renderQueue();
-    showToast(`Added "${track.title}" to queue`);
+    saveState();
   }
 
   function renderQueue() {
@@ -185,12 +354,14 @@
     }
     let html = '';
     queue.forEach((t, i) => {
-      html += `<div class="radio-queue-item" data-index="${i}">
+      html += `<div class="radio-queue-item" data-index="${i}" draggable="true">
+        <span class="radio-queue-drag" title="Drag to reorder">\u2261</span>
         <span class="radio-queue-num">${i + 1}</span>
         <div class="radio-queue-info">
           <span class="radio-queue-title">${t.title}</span>
-          <span class="radio-queue-cat">${t.category}</span>
+          <span class="radio-queue-cat">${t.artist || 'Modest'} \u00b7 ${t.category}</span>
         </div>
+        <span class="radio-queue-dur">${t.duration ? formatTime(t.duration) : ''}</span>
         <button class="radio-queue-play" title="Play now" data-index="${i}">
           <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         </button>
@@ -208,6 +379,7 @@
         playTrack(queue[idx]);
         queue.splice(idx, 1);
         renderQueue();
+        saveState();
       });
     });
 
@@ -215,6 +387,38 @@
       btn.addEventListener('click', () => {
         queue.splice(parseInt(btn.dataset.index), 1);
         renderQueue();
+        saveState();
+      });
+    });
+
+    // Drag to reorder
+    let dragIdx = null;
+    queueList.querySelectorAll('.radio-queue-item').forEach(el => {
+      el.addEventListener('dragstart', (e) => {
+        dragIdx = parseInt(el.dataset.index);
+        el.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      el.addEventListener('dragend', () => {
+        el.classList.remove('dragging');
+        dragIdx = null;
+        queueList.querySelectorAll('.radio-queue-item').forEach(item => item.classList.remove('drag-over'));
+      });
+      el.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        queueList.querySelectorAll('.radio-queue-item').forEach(item => item.classList.remove('drag-over'));
+        el.classList.add('drag-over');
+      });
+      el.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const dropIdx = parseInt(el.dataset.index);
+        if (dragIdx !== null && dragIdx !== dropIdx) {
+          const item = queue.splice(dragIdx, 1)[0];
+          queue.splice(dropIdx, 0, item);
+          renderQueue();
+          saveState();
+        }
       });
     });
   }
@@ -222,39 +426,79 @@
   document.getElementById('queueClearBtn')?.addEventListener('click', () => {
     queue = [];
     renderQueue();
+    saveState();
   });
 
-  // Play a track
+  // Shuffle queue
+  document.getElementById('queueShuffleBtn')?.addEventListener('click', () => {
+    if (queue.length < 2) return;
+    for (let i = queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [queue[i], queue[j]] = [queue[j], queue[i]];
+    }
+    renderQueue();
+    saveState();
+    showToast('Queue shuffled');
+  });
+
+  // Loop button
+  const loopBtn = document.getElementById('queueLoopBtn');
+  function updateLoopBtn() {
+    if (!loopBtn) return;
+    loopBtn.classList.remove('active', 'loop-one');
+    if (loopMode === 'queue') {
+      loopBtn.classList.add('active');
+      loopBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg> Loop';
+    } else if (loopMode === 'one') {
+      loopBtn.classList.add('active', 'loop-one');
+      loopBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/><text x="12" y="16" fill="currentColor" stroke="none" font-size="9" text-anchor="middle" font-weight="bold">1</text></svg> Loop 1';
+    } else {
+      loopBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg> Loop';
+    }
+  }
+  loopBtn?.addEventListener('click', () => {
+    if (loopMode === 'off') loopMode = 'queue';
+    else if (loopMode === 'queue') loopMode = 'one';
+    else loopMode = 'off';
+    updateLoopBtn();
+    saveState();
+    const labels = { off: 'Loop off', queue: 'Loop queue', one: 'Loop track' };
+    showToast(labels[loopMode]);
+  });
+
+  // ---- Play a track ----
   function playTrack(track) {
     currentTrack = track;
     audio.src = track.file;
     audio.play().catch(() => {});
     addToRecent(track);
     updatePlayerUI();
-    // Preload the next track after a short delay
+    updateMediaSession();
     setTimeout(preloadNext, 1000);
   }
 
   function updatePlayerUI() {
     if (!currentTrack) return;
     playerTitle.textContent = currentTrack.title;
-    playerCategory.textContent = currentTrack.category;
+    playerCategory.textContent = (currentTrack.artist || 'Modest') + ' \u00b7 ' + currentTrack.category;
     playIcon.style.display = 'none';
     pauseIcon.style.display = 'block';
 
-    // Update library highlighting
+    // Heart state
+    if (playerHeart) {
+      playerHeart.classList.toggle('active', isFavorite(currentTrack.file));
+    }
+
     libraryContainer.querySelectorAll('.radio-lib-track').forEach(el => {
       el.classList.toggle('playing', el.dataset.file === currentTrack.file);
     });
 
-    // Update radio button state
     if (radioStarted) updateRadioBtn();
 
-    // Update radio now playing
     if (isRadioMode) {
       radioNowPlaying.style.display = 'block';
       radioNpTitle.textContent = currentTrack.title;
-      radioNpCategory.textContent = currentTrack.category;
+      radioNpCategory.textContent = (currentTrack.artist || 'Modest') + ' \u00b7 ' + currentTrack.category;
       if (radioIndex + 1 < radioPlaylist.length) {
         radioNpNext.textContent = radioPlaylist[radioIndex + 1].title;
       } else {
@@ -263,17 +507,45 @@
     }
   }
 
-  // Playback controls
+  // ---- Media Session API ----
+  function updateMediaSession() {
+    if (!('mediaSession' in navigator) || !currentTrack) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentTrack.title,
+      artist: currentTrack.artist || 'Modest',
+      album: currentTrack.category + ' \u2014 Modest AI Radio',
+    });
+    navigator.mediaSession.setActionHandler('play', () => { audio.play(); updatePlayPauseIcon(); });
+    navigator.mediaSession.setActionHandler('pause', () => { audio.pause(); updatePlayPauseIcon(); });
+    navigator.mediaSession.setActionHandler('previoustrack', () => {
+      if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+      if (isRadioMode && radioIndex > 0) { radioIndex -= 2; playNext(); }
+    });
+    navigator.mediaSession.setActionHandler('nexttrack', () => { playNext(); });
+  }
+
+  function updatePlayPauseIcon() {
+    if (audio.paused) {
+      playIcon.style.display = 'block';
+      pauseIcon.style.display = 'none';
+    } else {
+      playIcon.style.display = 'none';
+      pauseIcon.style.display = 'block';
+    }
+    if (radioStarted) updateRadioBtn();
+  }
+
+  // Sync play/pause icon with audio state
+  audio.addEventListener('play', updatePlayPauseIcon);
+  audio.addEventListener('pause', updatePlayPauseIcon);
+
+  // ---- Playback controls ----
   document.getElementById('playerPlayPause')?.addEventListener('click', () => {
     if (!currentTrack) return;
     if (audio.paused) {
       audio.play().catch(() => {});
-      playIcon.style.display = 'none';
-      pauseIcon.style.display = 'block';
     } else {
       audio.pause();
-      playIcon.style.display = 'block';
-      pauseIcon.style.display = 'none';
     }
   });
 
@@ -292,7 +564,7 @@
     }
   });
 
-  // Progress bar - skip updates while user is dragging
+  // ---- Progress bar ----
   let isDraggingProgress = false;
   audio.addEventListener('timeupdate', () => {
     if (!audio.duration || isDraggingProgress) return;
@@ -352,7 +624,6 @@
     document.addEventListener('touchend', onEnd);
   }
 
-  // Progress bar - only update visuals while dragging, seek once on release
   if (progressBar) {
     makeDraggable(progressBar, (pct) => {
       if (!audio.duration) return;
@@ -371,25 +642,32 @@
     });
   }
 
-  // Volume bar (drag + click, no pause needed)
   if (volBar) {
     makeDraggable(volBar, (pct) => {
       audio.volume = pct;
+      savedVolume = pct;
       volFill.style.width = (pct * 100) + '%';
+      saveState();
     });
   }
 
-  // Auto-play next
+  // ---- Auto-play next ----
   audio.addEventListener('ended', () => {
+    if (loopMode === 'one' && currentTrack) {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      return;
+    }
     playNext();
   });
 
   function playNext() {
-    // Check queue first
     if (queue.length > 0) {
       const next = queue.shift();
+      if (loopMode === 'queue') queue.push(next);
       renderQueue();
       playTrack(next);
+      saveState();
       return;
     }
 
@@ -403,21 +681,18 @@
       return;
     }
 
-    // If playing from library, just stop
     playIcon.style.display = 'block';
     pauseIcon.style.display = 'none';
   }
 
-  // Radio mode
+  // ---- Radio mode ----
   function buildRadioPlaylist() {
     const songs = flatTracks.filter(t => t.category !== 'Radio Jingles');
     const jingles = allTracks['Radio Jingles'] || [];
 
-    // Shuffle songs
     const shuffled = [...songs].sort(() => Math.random() - 0.5);
     radioPlaylist = [];
 
-    // Insert jingles between every 2-4 songs
     let songCount = 0;
     let nextJingleAt = 2 + Math.floor(Math.random() * 3);
 
@@ -433,8 +708,6 @@
       }
     }
   }
-
-  let radioStarted = false;
 
   function updateRadioBtn() {
     if (!radioStarted) {
@@ -464,17 +737,13 @@
       playTrack(radioPlaylist[0]);
     } else if (audio.paused) {
       audio.play().catch(() => {});
-      playIcon.style.display = 'none';
-      pauseIcon.style.display = 'block';
     } else {
       audio.pause();
-      playIcon.style.display = 'block';
-      pauseIcon.style.display = 'none';
     }
     updateRadioBtn();
   });
 
-  // View switching
+  // ---- View switching ----
   function switchView(viewId) {
     document.querySelectorAll('.radio-view').forEach(v => v.classList.remove('active'));
     document.querySelectorAll('.radio-nav-btn').forEach(b => b.classList.remove('active'));
@@ -486,7 +755,57 @@
     btn.addEventListener('click', () => switchView(btn.dataset.view));
   });
 
-  // Toast notification
+  // ---- Keyboard shortcuts ----
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    // Only handle when radio tab is active
+    const radioTab = document.getElementById('tab-radio');
+    if (!radioTab || !radioTab.classList.contains('active')) return;
+
+    switch (e.code) {
+      case 'Space':
+        e.preventDefault();
+        if (!currentTrack) return;
+        if (audio.paused) audio.play().catch(() => {});
+        else audio.pause();
+        break;
+      case 'ArrowRight':
+        if (e.shiftKey) { playNext(); } else if (audio.duration) { audio.currentTime = Math.min(audio.duration, audio.currentTime + 10); }
+        break;
+      case 'ArrowLeft':
+        if (audio.duration) audio.currentTime = Math.max(0, audio.currentTime - 10);
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        audio.volume = Math.min(1, audio.volume + 0.05);
+        savedVolume = audio.volume;
+        volFill.style.width = (audio.volume * 100) + '%';
+        saveState();
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        audio.volume = Math.max(0, audio.volume - 0.05);
+        savedVolume = audio.volume;
+        volFill.style.width = (audio.volume * 100) + '%';
+        saveState();
+        break;
+      case 'KeyM':
+        if (audio.volume > 0) {
+          savedVolume = audio.volume;
+          audio.volume = 0;
+        } else {
+          audio.volume = savedVolume || 0.8;
+        }
+        volFill.style.width = (audio.volume * 100) + '%';
+        saveState();
+        break;
+      case 'KeyL':
+        if (currentTrack) toggleFavorite(currentTrack);
+        break;
+    }
+  });
+
+  // ---- Toast notification ----
   function showToast(msg) {
     const existing = document.querySelector('.radio-toast');
     if (existing) existing.remove();
@@ -509,7 +828,7 @@
     return m + ':' + (sec < 10 ? '0' : '') + sec;
   }
 
-  // Stats strip
+  // ---- Stats strip ----
   function buildStats() {
     const songs = flatTracks.filter(t => t.category !== 'Radio Jingles');
     const jingles = (allTracks['Radio Jingles'] || []).length;
@@ -524,7 +843,7 @@
     `;
   }
 
-  // Genre quick-play cards
+  // ---- Genre quick-play cards ----
   function buildGenreCards() {
     const container = document.getElementById('radioGenreCards');
     if (!container) return;
@@ -545,7 +864,6 @@
     container.querySelectorAll('.radio-genre-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (e.target.closest('.radio-genre-card-play')) {
-          // Play all from this genre shuffled
           const genre = card.dataset.genre;
           const tracks = [...allTracks[genre]].sort(() => Math.random() - 0.5);
           if (tracks.length > 0) {
@@ -553,10 +871,10 @@
             queue = tracks.slice(1);
             playTrack(tracks[0]);
             renderQueue();
+            saveState();
             showToast(`Playing ${genre} (${tracks.length} tracks)`);
           }
         } else {
-          // Navigate to library filtered by genre
           genresContainer.querySelectorAll('.radio-genre-btn').forEach(b => b.classList.remove('active'));
           const genreBtn = genresContainer.querySelector(`.radio-genre-btn[data-genre="${card.dataset.genre}"]`);
           if (genreBtn) genreBtn.classList.add('active');
@@ -567,7 +885,7 @@
     });
   }
 
-  // Random picks
+  // ---- Random picks ----
   function buildRandomPicks() {
     const container = document.getElementById('radioPicks');
     if (!container) return;
@@ -583,11 +901,11 @@
     for (const t of picks) {
       const colors = genreColors[t.category] || ['#444', '#333'];
       const abbr = t.category.substring(0, 3).toUpperCase();
-      html += `<div class="radio-pick" data-file="${t.file}" data-title="${t.title}" data-cat="${t.category}">
+      html += `<div class="radio-pick" data-file="${t.file}" data-title="${t.title}" data-cat="${t.category}" data-artist="${t.artist || 'Modest'}" data-dur="${t.duration || 0}">
         <div class="radio-pick-art" style="background: linear-gradient(135deg, ${colors[0]}, ${colors[1]})">${abbr}</div>
         <div class="radio-pick-info">
           <div class="radio-pick-title">${t.title}</div>
-          <div class="radio-pick-cat">${t.category}</div>
+          <div class="radio-pick-cat">${t.artist || 'Modest'} \u00b7 ${t.category}</div>
         </div>
         <button class="radio-pick-btn" title="Play">
           <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -599,7 +917,7 @@
     container.querySelectorAll('.radio-pick').forEach(el => {
       el.addEventListener('click', () => {
         isRadioMode = false;
-        playTrack({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat });
+        playTrack({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat, artist: el.dataset.artist, duration: parseInt(el.dataset.dur) || 0 });
       });
     });
   }
@@ -608,13 +926,14 @@
     buildRandomPicks();
   });
 
-  // Recently played
+  // ---- Recently played ----
   function addToRecent(track) {
     if (track.category === 'Radio Jingles') return;
     recentlyPlayed = recentlyPlayed.filter(t => t.file !== track.file);
     recentlyPlayed.unshift(track);
     if (recentlyPlayed.length > 10) recentlyPlayed.pop();
     renderRecent();
+    saveState();
   }
 
   function renderRecent() {
@@ -626,10 +945,10 @@
     }
     let html = '';
     recentlyPlayed.forEach((t, i) => {
-      html += `<div class="radio-recent-item" data-file="${t.file}" data-title="${t.title}" data-cat="${t.category}">
+      html += `<div class="radio-recent-item" data-file="${t.file}" data-title="${t.title}" data-cat="${t.category}" data-artist="${t.artist || 'Modest'}" data-dur="${t.duration || 0}">
         <span class="radio-recent-idx">${i + 1}</span>
         <span class="radio-recent-title">${t.title}</span>
-        <span class="radio-recent-cat">${t.category}</span>
+        <span class="radio-recent-cat">${t.artist || 'Modest'} \u00b7 ${t.category}</span>
         <button class="radio-recent-play" title="Play again">
           <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         </button>
@@ -640,11 +959,12 @@
     container.querySelectorAll('.radio-recent-item').forEach(el => {
       el.querySelector('.radio-recent-play').addEventListener('click', () => {
         isRadioMode = false;
-        playTrack({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat });
+        playTrack({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat, artist: el.dataset.artist, duration: parseInt(el.dataset.dur) || 0 });
       });
     });
   }
 
-  // Init
+  // ---- Init ----
+  loadState();
   loadTracks();
 })();
