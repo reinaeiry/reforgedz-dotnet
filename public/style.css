@@ -1331,6 +1331,146 @@ img { display: block; max-width: 100%; }
 
 .radio-recent-play:hover { color: var(--accent); }
 
+/* Play count in library */
+.radio-lib-plays {
+  font-size: 0.68rem;
+  color: var(--text-ghost);
+  flex-shrink: 0;
+  min-width: 44px;
+  text-align: right;
+}
+
+/* Top 10 */
+.radio-top10 { padding: 0 4px; }
+
+.radio-top10-empty {
+  color: var(--text-ghost);
+  font-size: 0.85rem;
+  padding: 24px 0;
+  text-align: center;
+}
+
+.radio-top10-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.radio-top10-item:hover { background: rgba(255,255,255,0.04); }
+.radio-top10-item.playing .radio-top10-title { color: var(--accent); }
+
+.radio-top10-rank {
+  font-family: var(--display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-ghost);
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.radio-top10-item:nth-child(1) .radio-top10-rank { color: #ffd700; }
+.radio-top10-item:nth-child(2) .radio-top10-rank { color: #c0c0c0; }
+.radio-top10-item:nth-child(3) .radio-top10-rank { color: #cd7f32; }
+
+.radio-top10-bar-wrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.radio-top10-bar {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  border-radius: 3px;
+  opacity: 0.15;
+  transition: width 0.4s ease;
+}
+
+.radio-top10-info {
+  position: relative;
+  padding: 2px 8px;
+  min-width: 0;
+}
+
+.radio-top10-title {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.radio-top10-sub {
+  font-size: 0.72rem;
+  color: var(--text-ghost);
+}
+
+.radio-top10-count {
+  font-size: 0.72rem;
+  color: var(--text-ghost);
+  flex-shrink: 0;
+  min-width: 52px;
+  text-align: right;
+}
+
+.radio-top10-play {
+  background: none;
+  border: none;
+  color: var(--text-ghost);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.radio-top10-play:hover { color: var(--accent); }
+
+/* Hours listened card */
+.radio-hours-card {
+  background: linear-gradient(135deg, rgba(204,31,31,0.12), rgba(100,20,20,0.08));
+  border: 1px solid rgba(204,31,31,0.25);
+  border-radius: 12px;
+  padding: 28px 32px;
+}
+
+.radio-hours-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+}
+
+.radio-hours-stat { text-align: center; }
+
+.radio-hours-num {
+  font-family: var(--display);
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 1px;
+}
+
+.radio-hours-label {
+  font-size: 0.72rem;
+  color: var(--text-ghost);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+.radio-hours-divider {
+  width: 1px;
+  height: 48px;
+  background: rgba(255,255,255,0.1);
+}
+
 /* About card */
 .radio-about-card {
   background: var(--surface);

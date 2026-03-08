@@ -37,6 +37,8 @@
   let loopMode = 'off';
   let radioStarted = false;
   let savedVolume = 0.8;
+  let playStats = {}; // file -> play count (from server)
+  let trackPlayStart = null; // timestamp when current track started
 
   const genreColors = {
     'Country': ['#b8860b', '#8b6914'],
@@ -202,8 +204,14 @@
   // ---- Fetch tracks ----
   async function loadTracks() {
     try {
-      const res = await fetch('/api/radio/tracks');
-      allTracks = await res.json();
+      const [tracksRes, statsRes] = await Promise.all([
+        fetch('/api/radio/tracks'),
+        fetch('/api/radio/stats'),
+      ]);
+      allTracks = await tracksRes.json();
+      const statsData = await statsRes.json();
+      playStats = statsData.plays || {};
+
       flatTracks = [];
       for (const cat in allTracks) {
         for (const t of allTracks[cat]) {
@@ -215,6 +223,8 @@
       buildStats();
       buildGenreCards();
       buildRandomPicks();
+      buildTop10();
+      buildHoursCard(statsData);
       renderRecent();
       renderQueue();
       renderFavorites();
@@ -286,6 +296,7 @@
             <span class="radio-lib-track-title">${t.title}</span>
             <span class="radio-lib-track-artist">${t.artist || 'Modest'}</span>
           </div>
+          <span class="radio-lib-plays">${formatPlays(playStats[t.file] || 0)}</span>
           <span class="radio-lib-dur">${dur}</span>
           <button class="radio-lib-heart${fav ? ' active' : ''}" data-file="${t.file}" title="Favorite">
             <svg viewBox="0 0 24 24" fill="${fav ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
@@ -468,13 +479,63 @@
 
   // ---- Play a track ----
   function playTrack(track) {
+    // Report seconds listened for the track we're leaving
+    reportListened();
+
     currentTrack = track;
+    trackPlayStart = Date.now();
     audio.src = track.file;
     audio.play().catch(() => {});
     addToRecent(track);
     updatePlayerUI();
     updateMediaSession();
     setTimeout(preloadNext, 1000);
+
+    // Record play count
+    if (track.category !== 'Radio Jingles') {
+      fetch('/api/radio/play', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: track.file }),
+      }).then(r => r.json()).then(data => {
+        playStats[track.file] = data.plays;
+        updatePlayCountDisplay(track.file, data.plays);
+        buildTop10();
+      }).catch(() => {});
+    }
+  }
+
+  function reportListened() {
+    if (!trackPlayStart || !currentTrack) return;
+    const seconds = Math.floor((Date.now() - trackPlayStart) / 1000);
+    trackPlayStart = null;
+    if (seconds < 5) return;
+    fetch('/api/radio/listened', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seconds }),
+    }).then(() => refreshHoursCard()).catch(() => {});
+  }
+
+  function updatePlayCountDisplay(file, count) {
+    document.querySelectorAll(`.radio-lib-track[data-file="${CSS.escape(file)}"] .radio-lib-plays`).forEach(el => {
+      el.textContent = formatPlays(count);
+    });
+  }
+
+  function formatPlays(n) {
+    if (!n) return '';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k plays';
+    return n + (n === 1 ? ' play' : ' plays');
+  }
+
+  async function refreshHoursCard() {
+    try {
+      const r = await fetch('/api/radio/stats');
+      const data = await r.json();
+      playStats = data.plays || {};
+      buildHoursCard(data);
+    } catch (e) {}
   }
 
   function updatePlayerUI() {
@@ -653,7 +714,9 @@
 
   // ---- Auto-play next ----
   audio.addEventListener('ended', () => {
+    reportListened();
     if (loopMode === 'one' && currentTrack) {
+      trackPlayStart = Date.now();
       audio.currentTime = 0;
       audio.play().catch(() => {});
       return;
@@ -841,6 +904,69 @@
       <div class="radio-stat-item"><div class="radio-stat-num">${jingles}</div><div class="radio-stat-label">Jingles</div></div>
       <div class="radio-stat-item"><div class="radio-stat-num">24/7</div><div class="radio-stat-label">On Air</div></div>
     `;
+  }
+
+  // ---- Top 10 most played ----
+  function buildTop10() {
+    const container = document.getElementById('radioTop10');
+    if (!container) return;
+
+    const ranked = Object.entries(playStats)
+      .filter(([file]) => {
+        const t = flatTracks.find(t => t.file === file);
+        return t && t.category !== 'Radio Jingles';
+      })
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    if (ranked.length === 0) {
+      container.innerHTML = '<div class="radio-top10-empty">Play some tracks to build the chart.</div>';
+      return;
+    }
+
+    const maxPlays = ranked[0][1];
+    let html = '';
+    ranked.forEach(([file, count], i) => {
+      const track = flatTracks.find(t => t.file === file);
+      if (!track) return;
+      const colors = genreColors[track.category] || ['#444', '#333'];
+      const barPct = Math.round((count / maxPlays) * 100);
+      const isPlaying = currentTrack && currentTrack.file === file;
+      html += `<div class="radio-top10-item${isPlaying ? ' playing' : ''}" data-file="${file}" data-title="${track.title}" data-cat="${track.category}" data-artist="${track.artist || 'Modest'}" data-dur="${track.duration || 0}">
+        <span class="radio-top10-rank">${i + 1}</span>
+        <div class="radio-top10-bar-wrap">
+          <div class="radio-top10-bar" style="width:${barPct}%;background:linear-gradient(90deg,${colors[0]},${colors[1]})"></div>
+          <div class="radio-top10-info">
+            <span class="radio-top10-title">${track.title}</span>
+            <span class="radio-top10-sub">${track.artist || 'Modest'} \u00b7 ${track.category}</span>
+          </div>
+        </div>
+        <span class="radio-top10-count">${formatPlays(count)}</span>
+        <button class="radio-top10-play" title="Play">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
+      </div>`;
+    });
+    container.innerHTML = html;
+
+    container.querySelectorAll('.radio-top10-item').forEach(el => {
+      el.querySelector('.radio-top10-play').addEventListener('click', () => {
+        isRadioMode = false;
+        playTrack({ title: el.dataset.title, file: el.dataset.file, category: el.dataset.cat, artist: el.dataset.artist, duration: parseInt(el.dataset.dur) || 0 });
+      });
+    });
+  }
+
+  // ---- Hours listened card ----
+  function buildHoursCard(data) {
+    const totalSeconds = data.totalSeconds || 0;
+    const totalPlays = Object.values(data.plays || {}).reduce((a, b) => a + b, 0);
+    const hours = (totalSeconds / 3600).toFixed(1);
+
+    const hoursEl = document.getElementById('radioHoursNum');
+    const playsEl = document.getElementById('radioPlaysNum');
+    if (hoursEl) hoursEl.textContent = hours;
+    if (playsEl) playsEl.textContent = totalPlays.toLocaleString();
   }
 
   // ---- Genre quick-play cards ----

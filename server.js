@@ -107,12 +107,53 @@ function loadAllTracks() {
 
 trackCache = loadAllTracks();
 
+// ---- Listen stats persistence ----
+const statsFile = path.join(__dirname, 'radio-stats.json');
+let listenStats = { plays: {}, totalSeconds: 0 };
+
+try {
+  if (fs.existsSync(statsFile)) {
+    listenStats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    listenStats.plays = listenStats.plays || {};
+    listenStats.totalSeconds = listenStats.totalSeconds || 0;
+  }
+} catch (e) {}
+
+let saveStatsTimer = null;
+function saveStats() {
+  clearTimeout(saveStatsTimer);
+  saveStatsTimer = setTimeout(() => {
+    try { fs.writeFileSync(statsFile, JSON.stringify(listenStats)); } catch (e) {}
+  }, 2000);
+}
+
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/radio', express.static(path.join(__dirname, 'radio')));
 
 app.get('/api/radio/tracks', (req, res) => {
   if (!trackCache) trackCache = loadAllTracks();
   res.json(trackCache.categories);
+});
+
+app.get('/api/radio/stats', (req, res) => {
+  res.json(listenStats);
+});
+
+app.post('/api/radio/play', (req, res) => {
+  const { file } = req.body;
+  if (!file) return res.sendStatus(400);
+  listenStats.plays[file] = (listenStats.plays[file] || 0) + 1;
+  saveStats();
+  res.json({ plays: listenStats.plays[file] });
+});
+
+app.post('/api/radio/listened', (req, res) => {
+  const { seconds } = req.body;
+  if (!seconds || seconds <= 0) return res.sendStatus(400);
+  listenStats.totalSeconds += Math.floor(seconds);
+  saveStats();
+  res.sendStatus(200);
 });
 
 app.get('/', (req, res) => {
