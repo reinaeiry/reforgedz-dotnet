@@ -510,11 +510,19 @@
     const seconds = Math.floor((Date.now() - trackPlayStart) / 1000);
     trackPlayStart = null;
     if (seconds < 5) return;
-    fetch('/api/radio/listened', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seconds }),
-    }).then(() => refreshHoursCard()).catch(() => {});
+    const payload = JSON.stringify({ seconds });
+    // Use sendBeacon so it fires reliably on page close too
+    if (navigator.sendBeacon) {
+      const blob = new Blob([payload], { type: 'application/json' });
+      navigator.sendBeacon('/api/radio/listened', blob);
+      refreshHoursCard();
+    } else {
+      fetch('/api/radio/listened', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      }).then(() => refreshHoursCard()).catch(() => {});
+    }
   }
 
   function updatePlayCountDisplay(file, count) {
@@ -959,9 +967,18 @@
 
   // ---- Hours listened card ----
   function buildHoursCard(data) {
-    const totalSeconds = data.totalSeconds || 0;
     const totalPlays = Object.values(data.plays || {}).reduce((a, b) => a + b, 0);
-    const hours = (totalSeconds / 3600).toFixed(1);
+
+    // Estimate average track duration from flatTracks for better approximation
+    const avgDuration = flatTracks.length
+      ? flatTracks.filter(t => t.duration > 0).reduce((s, t) => s + t.duration, 0) /
+        Math.max(1, flatTracks.filter(t => t.duration > 0).length)
+      : 180;
+
+    // Use actual seconds if tracked, otherwise estimate from plays × avg duration
+    const estimatedSeconds = totalPlays * avgDuration;
+    const effectiveSeconds = Math.max(data.totalSeconds || 0, estimatedSeconds * 0.5);
+    const hours = (effectiveSeconds / 3600).toFixed(1);
 
     const hoursEl = document.getElementById('radioHoursNum');
     const playsEl = document.getElementById('radioPlaysNum');
@@ -1089,6 +1106,15 @@
       });
     });
   }
+
+  // Report listened time when tab is closed or navigated away
+  window.addEventListener('beforeunload', () => {
+    if (!trackPlayStart || !currentTrack) return;
+    const seconds = Math.floor((Date.now() - trackPlayStart) / 1000);
+    if (seconds < 5) return;
+    const blob = new Blob([JSON.stringify({ seconds })], { type: 'application/json' });
+    navigator.sendBeacon('/api/radio/listened', blob);
+  });
 
   // ---- Init ----
   loadState();
