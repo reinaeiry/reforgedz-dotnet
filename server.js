@@ -47,6 +47,11 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// SPA tab routes - serve index.html for tab paths
+app.get('/radio', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`ReforgedZ.net running on port ${PORT}`);
 });

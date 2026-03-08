@@ -74,3 +74,9 @@ const counterObserver = new IntersectionObserver((entries) => {
 }, { threshold: 0.5 });
 
 document.querySelectorAll('[data-count]').forEach(el => counterObserver.observe(el));
+
+// ---- URL-based tab routing ----
+const pathTab = window.location.pathname.replace(/^\/+|\/+$/g, '');
+if (pathTab && document.getElementById('tab-' + pathTab)) {
+  switchTab(pathTab);
+}
