@@ -278,20 +278,56 @@
     timeDur.textContent = formatTime(audio.duration);
   });
 
-  progressBar?.addEventListener('click', (e) => {
-    if (!audio.duration) return;
-    const rect = progressBar.getBoundingClientRect();
-    const pct = (e.clientX - rect.left) / rect.width;
-    audio.currentTime = pct * audio.duration;
-  });
+  // Draggable scrubber helper
+  function makeDraggable(bar, onUpdate) {
+    let dragging = false;
 
-  // Volume
-  volBar?.addEventListener('click', (e) => {
-    const rect = volBar.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    audio.volume = pct;
-    volFill.style.width = (pct * 100) + '%';
-  });
+    function handleMove(e) {
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const rect = bar.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      onUpdate(pct);
+    }
+
+    bar.addEventListener('mousedown', (e) => {
+      dragging = true;
+      handleMove(e);
+      e.preventDefault();
+    });
+
+    bar.addEventListener('touchstart', (e) => {
+      dragging = true;
+      handleMove(e);
+    }, { passive: true });
+
+    document.addEventListener('mousemove', (e) => {
+      if (dragging) handleMove(e);
+    });
+
+    document.addEventListener('touchmove', (e) => {
+      if (dragging) handleMove(e);
+    }, { passive: true });
+
+    document.addEventListener('mouseup', () => { dragging = false; });
+    document.addEventListener('touchend', () => { dragging = false; });
+  }
+
+  // Progress bar (drag + click)
+  if (progressBar) {
+    makeDraggable(progressBar, (pct) => {
+      if (!audio.duration) return;
+      audio.currentTime = pct * audio.duration;
+      progressFill.style.width = (pct * 100) + '%';
+    });
+  }
+
+  // Volume bar (drag + click)
+  if (volBar) {
+    makeDraggable(volBar, (pct) => {
+      audio.volume = pct;
+      volFill.style.width = (pct * 100) + '%';
+    });
+  }
 
   // Auto-play next
   audio.addEventListener('ended', () => {
