@@ -14,8 +14,8 @@
   --accent-dim: rgba(204,31,31,0.12);
   --accent-hover: #e02525;
   --text: #f0f0f0;
-  --text-dim: #888;
-  --text-ghost: #444;
+  --text-dim: #aaa;
+  --text-ghost: #777;
   --display: 'Oswald', sans-serif;
   --body: 'Inter', sans-serif;
 }
