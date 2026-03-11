@@ -81,6 +81,17 @@ function renderAuth() {
             <div class="dropdown-header-role ${currentUser.role === 'admin' ? 'admin' : ''}">${currentUser.role === 'admin' ? 'Admin' : 'Member'}</div>
           </div>
         </div>
+        <div class="dropdown-biuid">
+          <div class="dropdown-biuid-label">Bohemia Identity ID</div>
+          ${currentUser.bi_uid
+            ? `<div class="dropdown-biuid-value">${escHtml(currentUser.bi_uid)}</div>`
+            : `<div class="dropdown-biuid-value empty">Not set</div>`
+          }
+          <div class="dropdown-biuid-row">
+            <input type="text" id="dropdownBiUidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${currentUser.bi_uid || ''}" spellcheck="false" autocomplete="off">
+            <button onclick="saveBiUidFromDropdown()">Save</button>
+          </div>
+        </div>
         <div class="dropdown-section-label">Purchase History</div>
         <div class="dropdown-orders" id="dropdownOrders">
           <div class="dropdown-empty">Loading...</div>
@@ -194,8 +205,106 @@ function renderProducts(products) {
   }).join('');
 }
 
+// ---- BI UID modal ----
+let pendingProductId = null;
+
+function showBiUidModal(productId) {
+  pendingProductId = productId;
+  const overlay = document.getElementById('biuidOverlay');
+  const input = document.getElementById('biuidInput');
+  const error = document.getElementById('biuidError');
+  input.value = '';
+  error.textContent = '';
+  overlay.classList.add('open');
+  input.focus();
+}
+
+function hideBiUidModal() {
+  document.getElementById('biuidOverlay').classList.remove('open');
+  pendingProductId = null;
+}
+
+document.getElementById('biuidCancel').addEventListener('click', () => {
+  const pid = pendingProductId;
+  hideBiUidModal();
+  // Re-enable the buy button
+  if (pid) {
+    const btn = document.querySelector(`.shop-card[data-id="${pid}"] .shop-buy-btn`);
+    if (btn) { btn.disabled = false; btn.textContent = 'Purchase'; }
+  }
+});
+
+document.getElementById('biuidSkip').addEventListener('click', () => {
+  const pid = pendingProductId;
+  hideBiUidModal();
+  if (pid) proceedCheckout(pid);
+});
+
+document.getElementById('biuidSubmit').addEventListener('click', async () => {
+  const input = document.getElementById('biuidInput');
+  const error = document.getElementById('biuidError');
+  const submitBtn = document.getElementById('biuidSubmit');
+
+  const raw = input.value.trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)) {
+    error.textContent = 'Invalid format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Saving...';
+  error.textContent = '';
+
+  try {
+    await api('/api/shop/set-bi-uid', {
+      method: 'POST',
+      body: JSON.stringify({ biUid: raw })
+    });
+    currentUser.bi_uid = raw;
+    const pid = pendingProductId;
+    hideBiUidModal();
+    renderAuth();
+    if (pid) proceedCheckout(pid);
+  } catch (e) {
+    error.textContent = e.message || 'Failed to save BI UID';
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Save & Continue';
+  }
+});
+
+async function saveBiUidFromDropdown() {
+  const input = document.getElementById('dropdownBiUidInput');
+  const raw = input.value.trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)) {
+    alert('Invalid format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx');
+    return;
+  }
+  try {
+    await api('/api/shop/set-bi-uid', {
+      method: 'POST',
+      body: JSON.stringify({ biUid: raw })
+    });
+    currentUser.bi_uid = raw;
+    renderAuth();
+  } catch (e) {
+    alert(e.message || 'Failed to save BI UID');
+  }
+}
+
 // ---- Buy flow ----
 async function buyProduct(productId) {
+  if (!currentUser) return;
+
+  if (!currentUser.bi_uid) {
+    showBiUidModal(productId);
+    return;
+  }
+
+  proceedCheckout(productId);
+}
+
+async function proceedCheckout(productId) {
   const btn = document.querySelector(`.shop-card[data-id="${productId}"] .shop-buy-btn`);
   if (btn) { btn.disabled = true; btn.textContent = 'Redirecting...'; }
 
@@ -403,5 +512,6 @@ window.editProduct = editProduct;
 window.toggleProduct = toggleProduct;
 window.deleteProduct = deleteProduct;
 window.cancelSubscription = cancelSubscription;
+window.saveBiUidFromDropdown = saveBiUidFromDropdown;
 
 init();

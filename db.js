@@ -10,6 +10,7 @@ db.exec(`
     steam_id    TEXT PRIMARY KEY,
     persona     TEXT NOT NULL,
     avatar_url  TEXT,
+    bi_uid      TEXT,
     role        TEXT NOT NULL DEFAULT 'user',
     created_at  INTEGER NOT NULL DEFAULT (unixepoch())
   );
@@ -40,5 +41,12 @@ db.exec(`
     completed_at            INTEGER
   );
 `);
+
+// Migration: add bi_uid column if missing
+try {
+  db.prepare("SELECT bi_uid FROM users LIMIT 1").get();
+} catch (e) {
+  db.exec("ALTER TABLE users ADD COLUMN bi_uid TEXT");
+}
 
 module.exports = db;

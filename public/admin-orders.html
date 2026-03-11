@@ -188,6 +188,17 @@
       font-family: monospace;
     }
 
+    .player-cell .player-biuid {
+      font-size: 0.62rem;
+      color: var(--text-ghost);
+      font-family: monospace;
+      opacity: 0.6;
+      cursor: pointer;
+    }
+
+    .player-cell .player-biuid:hover { opacity: 1; color: var(--accent); }
+    .player-cell .player-biuid.empty { color: #f87171; font-style: italic; }
+
     .status-badge {
       display: inline-block;
       padding: 3px 10px;
@@ -417,7 +428,7 @@
       const filtered = allOrders.filter(o => {
         if (currentFilter !== 'all' && o.status !== currentFilter) return false;
         if (search) {
-          const haystack = `${o.persona} ${o.steam_id} ${o.title}`.toLowerCase();
+          const haystack = `${o.persona} ${o.steam_id} ${o.bi_uid || ''} ${o.title}`.toLowerCase();
           if (!haystack.includes(search)) return false;
         }
         return true;
@@ -436,6 +447,7 @@
               <div class="player-info">
                 <div class="player-name">${escHtml(o.persona)}</div>
                 <div class="player-steamid">${escHtml(o.steam_id)}</div>
+                <div class="player-biuid ${o.bi_uid ? '' : 'empty'}" onclick="editBiUid('${escHtml(o.steam_id)}', '${escHtml(o.bi_uid || '')}')" title="Click to edit">${o.bi_uid ? escHtml(o.bi_uid) : 'No BI UID — click to set'}</div>
               </div>
             </div>
           </td>
@@ -459,6 +471,30 @@
       });
 
       document.getElementById('searchInput').addEventListener('input', renderOrders);
+    }
+
+    async function editBiUid(steamId, currentUid) {
+      const input = prompt('Enter Bohemia Identity UID (e.g. 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac):', currentUid);
+      if (input === null) return;
+
+      const cleaned = input.trim().toLowerCase();
+      if (cleaned && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(cleaned)) {
+        alert('Invalid BI UID format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx');
+        return;
+      }
+
+      try {
+        await fetch(`/api/shop/admin/users/${steamId}/bi-uid`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ biUid: cleaned || null })
+        });
+        // Update local data and re-render
+        allOrders.forEach(o => { if (o.steam_id === steamId) o.bi_uid = cleaned || null; });
+        renderOrders();
+      } catch (e) {
+        alert('Failed to update BI UID');
+      }
     }
 
     init();

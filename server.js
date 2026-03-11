@@ -81,7 +81,8 @@ app.get('/api/auth/me', (req, res) => {
     steam_id: req.user.steam_id,
     persona: req.user.persona,
     avatar_url: req.user.avatar_url,
-    role: req.user.role
+    role: req.user.role,
+    bi_uid: req.user.bi_uid || null
   });
 });
 

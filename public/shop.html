@@ -708,6 +708,216 @@
     </div>
   </footer>
 
+  <!-- BI UID Modal -->
+  <div class="biuid-overlay" id="biuidOverlay">
+    <div class="biuid-modal">
+      <h3>Bohemia Identity ID Required</h3>
+      <p>We need your Bohemia Identity ID to deliver your purchase. You can find it in Arma Reforger:</p>
+      <ol>
+        <li>Open the <strong>Main Menu</strong></li>
+        <li>Click your <strong>account name</strong> in the top right corner</li>
+        <li>Copy the ID that looks like: <code>41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac</code></li>
+      </ol>
+      <input type="text" class="biuid-input" id="biuidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellcheck="false" autocomplete="off">
+      <div class="biuid-error" id="biuidError"></div>
+      <div class="biuid-actions">
+        <button class="biuid-cancel" id="biuidCancel">Cancel</button>
+        <button class="biuid-skip" id="biuidSkip">Skip for now</button>
+        <button class="biuid-submit" id="biuidSubmit">Save & Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .biuid-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+
+    .biuid-overlay.open { display: flex; }
+
+    .biuid-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 480px;
+      width: 90%;
+      animation: dropIn 0.15s ease;
+    }
+
+    .biuid-modal h3 {
+      font-family: var(--display);
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    .biuid-modal p {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+      margin-bottom: 12px;
+    }
+
+    .biuid-modal ol {
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      line-height: 1.8;
+      padding-left: 20px;
+      margin-bottom: 18px;
+    }
+
+    .biuid-modal code {
+      font-size: 0.75rem;
+      background: rgba(255,255,255,0.05);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--text-ghost);
+    }
+
+    .biuid-input {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-family: monospace;
+      font-size: 0.9rem;
+      letter-spacing: 0.5px;
+      transition: border-color 0.2s;
+    }
+
+    .biuid-input:focus { outline: none; border-color: rgba(204,31,31,0.4); }
+
+    .biuid-error {
+      font-size: 0.78rem;
+      color: #f87171;
+      margin-top: 8px;
+      min-height: 1.2em;
+    }
+
+    .biuid-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 18px;
+    }
+
+    .biuid-cancel {
+      padding: 9px 18px;
+      background: none;
+      color: var(--text-ghost);
+      font-size: 0.82rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .biuid-cancel:hover { color: var(--text); border-color: var(--border-hover); }
+
+    .biuid-submit {
+      padding: 9px 22px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.82rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .biuid-skip {
+      padding: 9px 18px;
+      background: none;
+      color: var(--text-ghost);
+      font-size: 0.82rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    .biuid-skip:hover { color: var(--text); border-color: var(--border-hover); }
+
+    .biuid-submit:hover { background: var(--accent-hover); }
+    .biuid-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ---- Dropdown BI UID section ---- */
+    .dropdown-biuid {
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .dropdown-biuid-label {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-ghost);
+      margin-bottom: 6px;
+    }
+
+    .dropdown-biuid-value {
+      font-size: 0.75rem;
+      font-family: monospace;
+      color: var(--text);
+      word-break: break-all;
+      margin-bottom: 6px;
+    }
+
+    .dropdown-biuid-value.empty {
+      color: #f87171;
+      font-style: italic;
+      font-family: var(--body);
+    }
+
+    .dropdown-biuid-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .dropdown-biuid-row input {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 0.72rem;
+      font-family: monospace;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      transition: border-color 0.2s;
+    }
+
+    .dropdown-biuid-row input:focus { outline: none; border-color: rgba(204,31,31,0.4); }
+
+    .dropdown-biuid-row button {
+      padding: 6px 12px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: #fff;
+      background: var(--accent);
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+
+    .dropdown-biuid-row button:hover { background: var(--accent-hover); }
+  </style>
+
   <script src="/shop.js"></script>
 </body>
 </html>

@@ -14,7 +14,7 @@ function getStripe(testMode) {
 // ---- Discord webhook ----
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-function sendDiscordNotification({ eventType, steamName, steamId, productTitle, amountCents, currency, status }) {
+function sendDiscordNotification({ eventType, steamName, steamId, biUid, productTitle, amountCents, currency, status }) {
   if (!DISCORD_WEBHOOK_URL) return;
 
   const colors = {
@@ -34,16 +34,21 @@ function sendDiscordNotification({ eventType, steamName, steamId, productTitle, 
 
   const amount = amountCents ? `$${(amountCents / 100).toFixed(2)} ${(currency || 'usd').toUpperCase()}` : 'N/A';
 
+  const fields = [
+    { name: 'Player', value: steamName || 'Unknown', inline: true },
+    { name: 'Steam ID', value: steamId || 'Unknown', inline: true },
+  ];
+  fields.push({ name: 'BI UID', value: biUid || 'SET LATER', inline: false });
+  fields.push(
+    { name: 'Product', value: productTitle || 'Unknown', inline: false },
+    { name: 'Amount', value: amount, inline: true },
+    { name: 'Status', value: status || 'unknown', inline: true }
+  );
+
   const embed = {
     title: titles[eventType] || eventType,
     color: colors[status] || 0x888888,
-    fields: [
-      { name: 'Player', value: steamName || 'Unknown', inline: true },
-      { name: 'Steam ID', value: steamId || 'Unknown', inline: true },
-      { name: 'Product', value: productTitle || 'Unknown', inline: false },
-      { name: 'Amount', value: amount, inline: true },
-      { name: 'Status', value: status || 'unknown', inline: true }
-    ],
+    fields,
     timestamp: new Date().toISOString(),
     footer: { text: 'ReforgedZ Shop' }
   };
@@ -160,6 +165,21 @@ router.get('/api/shop/orders', requireAuth, (req, res) => {
   res.json(orders);
 });
 
+// Set own BI UID
+router.post('/api/shop/set-bi-uid', requireAuth, (req, res) => {
+  const { biUid } = req.body;
+  if (!biUid || typeof biUid !== 'string') return res.status(400).json({ error: 'Missing BI UID' });
+
+  const cleaned = biUid.trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(cleaned)) {
+    return res.status(400).json({ error: 'Invalid BI UID format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' });
+  }
+
+  db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(cleaned, req.user.steam_id);
+  req.user.bi_uid = cleaned;
+  res.json({ ok: true, bi_uid: cleaned });
+});
+
 // Verify a checkout session (fallback when webhooks don't arrive)
 router.post('/api/shop/verify-session', requireAuth, (req, res) => {
   const { sessionId } = req.body;
@@ -188,7 +208,7 @@ router.post('/api/shop/verify-session', requireAuth, (req, res) => {
         `).run(session.subscription || null, order.id);
 
         const details = db.prepare(`
-          SELECT o.*, u.persona, p.title as product_title, p.type, p.currency
+          SELECT o.*, u.persona, u.bi_uid, p.title as product_title, p.type, p.currency
           FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
           WHERE o.id = ?
         `).get(order.id);
@@ -197,6 +217,7 @@ router.post('/api/shop/verify-session', requireAuth, (req, res) => {
             eventType: session.subscription ? 'subscription_started' : 'payment_completed',
             steamName: details.persona,
             steamId: details.steam_id,
+            biUid: details.bi_uid,
             productTitle: details.product_title,
             amountCents: details.amount_cents,
             currency: details.currency,
@@ -239,6 +260,7 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
         eventType: 'subscription_cancelled',
         steamName: req.user.persona,
         steamId: req.user.steam_id,
+        biUid: req.user.bi_uid,
         productTitle: order.product_title,
         amountCents: order.amount_cents,
         currency: order.currency,
@@ -263,12 +285,12 @@ router.get('/api/shop/admin/products', requireAdmin, (req, res) => {
   res.json(products);
 });
 
-// Get all orders (admin view with steam names)
+// Get all orders (admin view with steam names + BI UIDs)
 router.get('/api/shop/admin/orders', requireAdmin, (req, res) => {
   const orders = db.prepare(`
     SELECT o.id, o.status, o.amount_cents, o.created_at, o.completed_at,
            o.stripe_session_id, o.stripe_subscription_id,
-           o.steam_id, u.persona, u.avatar_url,
+           o.steam_id, u.persona, u.avatar_url, u.bi_uid,
            p.title, p.type, p.currency
     FROM orders o
     JOIN users u ON o.steam_id = u.steam_id
@@ -276,6 +298,16 @@ router.get('/api/shop/admin/orders', requireAdmin, (req, res) => {
     ORDER BY o.created_at DESC
   `).all();
   res.json(orders);
+});
+
+// Set BI UID for a user (admin only)
+router.put('/api/shop/admin/users/:steamId/bi-uid', requireAdmin, (req, res) => {
+  const { biUid } = req.body;
+  const user = db.prepare('SELECT * FROM users WHERE steam_id = ?').get(req.params.steamId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(biUid || null, req.params.steamId);
+  res.json({ ok: true });
 });
 
 // Create product
@@ -391,7 +423,7 @@ function webhookHandler(req, res) {
         `).run(session.id, session.subscription || null, orderId);
 
         const order = db.prepare(`
-          SELECT o.*, u.persona, p.title as product_title, p.type, p.currency
+          SELECT o.*, u.persona, u.bi_uid, p.title as product_title, p.type, p.currency
           FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
           WHERE o.id = ?
         `).get(orderId);
@@ -400,6 +432,7 @@ function webhookHandler(req, res) {
             eventType: session.subscription ? 'subscription_started' : 'payment_completed',
             steamName: order.persona,
             steamId: order.steam_id,
+            biUid: order.bi_uid,
             productTitle: order.product_title,
             amountCents: order.amount_cents,
             currency: order.currency,
@@ -417,7 +450,7 @@ function webhookHandler(req, res) {
         db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(orderId);
 
         const order = db.prepare(`
-          SELECT o.*, u.persona, p.title as product_title, p.currency
+          SELECT o.*, u.persona, u.bi_uid, p.title as product_title, p.currency
           FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
           WHERE o.id = ?
         `).get(orderId);
@@ -426,6 +459,7 @@ function webhookHandler(req, res) {
             eventType: 'payment_failed',
             steamName: order.persona,
             steamId: order.steam_id,
+            biUid: order.bi_uid,
             productTitle: order.product_title,
             amountCents: order.amount_cents,
             currency: order.currency,
@@ -447,12 +481,13 @@ function webhookHandler(req, res) {
             VALUES (?, ?, ?, 'completed', ?, unixepoch())
           `).run(existing.steam_id, existing.product_id, subId, invoice.amount_paid);
 
-          const user = db.prepare('SELECT persona FROM users WHERE steam_id = ?').get(existing.steam_id);
+          const user = db.prepare('SELECT persona, bi_uid FROM users WHERE steam_id = ?').get(existing.steam_id);
           const product = db.prepare('SELECT title, currency FROM products WHERE id = ?').get(existing.product_id);
           sendDiscordNotification({
             eventType: 'subscription_renewed',
             steamName: user ? user.persona : existing.steam_id,
             steamId: existing.steam_id,
+            biUid: user ? user.bi_uid : null,
             productTitle: product ? product.title : 'Unknown',
             amountCents: invoice.amount_paid,
             currency: product ? product.currency : 'usd',
@@ -466,7 +501,7 @@ function webhookHandler(req, res) {
     case 'customer.subscription.deleted': {
       const sub = event.data.object;
       const existing = db.prepare(`
-        SELECT o.steam_id, o.amount_cents, u.persona, p.title as product_title, p.currency
+        SELECT o.steam_id, o.amount_cents, u.persona, u.bi_uid, p.title as product_title, p.currency
         FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
         WHERE o.stripe_subscription_id = ? AND o.status = 'completed' LIMIT 1
       `).get(sub.id);
@@ -480,6 +515,7 @@ function webhookHandler(req, res) {
           eventType: 'subscription_cancelled',
           steamName: existing.persona,
           steamId: existing.steam_id,
+          biUid: existing.bi_uid,
           productTitle: existing.product_title,
           amountCents: existing.amount_cents,
           currency: existing.currency,
