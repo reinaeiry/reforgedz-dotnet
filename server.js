@@ -160,6 +160,10 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.get('/monetization', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'monetization.html'));
+});
+
 app.get('/radio', (req, res) => {
   const trackFile = req.query.track;
   if (!trackFile) {
