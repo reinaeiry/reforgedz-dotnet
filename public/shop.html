@@ -708,6 +708,18 @@
     </div>
   </footer>
 
+  <!-- Cancel Subscription Modal -->
+  <div class="cancel-overlay" id="cancelOverlay">
+    <div class="cancel-modal">
+      <h3>Cancel Subscription</h3>
+      <p id="cancelModalText">Loading billing info...</p>
+      <div class="cancel-modal-actions">
+        <button class="cancel-modal-back" id="cancelModalBack">Keep Subscription</button>
+        <button class="cancel-modal-confirm" id="cancelModalConfirm" disabled>Yes, Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- BI UID Modal -->
   <div class="biuid-overlay" id="biuidOverlay">
     <div class="biuid-modal">
@@ -916,6 +928,86 @@
     }
 
     .dropdown-biuid-row button:hover { background: var(--accent-hover); }
+
+    /* ---- Cancel subscription modal ---- */
+    .cancel-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+
+    .cancel-overlay.open { display: flex; }
+
+    .cancel-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 440px;
+      width: 90%;
+      animation: dropIn 0.15s ease;
+    }
+
+    .cancel-modal h3 {
+      font-family: var(--display);
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      color: #f87171;
+      margin-bottom: 14px;
+    }
+
+    .cancel-modal p {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+      margin-bottom: 8px;
+    }
+
+    .cancel-modal .cancel-date {
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .cancel-modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 22px;
+    }
+
+    .cancel-modal-back {
+      padding: 9px 22px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.82rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .cancel-modal-back:hover { background: var(--accent-hover); }
+
+    .cancel-modal-confirm {
+      padding: 9px 18px;
+      background: none;
+      color: var(--text-ghost);
+      font-size: 0.82rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .cancel-modal-confirm:hover { color: #f87171; border-color: rgba(248,113,113,0.4); }
+    .cancel-modal-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
   </style>
 
   <script src="/shop.js"></script>

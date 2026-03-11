@@ -235,6 +235,32 @@ router.post('/api/shop/verify-session', requireAuth, (req, res) => {
     });
 });
 
+// Get subscription info (period end date)
+router.get('/api/shop/subscription-info/:orderId', requireAuth, (req, res) => {
+  const order = db.prepare(`
+    SELECT o.stripe_subscription_id FROM orders o
+    WHERE o.id = ? AND o.steam_id = ? AND o.status = 'completed' AND o.stripe_subscription_id IS NOT NULL
+  `).get(req.params.orderId, req.user.steam_id);
+
+  if (!order) return res.status(404).json({ error: 'Active subscription not found' });
+
+  const stripe = getStripe(false);
+  const stripeTest = getStripe(true);
+
+  stripe.subscriptions.retrieve(order.stripe_subscription_id)
+    .catch(() => stripeTest.subscriptions.retrieve(order.stripe_subscription_id))
+    .then(sub => {
+      res.json({
+        periodEnd: sub.current_period_end,
+        cancelAtPeriodEnd: sub.cancel_at_period_end
+      });
+    })
+    .catch(err => {
+      console.error('Subscription info error:', err.message);
+      res.status(500).json({ error: 'Failed to fetch subscription info' });
+    });
+});
+
 // Cancel a subscription
 router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
   const { orderId } = req.body;

@@ -453,25 +453,58 @@ function renderOrders(orders, container) {
 }
 
 // ---- Cancel subscription ----
+let pendingCancelOrderId = null;
+
 async function cancelSubscription(orderId, e) {
   if (e) e.stopPropagation();
+  pendingCancelOrderId = orderId;
 
-  if (!confirm('Cancel this subscription? It will remain active until the end of the current billing period.')) return;
+  const overlay = document.getElementById('cancelOverlay');
+  const text = document.getElementById('cancelModalText');
+  const confirmBtn = document.getElementById('cancelModalConfirm');
+  confirmBtn.disabled = true;
+  text.textContent = 'Loading billing info...';
+  overlay.classList.add('open');
 
-  const btn = e && e.target;
-  if (btn) { btn.disabled = true; btn.textContent = 'Cancelling...'; }
+  try {
+    const info = await api(`/api/shop/subscription-info/${orderId}`);
+    const endDate = new Date(info.periodEnd * 1000);
+    const formatted = endDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+    text.innerHTML = `Recurring billing will end on <span class="cancel-date">${escHtml(formatted)}</span>. If you cancel now, you will lose access to your benefits on <span class="cancel-date">${escHtml(formatted)}</span>.<br><br>Are you sure you want to cancel?`;
+    confirmBtn.disabled = false;
+  } catch (err) {
+    text.textContent = 'If you cancel now, your subscription will end at the end of the current billing period. Are you sure?';
+    confirmBtn.disabled = false;
+  }
+}
+
+document.getElementById('cancelModalBack').addEventListener('click', () => {
+  document.getElementById('cancelOverlay').classList.remove('open');
+  pendingCancelOrderId = null;
+});
+
+document.getElementById('cancelModalConfirm').addEventListener('click', async () => {
+  if (!pendingCancelOrderId) return;
+  const confirmBtn = document.getElementById('cancelModalConfirm');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Cancelling...';
 
   try {
     await api('/api/shop/cancel-subscription', {
       method: 'POST',
-      body: JSON.stringify({ orderId })
+      body: JSON.stringify({ orderId: pendingCancelOrderId })
     });
+    document.getElementById('cancelOverlay').classList.remove('open');
+    pendingCancelOrderId = null;
+    confirmBtn.textContent = 'Yes, Cancel';
+    confirmBtn.disabled = false;
     loadOrders();
   } catch (err) {
     alert(err.message || 'Failed to cancel subscription');
-    if (btn) { btn.disabled = false; btn.textContent = 'Cancel'; }
+    confirmBtn.textContent = 'Yes, Cancel';
+    confirmBtn.disabled = false;
   }
-}
+});
 
 // ---- URL alerts + session verification ----
 async function checkAlerts() {
