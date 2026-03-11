@@ -24,7 +24,7 @@
     }
 
     .policy-header {
-      margin-bottom: 56px;
+      margin-bottom: 64px;
     }
 
     .policy-header h1 {
@@ -45,13 +45,50 @@
       line-height: 1.8;
     }
 
+    /* ---- Info cards row ---- */
+    .info-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 56px;
+    }
+
+    .info-card {
+      background: var(--bg-dark);
+      padding: 32px 28px;
+      transition: background 0.2s;
+    }
+
+    .info-card:hover { background: var(--surface); }
+
+    .info-card h3 {
+      font-family: var(--display);
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+
+    .info-card p {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.75;
+    }
+
+    /* ---- Policy sections ---- */
     .policy-body {
       max-width: 820px;
     }
 
     .policy-section {
       border-top: 1px solid var(--border);
-      padding: 40px 0;
+      padding: 36px 0;
     }
 
     .policy-section:last-child {
@@ -60,12 +97,12 @@
 
     .policy-section h2 {
       font-family: var(--display);
-      font-size: 1.1rem;
+      font-size: 1.05rem;
       font-weight: 600;
       letter-spacing: 2px;
       text-transform: uppercase;
       color: #fff;
-      margin: 0 0 16px;
+      margin: 0 0 14px;
       display: flex;
       align-items: center;
       gap: 14px;
@@ -73,52 +110,50 @@
 
     .policy-section h2 .num {
       color: var(--accent);
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       font-weight: 700;
       min-width: 22px;
     }
 
-    .policy-section p,
-    .policy-section li {
-      font-size: 0.9rem;
+    .policy-section p {
+      font-size: 0.875rem;
       color: var(--text-dim);
       line-height: 1.85;
-    }
-
-    .policy-section p {
-      margin: 0 0 12px;
+      margin: 0 0 10px;
       padding-left: 36px;
     }
 
-    .policy-section p:last-child {
-      margin-bottom: 0;
+    .policy-section p:last-child { margin-bottom: 0; }
+
+    /* ---- Legal section ---- */
+    .legal-section {
+      margin-top: 56px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: 2px solid var(--accent);
+      border-radius: 4px;
+      padding: 40px 44px;
+      max-width: 820px;
     }
 
-    .policy-points {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      padding-left: 36px;
+    .legal-section h2 {
+      font-family: var(--display);
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #fff;
+      margin: 0 0 20px;
     }
 
-    .policy-points li {
-      position: relative;
-      padding-left: 16px;
+    .legal-section p {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.85;
+      margin: 0 0 14px;
     }
 
-    .policy-points li::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 10px;
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: var(--accent);
-    }
+    .legal-section p:last-child { margin-bottom: 0; }
 
     .policy-link {
       color: var(--accent);
@@ -127,10 +162,9 @@
       transition: color 0.2s;
     }
 
-    .policy-link:hover {
-      color: var(--accent-hover);
-    }
+    .policy-link:hover { color: var(--accent-hover); }
 
+    /* ---- Footer area ---- */
     .policy-footer {
       margin-top: 48px;
       padding: 20px 0;
@@ -150,10 +184,14 @@
       font-weight: 500;
     }
 
+    @media (max-width: 960px) {
+      .info-cards { grid-template-columns: 1fr; }
+    }
+
     @media (max-width: 768px) {
       .policy-page { padding-top: 110px; }
-      .policy-section p,
-      .policy-points { padding-left: 0; }
+      .policy-section p { padding-left: 0; }
+      .legal-section { padding: 28px 24px; }
     }
   </style>
 </head>
@@ -177,74 +215,77 @@
       <div class="policy-header">
         <p class="eyebrow">Policy</p>
         <h1>Monetization</h1>
-        <p class="policy-intro">ReforgedZ offers optional cosmetic purchases to help support ongoing development. Nothing you can buy will give you an edge in gameplay. This page explains what we sell, how it works, and the rules we follow.</p>
+        <p class="policy-intro">ReforgedZ is a community-driven project. Any optional purchases exist to support ongoing development and server costs. Nothing you can buy will give you an advantage over another player.</p>
       </div>
 
+      <!-- Info cards -->
+      <div class="info-cards">
+        <div class="info-card">
+          <h3>No Pay-to-Win</h3>
+          <p>Every purchasable item is cosmetic. No stat changes, no gameplay advantages, no exceptions. A free player and a paying player are on the same level.</p>
+        </div>
+        <div class="info-card">
+          <h3>Fully Optional</h3>
+          <p>Nothing is locked behind a paywall. All core gameplay, features, and content are available to every player regardless of whether they've spent anything.</p>
+        </div>
+        <div class="info-card">
+          <h3>BI Compliant</h3>
+          <p>Everything here follows Bohemia Interactive's official monetization guidelines for Arma Reforger servers. Their rules take priority over ours if there's ever a conflict.</p>
+        </div>
+      </div>
+
+      <!-- Policy sections -->
       <div class="policy-body">
 
         <div class="policy-section">
-          <h2><span class="num">01</span> What We Sell</h2>
-          <p>Everything available for purchase on ReforgedZ is cosmetic. No stat boosts, no gameplay advantages, no pay-to-win. If you never spend a cent, your experience is the same as everyone else's.</p>
-          <p>Current and planned offerings include:</p>
-          <ul class="policy-points">
-            <li>Priority server slots</li>
-            <li>Weapon skins that change appearance only, with no effect on damage, accuracy, or handling</li>
-            <li>Clothing and character cosmetics for personalising your survivor</li>
-            <li>Custom assets such as base flags, banners, and other personalisation items</li>
-          </ul>
+          <h2><span class="num">01</span> What This Covers</h2>
+          <p>This policy applies to all optional paid content on ReforgedZ servers. The types of items we may offer include, but are not limited to, weapon skins, clothing cosmetics, custom assets like base flags or banners, and priority server slots. What's available may change over time as we add or retire items.</p>
         </div>
 
         <div class="policy-section">
-          <h2><span class="num">02</span> Fair Play</h2>
-          <p>Paid items do not change how the game plays. A player who has purchased skins and a player who hasn't are on completely equal footing when it comes to combat, survival, looting, and every other gameplay mechanic.</p>
-          <p>If we ever introduce something new to the store, it will follow this same rule. Cosmetic only, no exceptions.</p>
+          <h2><span class="num">02</span> Cosmetic Items</h2>
+          <p>Weapon skins change how a weapon looks. That's it. No damage changes, no recoil changes, no stat modifications of any kind. The same goes for clothing and character cosmetics. They're visual only and don't affect hitboxes, visibility to AI, or any other mechanic.</p>
+          <p>We keep cosmetics grounded in the setting. Some may be limited-run or tied to events. Players can submit their own designs for review, but everything goes through admin approval before it goes live.</p>
         </div>
 
         <div class="policy-section">
-          <h2><span class="num">03</span> Weapon Skins</h2>
-          <p>Weapon skins are purely visual. They change how a weapon looks in your hands and on the ground. They do not change stats, bullet velocity, recoil, damage, or anything else that affects gameplay.</p>
-          <p>Skins rotate over time. Some may be limited-run or tied to events. Players can also submit their own skin designs for consideration. All submissions go through admin review before anything goes live.</p>
+          <h2><span class="num">03</span> Custom Assets</h2>
+          <p>Players may be able to purchase personalised in-game items such as base flags, banners, or similar cosmetic props. These let you put your mark on the world without changing how anyone plays.</p>
+          <p>All custom content is reviewed and approved by the admin team. We reserve the right to reject anything we consider inappropriate, offensive, or disruptive to other players.</p>
         </div>
 
         <div class="policy-section">
-          <h2><span class="num">04</span> Clothing &amp; Character Cosmetics</h2>
-          <p>Clothing skins let you change how your character looks. Different jackets, gear, headwear, survival-themed outfits, that kind of thing. None of it changes your hitbox, your stats, or your visibility to AI.</p>
-          <p>We aim to keep cosmetics grounded in the setting. You won't see neon spacesuits on Chernarus.</p>
+          <h2><span class="num">04</span> Payments &amp; Refunds</h2>
+          <p>Payments are processed through secure third-party platforms such as PayPal or card processors. We do not store your payment details ourselves.</p>
+          <p>Refund requests are handled on a case-by-case basis. If something went wrong with a purchase, get in touch and we'll sort it out. We're not here to take your money and ghost you.</p>
         </div>
 
         <div class="policy-section">
-          <h2><span class="num">05</span> Custom Assets</h2>
-          <p>Players can purchase custom in-game assets to personalise their experience. This includes things like custom base flags, banners, and similar items that let you leave your mark on the world without affecting gameplay.</p>
-          <p>All custom assets are subject to admin approval. We reserve the right to reject anything inappropriate, offensive, or disruptive.</p>
+          <h2><span class="num">05</span> Community &amp; Feedback</h2>
+          <p>If you think something we're selling crosses a line, or you've got ideas for what we should offer, we want to hear it. Monetization exists to keep the server running, not to alienate the community that plays on it.</p>
+          <p>We also run events and giveaways from time to time where cosmetics or slots are handed out for free.</p>
         </div>
 
         <div class="policy-section">
-          <h2><span class="num">06</span> Payments &amp; Refunds</h2>
-          <p>We accept payments through standard secure platforms including PayPal and card payments. All transactions are handled through trusted third-party processors.</p>
-          <p>Refunds are handled on a case-by-case basis. If you have an issue with a purchase, reach out to us directly. We're reasonable people and we'll work it out.</p>
+          <h2><span class="num">06</span> Enforcement</h2>
+          <p>Attempting to exploit, duplicate, resell, or abuse any purchased item or feature will result in an immediate and permanent ban. This includes using third-party tools or services. There are no warnings for this.</p>
         </div>
 
         <div class="policy-section">
-          <h2><span class="num">07</span> Community Input</h2>
-          <p>We take feedback seriously. If the community has concerns about something we're selling or how we're selling it, we want to hear about it. Monetization should support the server, not undermine it.</p>
-          <p>We also run events and giveaways where cosmetics or priority slots are given out for free. Supporting the server financially is appreciated, but it's never required to have a good time.</p>
+          <h2><span class="num">07</span> Contact</h2>
+          <p>Questions, refund requests, or anything else related to purchases can be directed to <a href="mailto:contact@reforgedz.net" class="policy-link">contact@reforgedz.net</a> or through our <a href="https://discord.gg/reforgedz" target="_blank" rel="noopener noreferrer" class="policy-link">Discord</a>. Discord will always be faster.</p>
         </div>
 
-        <div class="policy-section">
-          <h2><span class="num">08</span> Bohemia Interactive Compliance</h2>
-          <p>This policy is written in line with Bohemia Interactive's official server monetization guidelines for Arma Reforger. If there's ever a conflict between this document and Bohemia's rules, their rules win. We stay current with their policies and will update this page if anything changes on their end.</p>
-        </div>
+      </div>
 
-        <div class="policy-section">
-          <h2><span class="num">09</span> Enforcement</h2>
-          <p>Attempting to resell, exploit, or abuse any monetized feature will result in an immediate ban. This includes using third-party tools to duplicate or transfer purchased items. We don't do warnings for this kind of thing.</p>
-        </div>
-
-        <div class="policy-section">
-          <h2><span class="num">10</span> Contact</h2>
-          <p>Got a question about a purchase, want to request a refund, or just need to talk to someone? Hit us up at <a href="mailto:contact@reforgedz.net" class="policy-link">contact@reforgedz.net</a> or find us on <a href="https://discord.gg/reforgedz" target="_blank" rel="noopener noreferrer" class="policy-link">Discord</a>. Discord is faster.</p>
-        </div>
-
+      <!-- Legal / Data Protection -->
+      <div class="legal-section">
+        <h2>Data Protection &amp; Legal</h2>
+        <p>When you make a purchase through ReforgedZ, we may collect and store limited personal information necessary to process your transaction and deliver the purchased content. This may include your username, email address, transaction identifiers, and purchase history.</p>
+        <p>We do not sell, share, or distribute your personal data to third parties for marketing purposes. Payment processing is handled entirely by third-party providers (such as PayPal or Stripe) and we do not have access to or store your full payment card details.</p>
+        <p>Your data is stored securely and retained only for as long as necessary to provide the services you've purchased and to comply with any applicable legal obligations. You may request deletion of your personal data at any time by contacting us.</p>
+        <p>By making a purchase, you acknowledge and agree to the terms outlined on this page. We reserve the right to update this policy at any time. Continued use of paid services after changes constitutes acceptance of the revised terms.</p>
+        <p>This policy is governed by and construed in accordance with applicable data protection regulations. For any data-related requests or concerns, contact us at <a href="mailto:contact@reforgedz.net" class="policy-link">contact@reforgedz.net</a>.</p>
       </div>
 
       <div class="policy-footer">
