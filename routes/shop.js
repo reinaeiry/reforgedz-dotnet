@@ -116,6 +116,36 @@ router.get('/api/shop/orders', requireAuth, (req, res) => {
   res.json(orders);
 });
 
+// Cancel a subscription
+router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
+  const { orderId } = req.body;
+  if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
+
+  const order = db.prepare(`
+    SELECT o.*, p.type FROM orders o JOIN products p ON o.product_id = p.id
+    WHERE o.id = ? AND o.steam_id = ? AND o.status = 'completed' AND o.stripe_subscription_id IS NOT NULL
+  `).get(orderId, req.user.steam_id);
+
+  if (!order) return res.status(404).json({ error: 'Active subscription not found' });
+
+  // Determine if this was a test mode subscription by checking if the sub ID starts with sub_
+  // We cancel at period end so user keeps access until billing cycle ends
+  const stripe = getStripe(false);
+  const stripeTest = getStripe(true);
+
+  // Try live first, then test
+  stripe.subscriptions.update(order.stripe_subscription_id, { cancel_at_period_end: true })
+    .catch(() => stripeTest.subscriptions.update(order.stripe_subscription_id, { cancel_at_period_end: true }))
+    .then(() => {
+      db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
+      res.json({ ok: true });
+    })
+    .catch(err => {
+      console.error('Cancel subscription error:', err.message);
+      res.status(500).json({ error: 'Failed to cancel subscription' });
+    });
+});
+
 // ============================================================
 //  Admin endpoints
 // ============================================================

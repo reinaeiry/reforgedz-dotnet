@@ -50,6 +50,7 @@
       align-items: center;
       gap: 12px;
       margin-left: auto;
+      position: relative;
     }
 
     .nav-avatar {
@@ -58,13 +59,6 @@
       border-radius: 6px;
       object-fit: cover;
       border: 1px solid var(--border);
-    }
-
-    .nav-persona {
-      font-size: 0.85rem;
-      font-weight: 500;
-      color: var(--text);
-      white-space: nowrap;
     }
 
     .nav-auth .steam-btn {
@@ -89,14 +83,210 @@
       border-color: rgba(255,255,255,0.2);
     }
 
-    .nav-auth .logout-link {
-      font-size: 0.75rem;
-      color: var(--text-ghost);
-      text-decoration: none;
-      transition: color 0.2s;
+    /* ---- Account dropdown ---- */
+    .account-toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 12px 5px 5px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 0.2s;
+      position: relative;
     }
 
-    .nav-auth .logout-link:hover { color: var(--text); }
+    .account-toggle:hover { border-color: var(--border-hover); }
+
+    .account-toggle .persona {
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .account-toggle .chevron {
+      width: 10px;
+      height: 10px;
+      border-right: 1.5px solid var(--text-ghost);
+      border-bottom: 1.5px solid var(--text-ghost);
+      transform: rotate(45deg);
+      margin-top: -3px;
+      transition: transform 0.2s;
+    }
+
+    .account-toggle.open .chevron { transform: rotate(-135deg); margin-top: 3px; }
+
+    .account-dropdown {
+      display: none;
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      width: 320px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      z-index: 200;
+      animation: dropIn 0.15s ease;
+    }
+
+    .account-dropdown.open { display: block; }
+
+    @keyframes dropIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .dropdown-header {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .dropdown-header img {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .dropdown-header-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .dropdown-header-name {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .dropdown-header-role {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-ghost);
+    }
+
+    .dropdown-header-role.admin { color: var(--accent); }
+
+    .dropdown-section-label {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-ghost);
+      padding: 12px 18px 6px;
+    }
+
+    .dropdown-orders {
+      max-height: 240px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.08) transparent;
+    }
+
+    .dropdown-order {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      transition: background 0.15s;
+    }
+
+    .dropdown-order:last-child { border-bottom: none; }
+    .dropdown-order:hover { background: rgba(255,255,255,0.02); }
+
+    .dropdown-order-info {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .dropdown-order-title {
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .dropdown-order-meta {
+      font-size: 0.7rem;
+      color: var(--text-ghost);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .dropdown-order-meta .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .status-dot.completed { background: #4ade80; }
+    .status-dot.pending { background: #fb923c; }
+    .status-dot.cancelled { background: var(--text-ghost); }
+
+    .cancel-sub-btn {
+      padding: 4px 10px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--accent);
+      border: 1px solid rgba(204,31,31,0.2);
+      background: none;
+      border-radius: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      margin-left: 10px;
+    }
+
+    .cancel-sub-btn:hover {
+      background: var(--accent-dim);
+      border-color: rgba(204,31,31,0.4);
+    }
+
+    .dropdown-empty {
+      padding: 20px 18px;
+      text-align: center;
+      font-size: 0.78rem;
+      color: var(--text-ghost);
+    }
+
+    .dropdown-footer {
+      padding: 10px 18px;
+      border-top: 1px solid var(--border);
+    }
+
+    .dropdown-footer a {
+      display: block;
+      text-align: center;
+      font-size: 0.78rem;
+      color: var(--text-ghost);
+      text-decoration: none;
+      padding: 6px;
+      border-radius: 6px;
+      transition: color 0.2s, background 0.15s;
+    }
+
+    .dropdown-footer a:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.04);
+    }
 
     /* ---- Test mode banner ---- */
     .test-banner {
@@ -105,13 +295,13 @@
       justify-content: center;
       gap: 16px;
       padding: 10px 20px;
-      background: rgba(251, 191, 36, 0.1);
-      border: 1px solid rgba(251, 191, 36, 0.25);
+      background: rgba(251, 146, 60, 0.08);
+      border: 1px solid rgba(251, 146, 60, 0.2);
       border-radius: 6px;
       margin-bottom: 32px;
       font-size: 0.82rem;
       font-weight: 600;
-      color: #fbbf24;
+      color: #fb923c;
       letter-spacing: 0.5px;
     }
 
@@ -124,7 +314,7 @@
     }
 
     .test-banner input[type="checkbox"] {
-      accent-color: #fbbf24;
+      accent-color: #fb923c;
       width: 14px;
       height: 14px;
     }
@@ -156,7 +346,7 @@
       display: none;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-top: 2px solid #fbbf24;
+      border-top: 2px solid var(--accent);
       border-radius: 8px;
       padding: 32px;
       margin-bottom: 40px;
@@ -168,7 +358,7 @@
       font-weight: 600;
       letter-spacing: 2px;
       text-transform: uppercase;
-      color: #fbbf24;
+      color: var(--accent);
       margin-bottom: 20px;
     }
 
@@ -208,7 +398,7 @@
     .admin-field select:focus,
     .admin-field textarea:focus {
       outline: none;
-      border-color: rgba(251, 191, 36, 0.4);
+      border-color: rgba(204, 31, 31, 0.4);
     }
 
     .admin-field textarea { resize: vertical; min-height: 60px; }
@@ -227,8 +417,8 @@
 
     .admin-submit {
       padding: 10px 24px;
-      background: #fbbf24;
-      color: #000;
+      background: var(--accent);
+      color: #fff;
       font-weight: 700;
       font-size: 0.85rem;
       border: none;
@@ -237,7 +427,7 @@
       transition: background 0.2s;
     }
 
-    .admin-submit:hover { background: #f59e0b; }
+    .admin-submit:hover { background: var(--accent-hover); }
 
     .admin-cancel {
       padding: 10px 18px;
@@ -395,8 +585,8 @@
       transition: all 0.15s;
     }
 
-    .card-edit-btn { color: #fbbf24; border-color: rgba(251,191,36,0.2); }
-    .card-edit-btn:hover { background: rgba(251,191,36,0.1); border-color: rgba(251,191,36,0.4); }
+    .card-edit-btn { color: var(--accent); border-color: rgba(204,31,31,0.2); }
+    .card-edit-btn:hover { background: var(--accent-dim); border-color: rgba(204,31,31,0.4); }
 
     .card-toggle-btn { color: var(--text-ghost); }
     .card-toggle-btn:hover { color: var(--text); border-color: var(--border-hover); }
@@ -406,84 +596,13 @@
       border-style: dashed;
     }
 
-    /* ---- Purchase history ---- */
-    .shop-history {
-      display: none;
-    }
-
-    .shop-history h2 {
-      font-family: var(--display);
-      font-size: 1.1rem;
-      font-weight: 600;
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      color: #fff;
-      margin-bottom: 16px;
-    }
-
-    .order-list {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
-      background: var(--surface);
-    }
-
-    .order-row {
-      display: grid;
-      grid-template-columns: 2fr 1fr 1fr 1fr;
-      gap: 12px;
-      align-items: center;
-      padding: 14px 20px;
-      font-size: 0.82rem;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .order-row:last-child { border-bottom: none; }
-
-    .order-row-header {
-      font-size: 0.65rem;
-      font-weight: 700;
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      color: var(--text-ghost);
-      background: var(--bg-black);
-    }
-
-    .order-title { color: var(--text); font-weight: 500; }
-    .order-amount { color: var(--text-dim); }
-    .order-date { color: var(--text-ghost); }
-
-    .order-status {
-      font-size: 0.7rem;
-      font-weight: 700;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      padding: 3px 10px;
-      border-radius: 20px;
-      display: inline-block;
-      text-align: center;
-    }
-
-    .order-status.completed { color: #4ade80; background: rgba(74,222,128,0.1); }
-    .order-status.pending { color: #fbbf24; background: rgba(251,191,36,0.1); }
-    .order-status.cancelled { color: var(--text-ghost); background: rgba(255,255,255,0.04); }
-    .order-status.refunded { color: #fb923c; background: rgba(251,146,60,0.1); }
-
-    .order-empty {
-      padding: 40px 20px;
-      text-align: center;
-      color: var(--text-ghost);
-      font-size: 0.85rem;
-    }
-
     /* ---- Responsive ---- */
     @media (max-width: 768px) {
       .shop-page { padding-top: 110px; }
       .admin-form { grid-template-columns: 1fr; }
       .shop-grid { grid-template-columns: 1fr; }
-      .order-row { grid-template-columns: 1fr 1fr; gap: 6px; padding: 12px 16px; }
-      .order-row-header { display: none; }
-      .nav-persona { display: none; }
+      .account-toggle .persona { display: none; }
+      .account-dropdown { width: 280px; right: -8px; }
     }
   </style>
 </head>
@@ -564,12 +683,6 @@
       <!-- Product grid -->
       <div class="shop-grid" id="productGrid">
         <div class="shop-empty">Loading...</div>
-      </div>
-
-      <!-- Purchase history -->
-      <div class="shop-history" id="purchaseHistory">
-        <h2>Your Purchases</h2>
-        <div class="order-list" id="orderList"></div>
       </div>
 
     </div>

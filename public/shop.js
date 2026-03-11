@@ -2,10 +2,10 @@
 let currentUser = null;
 let isTestMode = false;
 let editingProductId = null;
+let dropdownOpen = false;
 
 // ---- DOM refs ----
 const navAuth = document.getElementById('navAuth');
-const steamLoginBtn = document.getElementById('steamLoginBtn');
 const testBanner = document.getElementById('testBanner');
 const testModeToggle = document.getElementById('testModeToggle');
 const alertSuccess = document.getElementById('alertSuccess');
@@ -13,8 +13,6 @@ const alertCancelled = document.getElementById('alertCancelled');
 const adminPanel = document.getElementById('adminPanel');
 const productForm = document.getElementById('productForm');
 const productGrid = document.getElementById('productGrid');
-const purchaseHistory = document.getElementById('purchaseHistory');
-const orderList = document.getElementById('orderList');
 const formTitle = document.getElementById('formTitle');
 const formType = document.getElementById('formType');
 const formDesc = document.getElementById('formDesc');
@@ -36,6 +34,12 @@ function formatDate(unix) {
   if (!unix) return '—';
   const d = new Date(unix * 1000);
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 
 async function api(url, opts = {}) {
@@ -64,21 +68,47 @@ async function loadUser() {
 function renderAuth() {
   if (currentUser) {
     navAuth.innerHTML = `
-      <img src="${currentUser.avatar_url || ''}" alt="" class="nav-avatar" onerror="this.style.display='none'">
-      <span class="nav-persona">${escHtml(currentUser.persona)}</span>
-      <a href="/auth/logout" class="logout-link">Sign out</a>
+      <button class="account-toggle" id="accountToggle">
+        <img src="${currentUser.avatar_url || ''}" alt="" class="nav-avatar" onerror="this.style.display='none'">
+        <span class="persona">${escHtml(currentUser.persona)}</span>
+        <span class="chevron"></span>
+      </button>
+      <div class="account-dropdown" id="accountDropdown">
+        <div class="dropdown-header">
+          <img src="${currentUser.avatar_url || ''}" alt="" onerror="this.style.display='none'">
+          <div class="dropdown-header-info">
+            <div class="dropdown-header-name">${escHtml(currentUser.persona)}</div>
+            <div class="dropdown-header-role ${currentUser.role === 'admin' ? 'admin' : ''}">${currentUser.role === 'admin' ? 'Admin' : 'Member'}</div>
+          </div>
+        </div>
+        <div class="dropdown-section-label">Purchase History</div>
+        <div class="dropdown-orders" id="dropdownOrders">
+          <div class="dropdown-empty">Loading...</div>
+        </div>
+        <div class="dropdown-footer">
+          <a href="/auth/logout">Sign out</a>
+        </div>
+      </div>
     `;
+
+    // Bind dropdown toggle
+    const toggle = document.getElementById('accountToggle');
+    const dropdown = document.getElementById('accountDropdown');
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdownOpen = !dropdownOpen;
+      toggle.classList.toggle('open', dropdownOpen);
+      dropdown.classList.toggle('open', dropdownOpen);
+    });
 
     // Admin UI
     if (currentUser.role === 'admin') {
       adminPanel.style.display = 'block';
       testBanner.style.display = 'flex';
-      // Restore test mode from session
       isTestMode = sessionStorage.getItem('rz_test_mode') === '1';
       testModeToggle.checked = isTestMode;
     }
 
-    purchaseHistory.style.display = 'block';
     loadOrders();
   } else {
     navAuth.innerHTML = `
@@ -90,11 +120,15 @@ function renderAuth() {
   }
 }
 
-function escHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
+// Close dropdown on outside click
+document.addEventListener('click', () => {
+  if (!dropdownOpen) return;
+  dropdownOpen = false;
+  const toggle = document.getElementById('accountToggle');
+  const dropdown = document.getElementById('accountDropdown');
+  if (toggle) toggle.classList.remove('open');
+  if (dropdown) dropdown.classList.remove('open');
+});
 
 // ---- Test mode ----
 testModeToggle.addEventListener('change', () => {
@@ -213,7 +247,6 @@ productForm.addEventListener('submit', async (e) => {
 });
 
 function editProduct(id) {
-  // Find the product data by fetching again (simple approach)
   api(`/api/shop/admin/products`).then(products => {
     const p = products.find(x => x.id === id);
     if (!p) return;
@@ -257,43 +290,67 @@ async function toggleProduct(id, active) {
   }
 }
 
-// ---- Orders ----
+// ---- Orders (dropdown) ----
 async function loadOrders() {
   if (!currentUser) return;
 
+  const container = document.getElementById('dropdownOrders');
+  if (!container) return;
+
   try {
     const orders = await api('/api/shop/orders');
-    renderOrders(orders);
+    renderOrders(orders, container);
   } catch (e) {
-    orderList.innerHTML = '<div class="order-empty">Failed to load orders.</div>';
+    container.innerHTML = '<div class="dropdown-empty">Failed to load orders.</div>';
   }
 }
 
-function renderOrders(orders) {
+function renderOrders(orders, container) {
   if (!orders || orders.length === 0) {
-    orderList.innerHTML = '<div class="order-empty">No purchases yet.</div>';
+    container.innerHTML = '<div class="dropdown-empty">No purchases yet.</div>';
     return;
   }
 
-  const header = `
-    <div class="order-row order-row-header">
-      <span>Item</span>
-      <span>Amount</span>
-      <span>Date</span>
-      <span>Status</span>
-    </div>
-  `;
+  container.innerHTML = orders.map(o => {
+    const isActiveSub = o.type === 'subscription' && o.status === 'completed' && o.stripe_subscription_id;
+    const cancelBtn = isActiveSub
+      ? `<button class="cancel-sub-btn" onclick="cancelSubscription(${o.id}, event)">Cancel</button>`
+      : '';
 
-  const rows = orders.map(o => `
-    <div class="order-row">
-      <span class="order-title">${escHtml(o.title)}</span>
-      <span class="order-amount">${formatPrice(o.amount_cents, o.currency || 'usd', o.type)}</span>
-      <span class="order-date">${formatDate(o.created_at)}</span>
-      <span><span class="order-status ${o.status}">${o.status}</span></span>
-    </div>
-  `).join('');
+    return `
+      <div class="dropdown-order">
+        <div class="dropdown-order-info">
+          <div class="dropdown-order-title">${escHtml(o.title)}</div>
+          <div class="dropdown-order-meta">
+            <span class="status-dot ${o.status}"></span>
+            ${o.status} &middot; ${formatDate(o.created_at)} &middot; ${formatPrice(o.amount_cents, o.currency || 'usd', o.type)}
+          </div>
+        </div>
+        ${cancelBtn}
+      </div>
+    `;
+  }).join('');
+}
 
-  orderList.innerHTML = header + rows;
+// ---- Cancel subscription ----
+async function cancelSubscription(orderId, e) {
+  if (e) e.stopPropagation();
+
+  if (!confirm('Cancel this subscription? It will remain active until the end of the current billing period.')) return;
+
+  const btn = e && e.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Cancelling...'; }
+
+  try {
+    await api('/api/shop/cancel-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ orderId })
+    });
+    loadOrders();
+  } catch (err) {
+    alert(err.message || 'Failed to cancel subscription');
+    if (btn) { btn.disabled = false; btn.textContent = 'Cancel'; }
+  }
 }
 
 // ---- URL alerts ----
@@ -320,5 +377,6 @@ async function init() {
 window.buyProduct = buyProduct;
 window.editProduct = editProduct;
 window.toggleProduct = toggleProduct;
+window.cancelSubscription = cancelSubscription;
 
 init();
