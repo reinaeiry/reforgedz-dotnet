@@ -131,12 +131,13 @@ function renderAuth() {
   }
 }
 
-// Close dropdown on outside click
-document.addEventListener('click', () => {
+// Close dropdown on outside click (but not when clicking inside dropdown)
+document.addEventListener('click', (e) => {
   if (!dropdownOpen) return;
+  const dropdown = document.getElementById('accountDropdown');
+  if (dropdown && dropdown.contains(e.target)) return;
   dropdownOpen = false;
   const toggle = document.getElementById('accountToggle');
-  const dropdown = document.getElementById('accountDropdown');
   if (toggle) toggle.classList.remove('open');
   if (dropdown) dropdown.classList.remove('open');
 });
@@ -185,6 +186,10 @@ function renderProducts(products) {
     const inactiveClass = (!p.active && isAdmin) ? ' inactive' : '';
     const canBuy = currentUser && p.active;
 
+    const buyBtnHtml = currentUser
+      ? `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="buyProduct(${p.id})">Purchase</button>`
+      : `<a href="/auth/steam" class="shop-buy-btn" style="text-decoration:none;text-align:center">Sign in to buy</a>`;
+
     return `
       <div class="shop-card${inactiveClass}" data-id="${p.id}">
         ${imgHtml}
@@ -194,9 +199,7 @@ function renderProducts(products) {
           <p>${escHtml(p.description || '')}</p>
           <div class="shop-card-footer">
             <span class="shop-card-price">${formatPrice(p.price_cents, p.currency || 'usd', p.type)}</span>
-            <button class="shop-buy-btn" ${canBuy ? '' : 'disabled'} onclick="buyProduct(${p.id})">
-              ${currentUser ? 'Purchase' : 'Sign in to buy'}
-            </button>
+            ${buyBtnHtml}
           </div>
           ${adminHtml}
         </div>
@@ -293,12 +296,20 @@ async function saveBiUidFromDropdown() {
 }
 
 // ---- Buy flow ----
+let userOrders = [];
+
 async function buyProduct(productId) {
   if (!currentUser) return;
 
   if (!currentUser.bi_uid) {
     showBiUidModal(productId);
     return;
+  }
+
+  // Warn if already purchased this one-time item
+  const alreadyOwned = userOrders.find(o => o.product_id === productId && o.status === 'completed' && o.type === 'one_time');
+  if (alreadyOwned) {
+    if (!confirm('You already own this item. Purchase again?')) return;
   }
 
   proceedCheckout(productId);
@@ -419,6 +430,7 @@ async function loadOrders() {
 
   try {
     const orders = await api('/api/shop/orders');
+    userOrders = orders || [];
     renderOrders(orders, container);
   } catch (e) {
     container.innerHTML = '<div class="dropdown-empty">Failed to load orders.</div>';

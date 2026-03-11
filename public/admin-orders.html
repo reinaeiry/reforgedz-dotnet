@@ -298,7 +298,10 @@
       <div id="ordersContent" style="display:none">
         <div class="orders-header">
           <h1>All Orders</h1>
-          <a href="/shop" class="back-link">Back to Shop</a>
+          <div style="display:flex;gap:12px;align-items:center">
+            <button onclick="exportCsv()" style="padding:6px 16px;font-size:0.78rem;font-weight:600;color:var(--text-ghost);background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.color='var(--text)';this.style.borderColor='var(--border-hover)'" onmouseout="this.style.color='var(--text-ghost)';this.style.borderColor='var(--border)'">Export CSV</button>
+            <a href="/shop" class="back-link">Back to Shop</a>
+          </div>
         </div>
 
         <div class="orders-stats" id="orderStats"></div>
@@ -495,6 +498,28 @@
       } catch (e) {
         alert('Failed to update BI UID');
       }
+    }
+
+    function exportCsv() {
+      if (allOrders.length === 0) return alert('No orders to export.');
+      const headers = ['Date', 'Player', 'Steam ID', 'BI UID', 'Product', 'Type', 'Amount', 'Currency', 'Status'];
+      const rows = allOrders.map(o => [
+        o.created_at ? new Date(o.created_at * 1000).toISOString() : '',
+        `"${(o.persona || '').replace(/"/g, '""')}"`,
+        o.steam_id,
+        o.bi_uid || '',
+        `"${(o.title || '').replace(/"/g, '""')}"`,
+        o.type,
+        (o.amount_cents / 100).toFixed(2),
+        o.currency || 'usd',
+        o.status
+      ]);
+      const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `reforgedz-orders-${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
     }
 
     init();

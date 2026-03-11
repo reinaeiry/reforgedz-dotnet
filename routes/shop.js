@@ -157,7 +157,7 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
 // Get current user's orders
 router.get('/api/shop/orders', requireAuth, (req, res) => {
   const orders = db.prepare(`
-    SELECT o.id, o.status, o.amount_cents, o.created_at, o.completed_at,
+    SELECT o.id, o.product_id, o.status, o.amount_cents, o.created_at, o.completed_at,
            o.stripe_subscription_id, p.title, p.type, p.currency
     FROM orders o JOIN products p ON o.product_id = p.id
     WHERE o.steam_id = ? ORDER BY o.created_at DESC
