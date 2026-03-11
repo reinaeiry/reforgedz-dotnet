@@ -1,10 +1,94 @@
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const session = require('express-session');
+const SQLiteStore = require('connect-sqlite3')(session);
+const passport = require('passport');
+const SteamStrategy = require('passport-steam').Strategy;
+const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const ADMIN_IDS = (process.env.ADMIN_STEAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 
+// ---- Passport Steam setup ----
+passport.serializeUser((user, done) => done(null, user.steam_id));
+passport.deserializeUser((steamId, done) => {
+  const user = db.prepare('SELECT * FROM users WHERE steam_id = ?').get(steamId);
+  done(null, user || null);
+});
+
+passport.use(new SteamStrategy({
+  returnURL: BASE_URL + '/auth/steam/callback',
+  realm: BASE_URL + '/',
+  apiKey: process.env.STEAM_API_KEY
+}, (identifier, profile, done) => {
+  const steamId = profile.id;
+  const persona = profile.displayName;
+  const avatar = profile.photos && profile.photos[2] ? profile.photos[2].value : (profile.photos && profile.photos[0] ? profile.photos[0].value : '');
+  const role = ADMIN_IDS.includes(steamId) ? 'admin' : 'user';
+
+  db.prepare(`
+    INSERT INTO users (steam_id, persona, avatar_url, role) VALUES (?, ?, ?, ?)
+    ON CONFLICT(steam_id) DO UPDATE SET persona = excluded.persona, avatar_url = excluded.avatar_url, role = ?
+  `).run(steamId, persona, avatar, role, role);
+
+  const user = db.prepare('SELECT * FROM users WHERE steam_id = ?').get(steamId);
+  done(null, user);
+}));
+
+// ---- Stripe webhook (must be before express.json) ----
+const shopRoutes = require('./routes/shop');
+app.post('/api/shop/webhook', express.raw({ type: 'application/json' }), shopRoutes.webhookHandler);
+
+// ---- Middleware ----
+app.use(express.json());
+app.use(session({
+  store: new SQLiteStore({ db: 'sessions.db', dir: __dirname }),
+  secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production'
+  }
+}));
+app.use(passport.initialize());
+app.use(passport.session());
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/radio', express.static(path.join(__dirname, 'radio')));
+
+// ---- Auth routes ----
+app.get('/auth/steam', passport.authenticate('steam'));
+app.get('/auth/steam/callback',
+  passport.authenticate('steam', { failureRedirect: '/shop' }),
+  (req, res) => res.redirect('/shop')
+);
+app.get('/auth/logout', (req, res) => {
+  req.logout(() => {
+    req.session.destroy(() => {
+      res.redirect('/shop');
+    });
+  });
+});
+app.get('/api/auth/me', (req, res) => {
+  if (!req.isAuthenticated()) return res.json(null);
+  res.json({
+    steam_id: req.user.steam_id,
+    persona: req.user.persona,
+    avatar_url: req.user.avatar_url,
+    role: req.user.role
+  });
+});
+
+// ---- Shop API routes ----
+app.use(shopRoutes.router);
+
+// ---- Radio ----
 let trackCache = null;
 
 function escHtml(s) {
@@ -44,7 +128,6 @@ function readMp3Meta(filePath) {
       }
     }
 
-    // Read MPEG frame header for duration estimate
     const frameBuf = Buffer.alloc(16);
     fs.readSync(fd, frameBuf, 0, 16, id3Size);
     fs.closeSync(fd);
@@ -84,15 +167,15 @@ function loadAllTracks() {
             .replace(/\s+/g, ' ')
             .trim();
           const mp3Meta = /\.mp3$/i.test(f) ? readMp3Meta(path.join(folderPath, f)) : { artist: '', duration: 0 };
-          const filePath = `/radio/${encodeURIComponent(folder.name)}/${encodeURIComponent(f)}`;
+          const fp = `/radio/${encodeURIComponent(folder.name)}/${encodeURIComponent(f)}`;
           const track = {
             title: name,
             artist: mp3Meta.artist || 'Modest',
             duration: mp3Meta.duration,
-            file: filePath,
+            file: fp,
             category: folder.name
           };
-          trackMap[filePath] = track;
+          trackMap[fp] = track;
           return track;
         });
 
@@ -107,7 +190,6 @@ function loadAllTracks() {
 
 trackCache = loadAllTracks();
 
-// ---- Listen stats persistence ----
 const statsFile = path.join(__dirname, 'radio-stats.json');
 let listenStats = { plays: {}, totalSeconds: 0 };
 
@@ -126,10 +208,6 @@ function saveStats() {
     try { fs.writeFileSync(statsFile, JSON.stringify(listenStats)); } catch (e) {}
   }, 2000);
 }
-
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/radio', express.static(path.join(__dirname, 'radio')));
 
 app.get('/api/radio/tracks', (req, res) => {
   if (!trackCache) trackCache = loadAllTracks();
@@ -156,12 +234,17 @@ app.post('/api/radio/listened', (req, res) => {
   res.sendStatus(200);
 });
 
+// ---- Page routes ----
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.get('/monetization', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'monetization.html'));
+});
+
+app.get('/shop', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'shop.html'));
 });
 
 app.get('/radio', (req, res) => {
@@ -182,7 +265,6 @@ app.get('/radio', (req, res) => {
     const title = `${escHtml(track.title)} - ${escHtml(track.artist)}`;
     const desc = `${escHtml(track.category)}${dur ? ' \u00b7 ' + dur : ''} | Modest AI Radio on ReforgedZ.net`;
 
-    // Strip existing OG tags so Discord doesn't read stale ones
     html = html.replace(/\s*<!-- Open Graph \/ Discord embed -->[\s\S]*?<meta name="twitter:card"[^>]*>/m, `
   <!-- Open Graph / Discord embed -->
   <meta property="og:type" content="music.song">
@@ -201,7 +283,6 @@ app.get('/radio', (req, res) => {
   <meta name="twitter:player:stream" content="${audioUrl}">
   <meta name="twitter:player:stream:content_type" content="audio/mpeg">`);
 
-    // Update page title
     html = html.replace(/<title>[^<]*<\/title>/, `<title>${escHtml(track.title)} - ${escHtml(track.artist)} | Modest AI Radio</title>`);
   }
 
