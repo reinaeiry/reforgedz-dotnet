@@ -25,7 +25,6 @@ function sendDiscordNotification({ eventType, steamName, steamId, productTitle, 
   };
 
   const titles = {
-    'checkout_started': 'Checkout Started',
     'payment_completed': 'Payment Completed',
     'payment_failed': 'Payment Failed',
     'subscription_started': 'Subscription Started',
@@ -142,17 +141,6 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
 
   stripe.checkout.sessions.create(sessionParams).then(session => {
     db.prepare('UPDATE orders SET stripe_session_id = ? WHERE id = ?').run(session.id, orderId);
-
-    sendDiscordNotification({
-      eventType: 'checkout_started',
-      steamName: req.user.persona,
-      steamId: req.user.steam_id,
-      productTitle: product.title,
-      amountCents: product.price_cents,
-      currency: product.currency,
-      status: 'pending'
-    });
-
     res.json({ url: session.url });
   }).catch(err => {
     console.error('Stripe checkout error:', err.message);
@@ -232,14 +220,12 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
   if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
 
   const order = db.prepare(`
-    SELECT o.*, p.type FROM orders o JOIN products p ON o.product_id = p.id
+    SELECT o.*, p.type, p.title as product_title, p.currency FROM orders o JOIN products p ON o.product_id = p.id
     WHERE o.id = ? AND o.steam_id = ? AND o.status = 'completed' AND o.stripe_subscription_id IS NOT NULL
   `).get(orderId, req.user.steam_id);
 
   if (!order) return res.status(404).json({ error: 'Active subscription not found' });
 
-  // Determine if this was a test mode subscription by checking if the sub ID starts with sub_
-  // We cancel at period end so user keeps access until billing cycle ends
   const stripe = getStripe(false);
   const stripeTest = getStripe(true);
 
@@ -248,6 +234,17 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
     .catch(() => stripeTest.subscriptions.update(order.stripe_subscription_id, { cancel_at_period_end: true }))
     .then(() => {
       db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
+
+      sendDiscordNotification({
+        eventType: 'subscription_cancelled',
+        steamName: req.user.persona,
+        steamId: req.user.steam_id,
+        productTitle: order.product_title,
+        amountCents: order.amount_cents,
+        currency: order.currency,
+        status: 'cancelled'
+      });
+
       res.json({ ok: true });
     })
     .catch(err => {
