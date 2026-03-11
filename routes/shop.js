@@ -11,6 +11,51 @@ function getStripe(testMode) {
   return new Stripe(key);
 }
 
+// ---- Discord webhook ----
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+
+function sendDiscordNotification({ eventType, steamName, steamId, productTitle, amountCents, currency, status }) {
+  if (!DISCORD_WEBHOOK_URL) return;
+
+  const colors = {
+    pending: 0xfbbf24,   // yellow
+    completed: 0x4ade80, // green
+    cancelled: 0xf87171, // red
+    failed: 0xf87171     // red
+  };
+
+  const titles = {
+    'checkout_started': 'Checkout Started',
+    'payment_completed': 'Payment Completed',
+    'payment_failed': 'Payment Failed',
+    'subscription_started': 'Subscription Started',
+    'subscription_renewed': 'Subscription Renewed',
+    'subscription_cancelled': 'Subscription Cancelled'
+  };
+
+  const amount = amountCents ? `$${(amountCents / 100).toFixed(2)} ${(currency || 'usd').toUpperCase()}` : 'N/A';
+
+  const embed = {
+    title: titles[eventType] || eventType,
+    color: colors[status] || 0x888888,
+    fields: [
+      { name: 'Player', value: steamName || 'Unknown', inline: true },
+      { name: 'Steam ID', value: steamId || 'Unknown', inline: true },
+      { name: 'Product', value: productTitle || 'Unknown', inline: false },
+      { name: 'Amount', value: amount, inline: true },
+      { name: 'Status', value: status || 'unknown', inline: true }
+    ],
+    timestamp: new Date().toISOString(),
+    footer: { text: 'ReforgedZ Shop' }
+  };
+
+  fetch(DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ embeds: [embed] })
+  }).catch(err => console.error('Discord webhook error:', err.message));
+}
+
 // ---- Middleware helpers ----
 function requireAuth(req, res, next) {
   if (!req.isAuthenticated()) return res.status(401).json({ error: 'Sign in required' });
@@ -83,7 +128,7 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
       product_id: String(product.id),
       test_mode: useTest ? '1' : '0'
     },
-    success_url: BASE_URL + '/shop?success=1',
+    success_url: BASE_URL + '/shop?success=1&session_id={CHECKOUT_SESSION_ID}',
     cancel_url: BASE_URL + '/shop?cancelled=1',
   };
 
@@ -97,6 +142,17 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
 
   stripe.checkout.sessions.create(sessionParams).then(session => {
     db.prepare('UPDATE orders SET stripe_session_id = ? WHERE id = ?').run(session.id, orderId);
+
+    sendDiscordNotification({
+      eventType: 'checkout_started',
+      steamName: req.user.persona,
+      steamId: req.user.steam_id,
+      productTitle: product.title,
+      amountCents: product.price_cents,
+      currency: product.currency,
+      status: 'pending'
+    });
+
     res.json({ url: session.url });
   }).catch(err => {
     console.error('Stripe checkout error:', err.message);
@@ -114,6 +170,60 @@ router.get('/api/shop/orders', requireAuth, (req, res) => {
     WHERE o.steam_id = ? ORDER BY o.created_at DESC
   `).all(req.user.steam_id);
   res.json(orders);
+});
+
+// Verify a checkout session (fallback when webhooks don't arrive)
+router.post('/api/shop/verify-session', requireAuth, (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+
+  const order = db.prepare(`
+    SELECT * FROM orders WHERE stripe_session_id = ? AND steam_id = ? AND status = 'pending'
+  `).get(sessionId, req.user.steam_id);
+
+  if (!order) return res.json({ ok: true, status: 'already_processed' });
+
+  // Check if this was a test mode order
+  const useTest = order.amount_cents === 0 || false;
+
+  // Try live Stripe first, then test
+  const tryVerify = (stripe) => stripe.checkout.sessions.retrieve(sessionId);
+
+  tryVerify(getStripe(false))
+    .catch(() => tryVerify(getStripe(true)))
+    .then(session => {
+      if (session.payment_status === 'paid') {
+        db.prepare(`
+          UPDATE orders SET status = 'completed', completed_at = unixepoch(),
+            stripe_subscription_id = ?
+          WHERE id = ?
+        `).run(session.subscription || null, order.id);
+
+        const details = db.prepare(`
+          SELECT o.*, u.persona, p.title as product_title, p.type, p.currency
+          FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
+          WHERE o.id = ?
+        `).get(order.id);
+        if (details) {
+          sendDiscordNotification({
+            eventType: session.subscription ? 'subscription_started' : 'payment_completed',
+            steamName: details.persona,
+            steamId: details.steam_id,
+            productTitle: details.product_title,
+            amountCents: details.amount_cents,
+            currency: details.currency,
+            status: 'completed'
+          });
+        }
+
+        return res.json({ ok: true, status: 'completed' });
+      }
+      res.json({ ok: true, status: session.payment_status });
+    })
+    .catch(err => {
+      console.error('Verify session error:', err.message);
+      res.status(500).json({ error: 'Failed to verify session' });
+    });
 });
 
 // Cancel a subscription
@@ -154,6 +264,21 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
 router.get('/api/shop/admin/products', requireAdmin, (req, res) => {
   const products = db.prepare('SELECT * FROM products ORDER BY created_at DESC').all();
   res.json(products);
+});
+
+// Get all orders (admin view with steam names)
+router.get('/api/shop/admin/orders', requireAdmin, (req, res) => {
+  const orders = db.prepare(`
+    SELECT o.id, o.status, o.amount_cents, o.created_at, o.completed_at,
+           o.stripe_session_id, o.stripe_subscription_id,
+           o.steam_id, u.persona, u.avatar_url,
+           p.title, p.type, p.currency
+    FROM orders o
+    JOIN users u ON o.steam_id = u.steam_id
+    JOIN products p ON o.product_id = p.id
+    ORDER BY o.created_at DESC
+  `).all();
+  res.json(orders);
 });
 
 // Create product
@@ -207,12 +332,27 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
   res.json(updated);
 });
 
-// Soft-delete product
+// Soft-delete (deactivate) product
 router.delete('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
   db.prepare('UPDATE products SET active = 0, updated_at = unixepoch() WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Permanent delete product
+router.delete('/api/shop/admin/products/:id/permanent', requireAdmin, (req, res) => {
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+
+  // Check for existing orders referencing this product
+  const orderCount = db.prepare('SELECT COUNT(*) as cnt FROM orders WHERE product_id = ?').get(req.params.id).cnt;
+  if (orderCount > 0) {
+    return res.status(400).json({ error: `Cannot delete — ${orderCount} order(s) reference this product. Deactivate it instead.` });
+  }
+
+  db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
@@ -252,6 +392,23 @@ function webhookHandler(req, res) {
             stripe_session_id = ?, stripe_subscription_id = ?
           WHERE id = ?
         `).run(session.id, session.subscription || null, orderId);
+
+        const order = db.prepare(`
+          SELECT o.*, u.persona, p.title as product_title, p.type, p.currency
+          FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
+          WHERE o.id = ?
+        `).get(orderId);
+        if (order) {
+          sendDiscordNotification({
+            eventType: session.subscription ? 'subscription_started' : 'payment_completed',
+            steamName: order.persona,
+            steamId: order.steam_id,
+            productTitle: order.product_title,
+            amountCents: order.amount_cents,
+            currency: order.currency,
+            status: 'completed'
+          });
+        }
       }
       break;
     }
@@ -261,6 +418,23 @@ function webhookHandler(req, res) {
       const orderId = session.metadata && session.metadata.order_id;
       if (orderId) {
         db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(orderId);
+
+        const order = db.prepare(`
+          SELECT o.*, u.persona, p.title as product_title, p.currency
+          FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
+          WHERE o.id = ?
+        `).get(orderId);
+        if (order) {
+          sendDiscordNotification({
+            eventType: 'payment_failed',
+            steamName: order.persona,
+            steamId: order.steam_id,
+            productTitle: order.product_title,
+            amountCents: order.amount_cents,
+            currency: order.currency,
+            status: 'failed'
+          });
+        }
       }
       break;
     }
@@ -269,13 +443,24 @@ function webhookHandler(req, res) {
       const invoice = event.data.object;
       const subId = invoice.subscription;
       if (subId) {
-        // Mark subscription renewals
         const existing = db.prepare('SELECT * FROM orders WHERE stripe_subscription_id = ? AND status = ?').get(subId, 'completed');
         if (existing) {
           db.prepare(`
             INSERT INTO orders (steam_id, product_id, stripe_subscription_id, status, amount_cents, completed_at)
             VALUES (?, ?, ?, 'completed', ?, unixepoch())
           `).run(existing.steam_id, existing.product_id, subId, invoice.amount_paid);
+
+          const user = db.prepare('SELECT persona FROM users WHERE steam_id = ?').get(existing.steam_id);
+          const product = db.prepare('SELECT title, currency FROM products WHERE id = ?').get(existing.product_id);
+          sendDiscordNotification({
+            eventType: 'subscription_renewed',
+            steamName: user ? user.persona : existing.steam_id,
+            steamId: existing.steam_id,
+            productTitle: product ? product.title : 'Unknown',
+            amountCents: invoice.amount_paid,
+            currency: product ? product.currency : 'usd',
+            status: 'completed'
+          });
         }
       }
       break;
@@ -283,9 +468,27 @@ function webhookHandler(req, res) {
 
     case 'customer.subscription.deleted': {
       const sub = event.data.object;
+      const existing = db.prepare(`
+        SELECT o.steam_id, o.amount_cents, u.persona, p.title as product_title, p.currency
+        FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
+        WHERE o.stripe_subscription_id = ? AND o.status = 'completed' LIMIT 1
+      `).get(sub.id);
+
       db.prepare(`
         UPDATE orders SET status = 'cancelled' WHERE stripe_subscription_id = ? AND status = 'completed'
       `).run(sub.id);
+
+      if (existing) {
+        sendDiscordNotification({
+          eventType: 'subscription_cancelled',
+          steamName: existing.persona,
+          steamId: existing.steam_id,
+          productTitle: existing.product_title,
+          amountCents: existing.amount_cents,
+          currency: existing.currency,
+          status: 'cancelled'
+        });
+      }
       break;
     }
   }

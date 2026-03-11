@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orders | ReforgedZ Admin</title>
+  <meta name="theme-color" content="#cc1f1f">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .orders-page {
+      padding-top: 140px;
+      padding-bottom: 96px;
+      min-height: 100vh;
+      background: var(--bg-dark);
+    }
+
+    .orders-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 32px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .orders-header h1 {
+      font-family: var(--display);
+      font-size: clamp(1.8rem, 4vw, 2.5rem);
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #fff;
+      line-height: 1;
+    }
+
+    .orders-header .back-link {
+      font-size: 0.82rem;
+      color: var(--text-ghost);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .orders-header .back-link:hover { color: var(--text); }
+
+    /* ---- Stats bar ---- */
+    .orders-stats {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+    }
+
+    .stat-card {
+      flex: 1;
+      min-width: 140px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+    }
+
+    .stat-label {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-ghost);
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-family: var(--display);
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .stat-value.green { color: #4ade80; }
+    .stat-value.yellow { color: #fbbf24; }
+    .stat-value.red { color: #f87171; }
+
+    /* ---- Filters ---- */
+    .orders-filters {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .filter-btn {
+      padding: 6px 16px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-ghost);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .filter-btn:hover { color: var(--text); border-color: var(--border-hover); }
+    .filter-btn.active { color: #fff; border-color: var(--accent); background: var(--accent-dim); }
+
+    .search-input {
+      padding: 6px 14px;
+      font-size: 0.82rem;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--body);
+      min-width: 200px;
+      transition: border-color 0.2s;
+    }
+
+    .search-input:focus { outline: none; border-color: rgba(204,31,31,0.4); }
+
+    /* ---- Table ---- */
+    .orders-table {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .orders-table table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .orders-table th {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-ghost);
+      text-align: left;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.01);
+    }
+
+    .orders-table td {
+      font-size: 0.82rem;
+      color: var(--text);
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      vertical-align: middle;
+    }
+
+    .orders-table tr:last-child td { border-bottom: none; }
+    .orders-table tr:hover td { background: rgba(255,255,255,0.015); }
+
+    .player-cell {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .player-cell img {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .player-cell .player-info {
+      min-width: 0;
+    }
+
+    .player-cell .player-name {
+      font-weight: 500;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .player-cell .player-steamid {
+      font-size: 0.68rem;
+      color: var(--text-ghost);
+      font-family: monospace;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      border-radius: 4px;
+      text-transform: capitalize;
+    }
+
+    .status-badge.completed {
+      color: #4ade80;
+      background: rgba(74,222,128,0.08);
+      border: 1px solid rgba(74,222,128,0.2);
+    }
+
+    .status-badge.pending {
+      color: #fbbf24;
+      background: rgba(251,191,36,0.08);
+      border: 1px solid rgba(251,191,36,0.2);
+    }
+
+    .status-badge.cancelled {
+      color: #f87171;
+      background: rgba(248,113,113,0.08);
+      border: 1px solid rgba(248,113,113,0.2);
+    }
+
+    .type-badge {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .type-badge.subscription { color: var(--accent); }
+    .type-badge.one_time { color: var(--text-ghost); }
+
+    .amount-cell {
+      font-family: var(--display);
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-ghost);
+      font-size: 0.9rem;
+    }
+
+    .access-denied {
+      text-align: center;
+      padding: 120px 20px;
+      color: var(--text-ghost);
+    }
+
+    .access-denied h2 {
+      font-family: var(--display);
+      font-size: 1.5rem;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+
+    /* ---- Responsive ---- */
+    @media (max-width: 900px) {
+      .orders-table { overflow-x: auto; }
+      .orders-table table { min-width: 700px; }
+    }
+
+    @media (max-width: 768px) {
+      .orders-page { padding-top: 110px; }
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="nav scrolled" id="nav">
+    <div class="nav-inner">
+      <a class="nav-brand" href="/">
+        <span>REFORGED<span class="brand-z">Z</span></span>
+      </a>
+      <div class="nav-links">
+        <a class="nav-link" href="/">Home</a>
+        <a class="nav-link" href="/shop">Shop</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="orders-page">
+    <div class="container" id="pageContent">
+      <div class="access-denied" id="accessDenied" style="display:none">
+        <h2>Access Denied</h2>
+        <p>Admin access required to view this page.</p>
+        <p style="margin-top:16px"><a href="/shop" style="color:var(--accent)">Back to Shop</a></p>
+      </div>
+
+      <div id="ordersContent" style="display:none">
+        <div class="orders-header">
+          <h1>All Orders</h1>
+          <a href="/shop" class="back-link">Back to Shop</a>
+        </div>
+
+        <div class="orders-stats" id="orderStats"></div>
+
+        <div class="orders-filters">
+          <button class="filter-btn active" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="completed">Completed</button>
+          <button class="filter-btn" data-filter="pending">Pending</button>
+          <button class="filter-btn" data-filter="cancelled">Cancelled</button>
+          <input type="text" class="search-input" id="searchInput" placeholder="Search player or product...">
+        </div>
+
+        <div class="orders-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Product</th>
+                <th>Type</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody">
+              <tr><td colspan="6" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <span class="footer-brand">REFORGED<span class="brand-z">Z</span></span>
+        <div class="footer-links">
+          <a href="https://discord.gg/reforgedz" target="_blank">Discord</a>
+          <a href="https://wiki.reforgedz.net" target="_blank">Wiki</a>
+          <a href="mailto:contact@reforgedz.net">Contact</a>
+        </div>
+        <span class="footer-copy">&copy; 2026 ReforgedZ. Not affiliated with Bohemia Interactive.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    let allOrders = [];
+    let currentFilter = 'all';
+
+    function escHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function formatPrice(cents, currency) {
+      const amount = (cents / 100).toFixed(2);
+      const symbol = currency === 'usd' ? '$' : currency.toUpperCase() + ' ';
+      return symbol + amount;
+    }
+
+    function formatDate(unix) {
+      if (!unix) return '\u2014';
+      const d = new Date(unix * 1000);
+      return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    async function init() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const user = await res.json();
+        if (!user || user.role !== 'admin') {
+          document.getElementById('accessDenied').style.display = 'block';
+          return;
+        }
+      } catch {
+        document.getElementById('accessDenied').style.display = 'block';
+        return;
+      }
+
+      document.getElementById('ordersContent').style.display = 'block';
+
+      try {
+        const res = await fetch('/api/shop/admin/orders', {
+          headers: { 'Content-Type': 'application/json' }
+        });
+        allOrders = await res.json();
+      } catch {
+        allOrders = [];
+      }
+
+      renderStats();
+      renderOrders();
+      bindFilters();
+    }
+
+    function renderStats() {
+      const total = allOrders.length;
+      const completed = allOrders.filter(o => o.status === 'completed');
+      const pending = allOrders.filter(o => o.status === 'pending');
+      const revenue = completed.reduce((sum, o) => sum + o.amount_cents, 0);
+
+      document.getElementById('orderStats').innerHTML = `
+        <div class="stat-card">
+          <div class="stat-label">Total Orders</div>
+          <div class="stat-value">${total}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Completed</div>
+          <div class="stat-value green">${completed.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pending</div>
+          <div class="stat-value yellow">${pending.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Revenue</div>
+          <div class="stat-value green">$${(revenue / 100).toFixed(2)}</div>
+        </div>
+      `;
+    }
+
+    function renderOrders() {
+      const search = document.getElementById('searchInput').value.toLowerCase();
+      const filtered = allOrders.filter(o => {
+        if (currentFilter !== 'all' && o.status !== currentFilter) return false;
+        if (search) {
+          const haystack = `${o.persona} ${o.steam_id} ${o.title}`.toLowerCase();
+          if (!haystack.includes(search)) return false;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        document.getElementById('ordersBody').innerHTML = '<tr><td colspan="6" class="empty-state">No orders found.</td></tr>';
+        return;
+      }
+
+      document.getElementById('ordersBody').innerHTML = filtered.map(o => `
+        <tr>
+          <td>
+            <div class="player-cell">
+              <img src="${o.avatar_url || ''}" alt="" onerror="this.style.display='none'">
+              <div class="player-info">
+                <div class="player-name">${escHtml(o.persona)}</div>
+                <div class="player-steamid">${escHtml(o.steam_id)}</div>
+              </div>
+            </div>
+          </td>
+          <td>${escHtml(o.title)}</td>
+          <td><span class="type-badge ${o.type}">${o.type === 'subscription' ? 'Sub' : 'One-Time'}</span></td>
+          <td><span class="amount-cell">${formatPrice(o.amount_cents, o.currency || 'usd')}</span></td>
+          <td><span class="status-badge ${o.status}">${o.status}</span></td>
+          <td>${formatDate(o.created_at)}</td>
+        </tr>
+      `).join('');
+    }
+
+    function bindFilters() {
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          currentFilter = btn.dataset.filter;
+          renderOrders();
+        });
+      });
+
+      document.getElementById('searchInput').addEventListener('input', renderOrders);
+    }
+
+    init();
+  </script>
+</body>
+</html>

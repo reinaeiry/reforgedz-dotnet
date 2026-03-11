@@ -591,6 +591,9 @@
     .card-toggle-btn { color: var(--text-ghost); }
     .card-toggle-btn:hover { color: var(--text); border-color: var(--border-hover); }
 
+    .card-delete-btn { color: #f87171; border-color: rgba(248,113,113,0.2); }
+    .card-delete-btn:hover { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.4); }
+
     .shop-card.inactive {
       opacity: 0.5;
       border-style: dashed;
@@ -647,7 +650,10 @@
 
       <!-- Admin panel -->
       <div class="admin-panel" id="adminPanel">
-        <h2>Manage Listings</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+          <h2 style="margin-bottom:0">Manage Listings</h2>
+          <a href="/admin/orders" style="font-size:0.78rem;font-weight:600;color:var(--accent);text-decoration:none;transition:opacity 0.2s" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">View All Orders &rarr;</a>
+        </div>
         <form class="admin-form" id="productForm">
           <div class="admin-field">
             <label>Title</label>

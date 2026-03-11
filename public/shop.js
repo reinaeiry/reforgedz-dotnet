@@ -167,6 +167,7 @@ function renderProducts(products) {
         <button class="card-toggle-btn" onclick="toggleProduct(${p.id}, ${p.active ? 0 : 1})">
           ${p.active ? 'Deactivate' : 'Activate'}
         </button>
+        <button class="card-delete-btn" onclick="deleteProduct(${p.id})">Delete</button>
       </div>
     ` : '';
 
@@ -274,6 +275,16 @@ function clearForm() {
   formCancelBtn.style.display = 'none';
 }
 
+async function deleteProduct(id) {
+  if (!confirm('Permanently delete this product? This cannot be undone.')) return;
+  try {
+    await api(`/api/shop/admin/products/${id}/permanent`, { method: 'DELETE' });
+    loadProducts();
+  } catch (e) {
+    alert(e.message || 'Failed to delete product');
+  }
+}
+
 async function toggleProduct(id, active) {
   try {
     if (active) {
@@ -353,11 +364,24 @@ async function cancelSubscription(orderId, e) {
   }
 }
 
-// ---- URL alerts ----
-function checkAlerts() {
+// ---- URL alerts + session verification ----
+async function checkAlerts() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('success') === '1') {
     alertSuccess.style.display = 'block';
+
+    // Verify the checkout session so orders don't stay pending if webhooks fail
+    const sessionId = params.get('session_id');
+    if (sessionId) {
+      try {
+        await api('/api/shop/verify-session', {
+          method: 'POST',
+          body: JSON.stringify({ sessionId })
+        });
+      } catch (e) {
+        // Silent — webhook may still handle it
+      }
+    }
     window.history.replaceState({}, '', '/shop');
   }
   if (params.get('cancelled') === '1') {
@@ -377,6 +401,7 @@ async function init() {
 window.buyProduct = buyProduct;
 window.editProduct = editProduct;
 window.toggleProduct = toggleProduct;
+window.deleteProduct = deleteProduct;
 window.cancelSubscription = cancelSubscription;
 
 init();
