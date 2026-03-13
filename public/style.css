@@ -693,10 +693,28 @@ img { display: block; max-width: 100%; }
   color: var(--accent);
 }
 
-.team-thanks {
-  font-size: 0.82rem;
-  color: var(--text-ghost);
-  margin-top: 24px;
+.core-card {
+  border-top: 2px solid #a855f7;
+}
+
+.core-card .team-role {
+  color: #a855f7;
+}
+
+.collab-card {
+  border-top: 2px solid #8ab4cc;
+}
+
+.collab-card .team-role {
+  color: #8ab4cc;
+}
+
+.gm-card {
+  border-top: 2px solid #eab308;
+}
+
+.gm-card .team-role {
+  color: #eab308;
 }
 
 /* Mod list */
