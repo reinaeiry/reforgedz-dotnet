@@ -50,12 +50,19 @@ function getServerConfigs() {
 
 function sshExec(privateKey, config, command) {
   return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      conn.end();
+      reject(new Error('SSH connection timed out after 15s'));
+    }, 15000);
+
     const conn = new Client();
     conn.on('ready', () => {
+      console.log(`[sync] SSH connected to ${config.host}`);
       conn.exec(command, (err, stream) => {
-        if (err) { conn.end(); return reject(err); }
+        if (err) { clearTimeout(timeout); conn.end(); return reject(err); }
         let stderr = '';
         stream.on('close', (code) => {
+          clearTimeout(timeout);
           conn.end();
           if (code === 0) resolve();
           else reject(new Error(`Exit code ${code}: ${stderr}`));
@@ -63,12 +70,18 @@ function sshExec(privateKey, config, command) {
         stream.stderr.on('data', (d) => { stderr += d.toString(); });
       });
     });
-    conn.on('error', reject);
+    conn.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+    console.log(`[sync] Connecting to ${config.host}:${config.port}...`);
     conn.connect({
       host: config.host,
       port: config.port,
       username: config.username,
-      privateKey: privateKey
+      privateKey: privateKey,
+      readyTimeout: 10000,
+      hostVerifier: () => true
     });
   });
 }
