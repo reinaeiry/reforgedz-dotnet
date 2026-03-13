@@ -4,7 +4,7 @@ const path = require('path');
 const db = require('./db');
 
 // Default SSH key path — inside the Pterodactyl container's persistent storage
-const DEFAULT_KEY_PATH = '/home/container/.ssh/id_ed25519';
+const DEFAULT_KEY_PATH = '/home/container/ssh_keys/id_ed25519';
 
 function getServerConfigs() {
   const servers = [];
