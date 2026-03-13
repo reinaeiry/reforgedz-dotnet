@@ -3,41 +3,43 @@ const fs = require('fs');
 const path = require('path');
 const db = require('./db');
 
-// Default SSH key path — inside the Pterodactyl container's persistent storage
-const DEFAULT_KEY_PATH = '/home/container/ssh_keys/id_ed25519';
+function getPrivateKey() {
+  // Load SSH key from base64 env var (works inside Pterodactyl containers)
+  const b64 = process.env.SSH_PRIVATE_KEY_B64;
+  if (b64) {
+    console.log('[sync] SSH key loaded from env');
+    return Buffer.from(b64, 'base64');
+  }
+  console.error('[sync] SSH_PRIVATE_KEY_B64 not set in .env');
+  return null;
+}
 
 function getServerConfigs() {
   const servers = [];
 
-  // EU — SSH to host machine (app runs in a Pterodactyl container, can't write host paths directly)
   const euHost = process.env.GAME_SERVER_EU_HOST;
   if (euHost) {
     const euPaths = (process.env.GAME_SERVER_EU_PATHS || '').split(',').filter(Boolean);
     if (euPaths.length > 0) {
       servers.push({
-        type: 'ssh',
         name: 'EU',
         host: euHost,
         port: parseInt(process.env.GAME_SERVER_EU_PORT) || 22,
         username: process.env.GAME_SERVER_EU_USER || 'root',
-        privateKeyPath: process.env.GAME_SERVER_EU_KEY_PATH || undefined,
         paths: euPaths
       });
     }
   }
 
-  // NA — SSH to remote host
   const naHost = process.env.GAME_SERVER_NA_HOST;
   if (naHost) {
     const naPaths = (process.env.GAME_SERVER_NA_PATHS || '').split(',').filter(Boolean);
     if (naPaths.length > 0) {
       servers.push({
-        type: 'ssh',
         name: 'NA',
         host: naHost,
         port: parseInt(process.env.GAME_SERVER_NA_PORT) || 22,
         username: process.env.GAME_SERVER_NA_USER || 'root',
-        privateKeyPath: process.env.GAME_SERVER_NA_KEY_PATH || undefined,
         paths: naPaths
       });
     }
@@ -46,7 +48,7 @@ function getServerConfigs() {
   return servers;
 }
 
-function sshExec(config, command) {
+function sshExec(privateKey, config, command) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     conn.on('ready', () => {
@@ -62,34 +64,12 @@ function sshExec(config, command) {
       });
     });
     conn.on('error', reject);
-
-    const connectOpts = {
+    conn.connect({
       host: config.host,
       port: config.port,
-      username: config.username
-    };
-
-    // Try explicit key path, then default container key path
-    const keyPaths = [
-      config.privateKeyPath,
-      DEFAULT_KEY_PATH
-    ].filter(Boolean);
-
-    let keyLoaded = false;
-    for (const keyPath of keyPaths) {
-      try {
-        connectOpts.privateKey = fs.readFileSync(keyPath);
-        keyLoaded = true;
-        console.log(`[sync] Using SSH key: ${keyPath}`);
-        break;
-      } catch (e) { /* try next */ }
-    }
-
-    if (!keyLoaded) {
-      console.error(`[sync] No SSH key found for ${config.host} (tried: ${keyPaths.join(', ')})`);
-    }
-
-    conn.connect(connectOpts);
+      username: config.username,
+      privateKey: privateKey
+    });
   });
 }
 
@@ -103,7 +83,6 @@ async function syncPurchasesToServers() {
   `).all();
 
   console.log(`[sync] ${rows.length} purchase(s) to sync`);
-  const json = JSON.stringify(rows, null, 2);
   const servers = getServerConfigs();
   console.log(`[sync] ${servers.length} server(s) configured:`, servers.map(s => `${s.name}(${s.host})`).join(', '));
 
@@ -112,12 +91,17 @@ async function syncPurchasesToServers() {
     return;
   }
 
+  const privateKey = getPrivateKey();
+  if (!privateKey) return;
+
+  const json = JSON.stringify(rows, null, 2);
+
   for (const server of servers) {
     for (const basePath of server.paths) {
       const remotePath = basePath + '/purchases.json';
       try {
         const cmd = `mkdir -p '${basePath}' && cat > '${remotePath}' << 'PURCHASES_EOF'\n${json}\nPURCHASES_EOF`;
-        await sshExec(server, cmd);
+        await sshExec(privateKey, server, cmd);
         console.log(`[sync] ${server.name}: written ${remotePath}`);
       } catch (e) {
         console.error(`[sync] ${server.name} failed ${remotePath}:`, e.message);
