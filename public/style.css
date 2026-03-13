@@ -146,13 +146,19 @@ img { display: block; max-width: 100%; }
 /* Hamburger — hidden on desktop */
 .nav-hamburger {
   display: none;
+  -webkit-appearance: none;
+  appearance: none;
   background: none;
   border: none;
+  outline: none;
   cursor: pointer;
-  padding: 6px;
+  padding: 8px;
+  margin-left: auto;
   flex-direction: column;
+  justify-content: center;
   gap: 5px;
   z-index: 110;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .nav-hamburger span {
@@ -162,6 +168,7 @@ img { display: block; max-width: 100%; }
   background: #fff;
   border-radius: 2px;
   transition: transform 0.3s, opacity 0.3s;
+  pointer-events: none;
 }
 
 .nav-hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
@@ -2100,19 +2107,18 @@ img { display: block; max-width: 100%; }
     grid-row: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
-    padding: 10px 0;
-    overflow-y: visible;
-    overflow-x: auto;
+    padding: 6px 8px;
+    overflow: hidden;
     flex-direction: row;
     align-items: center;
-    gap: 4px;
+    gap: 0;
     flex-wrap: nowrap;
-    -webkit-overflow-scrolling: touch;
   }
 
-  .radio-sidebar-brand { border-bottom: none; padding: 0 12px; margin-bottom: 0; flex-shrink: 0; }
-  .radio-nav { flex-direction: row; padding: 0 4px; flex-shrink: 0; }
-  .radio-nav-btn { font-size: 0.7rem; padding: 6px 10px; white-space: nowrap; }
+  .radio-sidebar-brand { display: none; }
+  .radio-nav { flex-direction: row; padding: 0; flex: 1; justify-content: stretch; }
+  .radio-nav-btn { font-size: 0.72rem; padding: 8px 6px; white-space: nowrap; flex: 1; justify-content: center; text-align: center; gap: 6px; }
+  .radio-nav-btn svg { display: none; }
   .radio-genres { display: none; }
 
   .radio-player-bar {
@@ -2432,7 +2438,7 @@ img { display: block; max-width: 100%; }
   }
   .nav-links .nav-link:hover,
   .nav-links .nav-link.active { background: rgba(255,255,255,0.06); }
-  .nav-cta { padding: 8px 14px; font-size: 0.8rem; }
+  .nav-cta { display: none; }
 
   /* Hero */
   .hero { min-height: 520px; height: 85vh; }
