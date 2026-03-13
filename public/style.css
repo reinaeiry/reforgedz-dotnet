@@ -752,6 +752,15 @@ img { display: block; max-width: 100%; }
   color: #eab308;
 }
 
+.hof-card {
+  border-top: 2px solid #9ca3af;
+  opacity: 0.8;
+}
+
+.hof-card .team-role {
+  color: #9ca3af;
+}
+
 /* Mod list */
 .about-mods-section {
   margin-top: 80px;
