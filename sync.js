@@ -3,10 +3,7 @@ const db = require('./db');
 
 function getPrivateKey() {
   const b64 = process.env.SSH_PRIVATE_KEY_B64;
-  if (b64) {
-    console.log('[sync] SSH key loaded from env');
-    return Buffer.from(b64, 'base64');
-  }
+  if (b64) return Buffer.from(b64, 'base64');
   console.error('[sync] SSH_PRIVATE_KEY_B64 not set in .env');
   return null;
 }
@@ -15,8 +12,8 @@ function sshExec(privateKey, host, port, username, command) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       conn.end();
-      reject(new Error('SSH timed out after 15s'));
-    }, 15000);
+      reject(new Error('SSH timed out after 30s'));
+    }, 30000);
 
     const conn = new Client();
     conn.on('ready', () => {
@@ -61,7 +58,6 @@ async function syncPurchasesToServers() {
   const json = JSON.stringify(rows, null, 2);
   const jsonB64 = Buffer.from(json).toString('base64');
 
-  // EU host — we SSH here for everything (container can only reach EU host)
   const euHost = process.env.GAME_SERVER_EU_HOST;
   const euPort = parseInt(process.env.GAME_SERVER_EU_PORT) || 22;
   const euUser = process.env.GAME_SERVER_EU_USER || 'root';
@@ -71,43 +67,43 @@ async function syncPurchasesToServers() {
     return;
   }
 
-  const commands = [];
+  // Build ONE command that writes to all paths in a single SSH session
+  const parts = [];
 
-  // EU local paths — write directly on the EU host
+  // EU paths — write directly on the EU host
   const euPaths = (process.env.GAME_SERVER_EU_PATHS || '').split(',').filter(Boolean);
   for (const basePath of euPaths) {
     const remotePath = basePath + '/purchases.json';
-    commands.push({
-      name: `EU:${basePath.split('/').pop()}`,
-      cmd: `mkdir -p '${basePath}' && echo '${jsonB64}' | base64 -d > '${remotePath}'`
-    });
+    parts.push(`mkdir -p '${basePath}' && echo '${jsonB64}' | base64 -d > '${remotePath}' && echo '[sync] EU:${basePath.split('/').pop()} OK'`);
   }
 
-  // NA paths — SSH from EU host to NA host
+  // NA paths — nested SSH from EU host to NA host
   const naHost = process.env.GAME_SERVER_NA_HOST;
   if (naHost) {
     const naPort = parseInt(process.env.GAME_SERVER_NA_PORT) || 22;
     const naUser = process.env.GAME_SERVER_NA_USER || 'root';
     const naPaths = (process.env.GAME_SERVER_NA_PATHS || '').split(',').filter(Boolean);
+
+    // Build one nested SSH command that writes all NA paths at once
+    const naParts = [];
     for (const basePath of naPaths) {
       const remotePath = basePath + '/purchases.json';
-      const innerCmd = `mkdir -p '${basePath}' && echo '${jsonB64}' | base64 -d > '${remotePath}'`;
-      commands.push({
-        name: `NA:${basePath.split('/').pop()}`,
-        cmd: `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${naPort} ${naUser}@${naHost} "${innerCmd}"`
-      });
+      naParts.push(`mkdir -p '${basePath}' && echo '${jsonB64}' | base64 -d > '${remotePath}' && echo '[sync] NA:${basePath.split('/').pop()} OK'`);
+    }
+    if (naParts.length > 0) {
+      const naCmd = naParts.join(' ; ');
+      parts.push(`ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${naPort} ${naUser}@${naHost} "${naCmd}"`);
     }
   }
 
-  console.log(`[sync] ${commands.length} path(s) to sync via ${euHost}`);
+  const fullCmd = parts.join(' ; ');
+  console.log(`[sync] Syncing ${euPaths.length} EU + ${(process.env.GAME_SERVER_NA_PATHS || '').split(',').filter(Boolean).length} NA paths in 1 SSH session`);
 
-  for (const { name, cmd } of commands) {
-    try {
-      await sshExec(privateKey, euHost, euPort, euUser, cmd);
-      console.log(`[sync] ${name} OK`);
-    } catch (e) {
-      console.error(`[sync] ${name} FAILED:`, e.message);
-    }
+  try {
+    await sshExec(privateKey, euHost, euPort, euUser, fullCmd);
+    console.log('[sync] All paths synced OK');
+  } catch (e) {
+    console.error('[sync] Sync failed:', e.message);
   }
 }
 
