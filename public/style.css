@@ -145,7 +145,7 @@ img { display: block; max-width: 100%; }
 
 /* Hamburger — hidden on desktop */
 .nav-hamburger {
-  display: none;
+  display: none !important;
   -webkit-appearance: none;
   appearance: none;
   background: none;
@@ -159,6 +159,9 @@ img { display: block; max-width: 100%; }
   gap: 5px;
   z-index: 110;
   -webkit-tap-highlight-color: transparent;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
 
 .nav-hamburger span {
@@ -2417,7 +2420,7 @@ img { display: block; max-width: 100%; }
 
   /* Nav becomes hamburger */
   .nav-inner { padding: 0 16px; gap: 12px; }
-  .nav-hamburger { display: flex; }
+  .nav-hamburger { display: flex !important; width: auto; height: auto; overflow: visible; }
   .nav-links {
     display: none;
     position: fixed;
