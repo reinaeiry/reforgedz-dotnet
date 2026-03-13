@@ -55,26 +55,42 @@ function sshExec(config, command) {
       username: config.username
     };
 
+    // Try SSH key first (explicit path, then default locations)
+    let keyLoaded = false;
     if (config.privateKeyPath) {
       try {
         connectOpts.privateKey = fs.readFileSync(config.privateKeyPath);
+        keyLoaded = true;
+        console.log(`[sync] Using SSH key: ${config.privateKeyPath}`);
       } catch (e) {
-        return reject(new Error(`Cannot read SSH key: ${config.privateKeyPath}`));
+        console.error(`[sync] Cannot read SSH key: ${config.privateKeyPath}`);
       }
-    } else if (config.password) {
-      connectOpts.password = config.password;
-    } else {
-      // Try default SSH key locations
+    }
+
+    if (!keyLoaded) {
       const defaultKeys = [
-        path.join(process.env.HOME || '/root', '.ssh', 'id_rsa'),
-        path.join(process.env.HOME || '/root', '.ssh', 'id_ed25519')
+        path.join(process.env.HOME || '/root', '.ssh', 'id_ed25519'),
+        path.join(process.env.HOME || '/root', '.ssh', 'id_rsa')
       ];
       for (const keyPath of defaultKeys) {
         try {
           connectOpts.privateKey = fs.readFileSync(keyPath);
+          keyLoaded = true;
+          console.log(`[sync] Using SSH key: ${keyPath}`);
           break;
         } catch (e) { /* try next */ }
       }
+    }
+
+    // Fall back to password if no key found
+    if (!keyLoaded && config.password) {
+      connectOpts.password = config.password;
+      connectOpts.tryKeyboard = true;
+      console.log(`[sync] Using password auth for ${config.host}`);
+    }
+
+    if (!keyLoaded && !config.password) {
+      console.error(`[sync] No SSH key or password available for ${config.host}`);
     }
 
     conn.connect(connectOpts);
@@ -96,8 +112,10 @@ async function syncPurchasesToServers() {
     WHERE o.status = 'completed' AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
   `).all();
 
+  console.log(`[sync] ${rows.length} purchase(s) to sync`);
   const json = JSON.stringify(rows, null, 2);
   const servers = getServerConfigs();
+  console.log(`[sync] ${servers.length} server(s) configured:`, servers.map(s => s.type).join(', '));
 
   if (servers.length === 0) {
     console.log('[sync] No game servers configured, skipping');
@@ -109,6 +127,7 @@ async function syncPurchasesToServers() {
       // EU — write directly to filesystem
       for (const basePath of server.paths) {
         const filePath = basePath + '/purchases.json';
+        console.log(`[sync] Attempting local write: ${filePath}`);
         try {
           writeLocal(filePath, json);
           console.log(`[sync] Written locally: ${filePath}`);
