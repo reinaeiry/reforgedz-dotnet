@@ -2068,42 +2068,84 @@ img { display: block; max-width: 100%; }
 @media (max-width: 768px) {
   .radio-app {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr 80px;
+    grid-template-rows: auto 1fr 70px;
   }
 
   .radio-sidebar {
     grid-row: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
-    padding: 12px 0;
+    padding: 10px 0;
     overflow-y: visible;
+    overflow-x: auto;
     flex-direction: row;
     align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+    gap: 4px;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
   }
 
-  .radio-sidebar-brand { border-bottom: none; padding: 0 16px; margin-bottom: 0; }
-  .radio-nav { flex-direction: row; padding: 0 8px; }
+  .radio-sidebar-brand { border-bottom: none; padding: 0 12px; margin-bottom: 0; flex-shrink: 0; }
+  .radio-nav { flex-direction: row; padding: 0 4px; flex-shrink: 0; }
+  .radio-nav-btn { font-size: 0.7rem; padding: 6px 10px; white-space: nowrap; }
   .radio-genres { display: none; }
 
-  .radio-player-bar { grid-column: 1; }
-  .radio-player-track { width: auto; max-width: 140px; }
+  .radio-player-bar {
+    grid-column: 1;
+    padding: 0 12px;
+    gap: 10px;
+    height: 70px;
+  }
+  .radio-player-track { width: auto; max-width: 120px; }
+  .radio-player-art { width: 40px; height: 40px; }
+  .radio-player-title { font-size: 0.78rem; }
+  .radio-player-controls { gap: 4px; }
+  .radio-ctrl-btn { padding: 4px; }
+  .radio-ctrl-play { width: 36px; height: 36px; }
+  .radio-player-progress { gap: 6px; }
+  .radio-time { font-size: 0.65rem; width: 32px; }
   .radio-player-vol { display: none; }
-  .radio-library, .radio-queue-list { padding: 20px 20px 120px; }
-  .radio-view-header { padding: 24px 20px 0; }
-  .radio-hero-banner { padding: 40px 20px; }
-  .radio-search-bar { margin: 16px 20px 0; }
-  .radio-section { padding: 0 20px 32px; }
-  .radio-genre-cards { grid-template-columns: repeat(2, 1fr); }
+  .radio-player-heart, .radio-player-share { display: none; }
+
+  .radio-library, .radio-queue-list, .radio-favorites-list { padding: 16px 14px 100px; }
+  .radio-view-header { padding: 20px 14px 0; }
+  .radio-view-header h2 { font-size: 1.3rem; }
+  .radio-hero-banner { padding: 32px 14px; }
+  .radio-hero-inner h1 { font-size: 1.4rem; }
+  .radio-hero-inner p { font-size: 0.82rem; }
+  .radio-search-bar { margin: 12px 14px 0; }
+  .radio-section { padding: 0 14px 24px; }
+  .radio-genre-cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .radio-picks { grid-template-columns: 1fr; }
-  .radio-stats-strip { grid-template-columns: repeat(2, 1fr); }
+  .radio-stats-strip { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .radio-about-inner { flex-direction: column; }
+
+  .radio-hours-inner { flex-direction: column; gap: 16px; }
+  .radio-hours-divider { display: none; }
+
+  .radio-top10-item { padding: 8px 4px; }
+  .radio-top10-bar-wrap { display: none; }
+
+  .radio-lib-track { padding: 8px 4px; }
+  .radio-lib-dur { display: none; }
+
+  .radio-queue-item { padding: 8px 4px; }
+  .radio-queue-dur { display: none; }
+  .radio-queue-drag { display: none; }
+
+  .radio-fav-item { padding: 8px 4px; }
+  .radio-fav-dur { display: none; }
+
+  .radio-recent-item { padding: 8px 4px; }
+  .radio-recent-cat { display: none; }
 }
 
 @media (max-width: 520px) {
   .radio-genre-cards { grid-template-columns: 1fr; }
-  .radio-stats-strip { grid-template-columns: repeat(2, 1fr); }
+  .radio-stats-strip { grid-template-columns: 1fr; }
+  .radio-player-track { max-width: 100px; }
+  .radio-progress-bar { display: none; }
+  .radio-time { display: none; }
 }
 
 /* ============================================
