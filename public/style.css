@@ -143,6 +143,31 @@ img { display: block; max-width: 100%; }
   transform: translateY(-1px);
 }
 
+/* Hamburger — hidden on desktop */
+.nav-hamburger {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  flex-direction: column;
+  gap: 5px;
+  z-index: 110;
+}
+
+.nav-hamburger span {
+  display: block;
+  width: 22px;
+  height: 2px;
+  background: #fff;
+  border-radius: 2px;
+  transition: transform 0.3s, opacity 0.3s;
+}
+
+.nav-hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.nav-hamburger.open span:nth-child(2) { opacity: 0; }
+.nav-hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
 /* ============================================
    Tabs
    ============================================ */
@@ -2375,27 +2400,107 @@ img { display: block; max-width: 100%; }
 }
 
 @media (max-width: 768px) {
-  .container { padding: 0 24px; }
-  .nav-inner { padding: 0 24px; gap: 16px; }
-  .features-grid { grid-template-columns: 1fr; }
-  .about-grid { grid-template-columns: 1fr; }
-  .team-grid { grid-template-columns: repeat(2, 1fr); }
-  .mods-grid { grid-template-columns: repeat(2, 1fr); }
-  .about-story { padding-left: 24px; }
-  .contact-channel { flex-direction: column; align-items: flex-start; gap: 20px; padding: 28px 24px; }
-  .contact-channel-cta { display: none; }
-  .cta-banner { padding: 40px 32px; flex-direction: column; align-items: flex-start; }
-  .radio-card { padding: 40px 28px; }
-  .radio-card-inner { flex-direction: column; gap: 32px; }
-  .hero-content { padding-left: 24px; padding-right: 24px; padding-bottom: 80px; }
-  .inner-page { padding-top: 110px; }
-  .nav-links .nav-link { padding: 8px 8px; font-size: 0.8rem; }
+  .container { padding: 0 16px; }
+  .section { padding: 64px 0; }
+  .section-header { margin-bottom: 40px; }
+
+  /* Nav becomes hamburger */
+  .nav-inner { padding: 0 16px; gap: 12px; }
+  .nav-hamburger { display: flex; }
+  .nav-links {
+    display: none;
+    position: fixed;
+    top: 68px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(8,8,8,0.98);
+    backdrop-filter: blur(12px);
+    flex-direction: column;
+    align-items: stretch;
+    padding: 24px 20px;
+    gap: 4px;
+    z-index: 105;
+    overflow-y: auto;
+  }
+  .nav-links.open { display: flex; }
+  .nav-links .nav-link {
+    padding: 14px 16px;
+    font-size: 1rem;
+    border-radius: 8px;
+    text-align: left;
+  }
+  .nav-links .nav-link:hover,
+  .nav-links .nav-link.active { background: rgba(255,255,255,0.06); }
   .nav-cta { padding: 8px 14px; font-size: 0.8rem; }
+
+  /* Hero */
+  .hero { min-height: 520px; height: 85vh; }
+  .hero-content { padding-left: 16px; padding-right: 16px; padding-bottom: 64px; }
+  .hero-desc { font-size: 0.95rem; margin-bottom: 28px; }
+  .hero-actions { gap: 10px; }
+  .btn-filled, .btn-outline { padding: 12px 22px; font-size: 0.82rem; }
+  .hero-scroll { display: none; }
+
+  /* Features / stats */
+  .features-grid { grid-template-columns: 1fr; }
+  .feature { padding: 28px 20px; }
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+  .stat { padding: 32px 16px; }
+  .stat-num { font-size: 1.8rem; }
+
+  /* CTA banner */
+  .cta-banner { padding: 32px 20px; flex-direction: column; align-items: flex-start; gap: 24px; }
+
+  /* About */
+  .inner-page { padding-top: 100px; padding-bottom: 64px; }
+  .inner-header { margin-bottom: 40px; }
+  .about-story { padding-left: 16px; }
+  .about-story h2 { font-size: 1.4rem; }
+  .about-grid { grid-template-columns: 1fr; }
+  .about-block { padding: 24px 20px; }
+
+  /* Team */
+  .team-grid { grid-template-columns: repeat(2, 1fr); }
+  .founders-grid { grid-template-columns: repeat(2, 1fr); }
+  .team-card { padding: 14px 16px; }
+
+  /* Mod list */
+  .mods-grid { grid-template-columns: repeat(2, 1fr); }
+
+  /* Contact */
+  .contact-hero { padding: 100px 0 48px; }
+  .contact-body { padding: 48px 0 64px; }
+  .contact-channel { flex-direction: column; align-items: flex-start; gap: 16px; padding: 24px 20px; }
+  .contact-channel-icon { width: 44px; height: 44px; }
+  .contact-channel-cta { display: none; }
+
+  /* Radio card */
+  .radio-card { padding: 32px 20px; }
+  .radio-card-inner { flex-direction: column; gap: 24px; }
+
+  /* Footer */
+  .footer-inner { flex-direction: column; text-align: center; gap: 16px; }
+  .footer-links { flex-wrap: wrap; justify-content: center; gap: 16px; }
 }
 
 @media (max-width: 520px) {
+  .container { padding: 0 12px; }
+
+  .hero { min-height: 460px; height: 80vh; }
+  .hero-content { padding-left: 12px; padding-right: 12px; }
+  .hero-actions { flex-direction: column; }
+  .btn-filled, .btn-outline { width: 100%; justify-content: center; }
+
   .stats-row { grid-template-columns: 1fr 1fr; }
   .stat:nth-child(3) { border-right: 1px solid var(--border); border-top: 1px solid var(--border); }
   .hero-title { letter-spacing: -1px; }
-  .nav-links { display: none; }
+
+  .team-grid, .founders-grid { grid-template-columns: 1fr; }
+  .mods-grid { grid-template-columns: 1fr; }
+
+  .about-story h2 { font-size: 1.2rem; }
+  .about-story p { font-size: 0.85rem; }
+
+  .contact-channel-name { font-size: 1rem; }
 }

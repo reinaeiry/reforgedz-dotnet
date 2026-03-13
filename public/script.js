@@ -19,8 +19,23 @@ function switchTab(tabId) {
 }
 
 navLinks.forEach(link => {
-  link.addEventListener('click', () => switchTab(link.dataset.tab));
+  link.addEventListener('click', () => {
+    switchTab(link.dataset.tab);
+    // Close mobile menu on nav
+    document.getElementById('navLinks')?.classList.remove('open');
+    document.getElementById('navHamburger')?.classList.remove('open');
+  });
 });
+
+// ---- Mobile hamburger menu ----
+const hamburger = document.getElementById('navHamburger');
+const navLinksEl = document.getElementById('navLinks');
+if (hamburger && navLinksEl) {
+  hamburger.addEventListener('click', () => {
+    hamburger.classList.toggle('open');
+    navLinksEl.classList.toggle('open');
+  });
+}
 
 // Nav brand also goes to home
 document.querySelector('.nav-brand')?.addEventListener('click', (e) => {
