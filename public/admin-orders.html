@@ -227,6 +227,26 @@
       border: 1px solid rgba(248,113,113,0.2);
     }
 
+    .status-badge.refunded {
+      color: #c084fc;
+      background: rgba(192,132,252,0.08);
+      border: 1px solid rgba(192,132,252,0.2);
+    }
+
+    .revoke-btn {
+      padding: 3px 10px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: #c084fc;
+      background: none;
+      border: 1px solid rgba(192,132,252,0.2);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .revoke-btn:hover { background: rgba(192,132,252,0.08); border-color: rgba(192,132,252,0.4); }
+    .revoke-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
     .type-badge {
       font-size: 0.65rem;
       font-weight: 600;
@@ -312,6 +332,7 @@
           <button class="filter-btn" data-filter="completed">Completed</button>
           <button class="filter-btn" data-filter="pending">Pending</button>
           <button class="filter-btn" data-filter="cancelled">Cancelled</button>
+          <button class="filter-btn" data-filter="refunded">Refunded</button>
           <input type="text" class="search-input" id="searchInput" placeholder="Search player or product...">
         </div>
 
@@ -325,10 +346,11 @@
                 <th>Amount</th>
                 <th>Status</th>
                 <th>Date</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="ordersBody">
-              <tr><td colspan="6" class="empty-state">Loading...</td></tr>
+              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -405,6 +427,7 @@
       const total = allOrders.length;
       const completed = allOrders.filter(o => o.status === 'completed');
       const pending = allOrders.filter(o => o.status === 'pending');
+      const refunded = allOrders.filter(o => o.status === 'refunded');
       const revenue = completed.reduce((sum, o) => sum + o.amount_cents, 0);
 
       document.getElementById('orderStats').innerHTML = `
@@ -419,6 +442,10 @@
         <div class="stat-card">
           <div class="stat-label">Pending</div>
           <div class="stat-value yellow">${pending.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Refunded</div>
+          <div class="stat-value" style="color:#c084fc">${refunded.length}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Revenue</div>
@@ -439,7 +466,7 @@
       });
 
       if (filtered.length === 0) {
-        document.getElementById('ordersBody').innerHTML = '<tr><td colspan="6" class="empty-state">No orders found.</td></tr>';
+        document.getElementById('ordersBody').innerHTML = '<tr><td colspan="7" class="empty-state">No orders found.</td></tr>';
         return;
       }
 
@@ -460,6 +487,7 @@
           <td><span class="amount-cell">${formatPrice(o.amount_cents, o.currency || 'usd')}</span></td>
           <td><span class="status-badge ${o.status}">${o.status}</span></td>
           <td>${formatDate(o.created_at)}</td>
+          <td>${o.status === 'completed' ? `<button class="revoke-btn" onclick="revokeOrder(${o.id})">Revoke</button>` : ''}</td>
         </tr>
       `).join('');
     }
@@ -498,6 +526,27 @@
         renderOrders();
       } catch (e) {
         alert('Failed to update BI UID');
+      }
+    }
+
+    async function revokeOrder(orderId) {
+      if (!confirm('Revoke this order? This will remove the player\'s access.')) return;
+      try {
+        const res = await fetch('/api/shop/admin/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to revoke');
+        }
+        allOrders.forEach(o => { if (o.id === orderId) o.status = 'refunded'; });
+        renderStats();
+        renderOrders();
+        alert('Item Revoked, contact Nattii to issue refund via Stripe');
+      } catch (e) {
+        alert(e.message || 'Failed to revoke order');
       }
     }
 

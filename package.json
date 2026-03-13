@@ -14,6 +14,7 @@
     "express-session": "^1.19.0",
     "passport": "^0.7.0",
     "passport-steam": "^1.0.18",
+    "ssh2": "^1.17.0",
     "stripe": "^20.4.1"
   }
 }

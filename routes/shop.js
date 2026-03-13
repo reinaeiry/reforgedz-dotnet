@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { syncPurchasesToServers } = require('../sync');
 
 // ---- Stripe setup ----
 const Stripe = require('stripe');
@@ -21,7 +22,8 @@ function sendDiscordNotification({ eventType, steamName, steamId, biUid, product
     pending: 0xfbbf24,   // yellow
     completed: 0x4ade80, // green
     cancelled: 0xf87171, // red
-    failed: 0xf87171     // red
+    failed: 0xf87171,    // red
+    refunded: 0xc084fc   // purple
   };
 
   const titles = {
@@ -29,7 +31,8 @@ function sendDiscordNotification({ eventType, steamName, steamId, biUid, product
     'payment_failed': 'Payment Failed',
     'subscription_started': 'Subscription Started',
     'subscription_renewed': 'Subscription Renewed',
-    'subscription_cancelled': 'Subscription Cancelled'
+    'subscription_cancelled': 'Subscription Cancelled',
+    'order_revoked': 'Order Revoked'
   };
 
   const amount = amountCents ? `$${(amountCents / 100).toFixed(2)} ${(currency || 'usd').toUpperCase()}` : 'N/A';
@@ -225,6 +228,7 @@ router.post('/api/shop/verify-session', requireAuth, (req, res) => {
           });
         }
 
+        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
         return res.json({ ok: true, status: 'completed' });
       }
       res.json({ ok: true, status: session.payment_status });
@@ -411,6 +415,50 @@ router.delete('/api/shop/admin/products/:id/permanent', requireAdmin, (req, res)
   res.json({ ok: true });
 });
 
+// Revoke an order (admin only — does NOT issue Stripe refund)
+router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
+  const { orderId } = req.body;
+  if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
+
+  const order = db.prepare(`
+    SELECT o.*, u.persona, u.bi_uid, p.title as product_title, p.type, p.currency
+    FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
+    WHERE o.id = ? AND o.status = 'completed'
+  `).get(orderId);
+
+  if (!order) return res.status(404).json({ error: 'Completed order not found' });
+
+  // If subscription, cancel it immediately in Stripe
+  if (order.stripe_subscription_id) {
+    try {
+      await getStripe(false).subscriptions.cancel(order.stripe_subscription_id);
+    } catch (e) {
+      try {
+        await getStripe(true).subscriptions.cancel(order.stripe_subscription_id);
+      } catch (e2) {
+        console.error('Failed to cancel subscription in Stripe:', e2.message);
+      }
+    }
+  }
+
+  db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(orderId);
+
+  sendDiscordNotification({
+    eventType: 'order_revoked',
+    steamName: order.persona,
+    steamId: order.steam_id,
+    biUid: order.bi_uid,
+    productTitle: order.product_title,
+    amountCents: order.amount_cents,
+    currency: order.currency,
+    status: 'refunded'
+  });
+
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+
+  res.json({ ok: true });
+});
+
 // ============================================================
 //  Stripe webhook handler (exported separately for raw body)
 // ============================================================
@@ -465,6 +513,7 @@ function webhookHandler(req, res) {
             status: 'completed'
           });
         }
+        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
       }
       break;
     }
@@ -548,6 +597,7 @@ function webhookHandler(req, res) {
           status: 'cancelled'
         });
       }
+      syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
       break;
     }
   }

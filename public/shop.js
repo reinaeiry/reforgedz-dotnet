@@ -438,12 +438,13 @@ async function loadOrders() {
 }
 
 function renderOrders(orders, container) {
-  if (!orders || orders.length === 0) {
+  const visible = (orders || []).filter(o => o.status !== 'refunded');
+  if (visible.length === 0) {
     container.innerHTML = '<div class="dropdown-empty">No purchases yet.</div>';
     return;
   }
 
-  container.innerHTML = orders.map(o => {
+  container.innerHTML = visible.map(o => {
     const isActiveSub = o.type === 'subscription' && o.status === 'completed' && o.stripe_subscription_id;
     const cancelBtn = isActiveSub
       ? `<button class="cancel-sub-btn" onclick="cancelSubscription(${o.id}, event)">Cancel</button>`
