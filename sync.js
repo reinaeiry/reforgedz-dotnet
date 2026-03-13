@@ -7,7 +7,9 @@ function getServerConfigs() {
   const servers = [];
 
   // EU paths are LOCAL (reforgedz-dotnet runs on EU box)
-  const euPaths = (process.env.GAME_SERVER_EU_PATHS || '').split(',').filter(Boolean);
+  const euRaw = process.env.GAME_SERVER_EU_PATHS || '';
+  console.log(`[sync] EU_PATHS env: "${euRaw.substring(0, 80)}${euRaw.length > 80 ? '...' : ''}"`);
+  const euPaths = euRaw.split(',').filter(Boolean);
   if (euPaths.length > 0) {
     servers.push({ type: 'local', paths: euPaths });
   }
