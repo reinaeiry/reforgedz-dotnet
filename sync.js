@@ -59,6 +59,7 @@ async function syncPurchasesToServers() {
   if (!privateKey) return;
 
   const json = JSON.stringify(rows, null, 2);
+  const jsonB64 = Buffer.from(json).toString('base64');
 
   // EU host — we SSH here for everything (container can only reach EU host)
   const euHost = process.env.GAME_SERVER_EU_HOST;
@@ -70,14 +71,16 @@ async function syncPurchasesToServers() {
     return;
   }
 
-  // Build all commands to run on the EU host in one SSH session
   const commands = [];
 
   // EU local paths — write directly on the EU host
   const euPaths = (process.env.GAME_SERVER_EU_PATHS || '').split(',').filter(Boolean);
   for (const basePath of euPaths) {
     const remotePath = basePath + '/purchases.json';
-    commands.push({ name: `EU:${remotePath}`, cmd: `mkdir -p '${basePath}' && cat > '${remotePath}' << 'PURCHASES_EOF'\n${json}\nPURCHASES_EOF` });
+    commands.push({
+      name: `EU:${basePath.split('/').pop()}`,
+      cmd: `mkdir -p '${basePath}' && echo '${jsonB64}' | base64 -d > '${remotePath}'`
+    });
   }
 
   // NA paths — SSH from EU host to NA host
@@ -88,18 +91,16 @@ async function syncPurchasesToServers() {
     const naPaths = (process.env.GAME_SERVER_NA_PATHS || '').split(',').filter(Boolean);
     for (const basePath of naPaths) {
       const remotePath = basePath + '/purchases.json';
-      const innerCmd = `mkdir -p '${basePath}' && cat > '${remotePath}' << 'PURCHASES_EOF'\n${json}\nPURCHASES_EOF`;
-      // Wrap in ssh command that runs on EU host, forwarding to NA
+      const innerCmd = `mkdir -p '${basePath}' && echo '${jsonB64}' | base64 -d > '${remotePath}'`;
       commands.push({
-        name: `NA:${remotePath}`,
-        cmd: `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${naPort} ${naUser}@${naHost} '${innerCmd.replace(/'/g, "'\\''")}'`
+        name: `NA:${basePath.split('/').pop()}`,
+        cmd: `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${naPort} ${naUser}@${naHost} "${innerCmd}"`
       });
     }
   }
 
   console.log(`[sync] ${commands.length} path(s) to sync via ${euHost}`);
 
-  // Execute each command via SSH to EU host
   for (const { name, cmd } of commands) {
     try {
       await sshExec(privateKey, euHost, euPort, euUser, cmd);
