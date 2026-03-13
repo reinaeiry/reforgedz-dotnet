@@ -853,6 +853,7 @@ img { display: block; max-width: 100%; }
   grid-template-columns: 220px 1fr;
   grid-template-rows: 1fr 80px;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -2101,6 +2102,9 @@ img { display: block; max-width: 100%; }
   .radio-app {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr 70px;
+    height: calc(100vh - 68px);
+    height: calc(100dvh - 68px);
+    margin-top: 68px;
   }
 
   .radio-sidebar {
@@ -2155,7 +2159,8 @@ img { display: block; max-width: 100%; }
   .radio-hours-divider { display: none; }
 
   .radio-top10-item { padding: 8px 4px; }
-  .radio-top10-bar-wrap { display: none; }
+  .radio-top10-bar { display: none; }
+  .radio-top10-title { white-space: normal; word-break: break-word; }
 
   .radio-lib-track { padding: 8px 4px; }
   .radio-lib-dur { display: none; }
