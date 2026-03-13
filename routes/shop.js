@@ -180,6 +180,7 @@ router.post('/api/shop/set-bi-uid', requireAuth, (req, res) => {
 
   db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(cleaned, req.user.steam_id);
   req.user.bi_uid = cleaned;
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
   res.json({ ok: true, bi_uid: cleaned });
 });
 
@@ -337,6 +338,7 @@ router.put('/api/shop/admin/users/:steamId/bi-uid', requireAdmin, (req, res) => 
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(biUid || null, req.params.steamId);
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
   res.json({ ok: true });
 });
 
