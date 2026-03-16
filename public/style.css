@@ -785,7 +785,7 @@ img { display: block; max-width: 100%; }
 .role-head-admin::before { background: #a855f7; }
 .role-dev::before       { background: #cc1f1f; }
 .role-mapper::before    { background: #22c55e; }
-.role-assets::before    { background: #8ab4cc; }
+.role-assets::before    { background: #f97316; }
 .role-audio::before     { background: #a855f7; }
 .role-collab::before    { background: #8ab4cc; }
 .role-gm::before        { background: #eab308; }
@@ -799,7 +799,7 @@ img { display: block; max-width: 100%; }
 .bar-head-admin { border-left-color: #a855f7; }
 .bar-dev       { border-left-color: #cc1f1f; }
 .bar-mapper    { border-left-color: #22c55e; }
-.bar-assets    { border-left-color: #8ab4cc; }
+.bar-assets    { border-left-color: #f97316; }
 .bar-audio     { border-left-color: #a855f7; }
 .bar-collab    { border-left-color: #8ab4cc; }
 .bar-gm        { border-left-color: #eab308; }
