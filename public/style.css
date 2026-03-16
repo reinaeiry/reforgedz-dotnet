@@ -681,104 +681,98 @@ img { display: block; max-width: 100%; }
   border-bottom: 1px solid var(--border);
 }
 
-.team-grid {
+.dossier-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
   margin-bottom: 4px;
 }
 
-.founders-grid {
-  grid-template-columns: repeat(3, 1fr);
-}
-
-.team-card {
+.dossier-bar {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 18px 20px;
-  transition: border-color 0.2s, background 0.2s;
+  border-radius: 6px;
+  border-left: 3px solid var(--border);
+  padding: 10px 16px;
+  max-height: 42px;
+  overflow: hidden;
+  transition: max-height 0.3s ease, background 0.2s, border-color 0.2s, box-shadow 0.3s;
+  cursor: default;
 }
 
-.team-card:hover {
-  border-color: var(--border-hover);
+.dossier-bar:hover {
+  max-height: 90px;
   background: var(--surface-raised);
+  border-color: var(--border-hover);
 }
 
-.founder-card {
-  border-top: 2px solid var(--accent);
-}
-
-.team-name {
+.dossier-name {
   font-family: var(--display);
-  font-size: 1rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  letter-spacing: 1px;
+  letter-spacing: 1.2px;
   color: #fff;
-  margin-bottom: 4px;
+  text-transform: uppercase;
+  line-height: 20px;
 }
 
-.team-role {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  letter-spacing: 0.3px;
-}
-
-.founder-card .team-role {
-  color: var(--accent);
-}
-
-.core-card {
-  border-top: 2px solid #a855f7;
-}
-
-.core-card .team-role {
-  color: #a855f7;
-}
-
-.dev-card {
-  border-top: 2px solid #22c55e;
-}
-
-.staff-card {
-  border-top: 2px solid #eab308;
-}
-
-.team-tags {
+.dossier-roles {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.25s ease 0.05s, transform 0.25s ease 0.05s;
 }
 
-.team-tag {
-  font-size: 0.6rem;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
+.dossier-bar:hover .dossier-roles {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.dossier-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
   white-space: nowrap;
 }
 
-.tag-dev       { background: rgba(204,31,31,0.12); color: #cc1f1f; }
-.tag-mapper    { background: rgba(34,197,94,0.12); color: #22c55e; }
-.tag-assets    { background: rgba(138,180,204,0.12); color: #8ab4cc; }
-.tag-audio     { background: rgba(168,85,247,0.12); color: #a855f7; }
-.tag-gm        { background: rgba(234,179,8,0.12); color: #eab308; }
-.tag-support   { background: rgba(234,179,8,0.08); color: #ca8a04; }
-.tag-wiki      { background: rgba(156,163,175,0.10); color: #9ca3af; }
-.tag-mod       { background: rgba(156,163,175,0.10); color: #9ca3af; }
-.tag-collab    { background: rgba(138,180,204,0.10); color: #8ab4cc; }
-
-.hof-card {
-  border-top: 2px solid #9ca3af;
-  opacity: 0.8;
+.dossier-role::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
-.hof-card .team-role {
-  color: #9ca3af;
-}
+/* Role dot colors */
+.role-founder::before   { background: #cc1f1f; }
+.role-lead-dev::before  { background: #cc1f1f; }
+.role-head-admin::before { background: #a855f7; }
+.role-dev::before       { background: #cc1f1f; }
+.role-mapper::before    { background: #22c55e; }
+.role-assets::before    { background: #8ab4cc; }
+.role-audio::before     { background: #a855f7; }
+.role-collab::before    { background: #8ab4cc; }
+.role-gm::before        { background: #eab308; }
+.role-support::before   { background: #ca8a04; }
+.role-wiki::before      { background: #9ca3af; }
+.role-mod::before       { background: #9ca3af; }
+
+/* Section accent bar colors */
+.bar-founder { border-left-color: #cc1f1f; }
+.bar-dev     { border-left-color: #22c55e; }
+.bar-staff   { border-left-color: #eab308; }
+.bar-hof     { border-left-color: #555; opacity: 0.7; }
+
+.bar-founder:hover { box-shadow: -4px 0 16px rgba(204,31,31,0.1); }
+.bar-dev:hover     { box-shadow: -4px 0 16px rgba(34,197,94,0.08); }
+.bar-staff:hover   { box-shadow: -4px 0 16px rgba(234,179,8,0.08); }
 
 /* Mod list */
 .about-mods-section {
@@ -2430,7 +2424,7 @@ img { display: block; max-width: 100%; }
    ============================================ */
 
 @media (max-width: 960px) {
-  .team-grid { grid-template-columns: repeat(3, 1fr); }
+  .dossier-grid { grid-template-columns: repeat(3, 1fr); }
   .mods-grid { grid-template-columns: repeat(3, 1fr); }
   .features-grid { grid-template-columns: repeat(2, 1fr); }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
@@ -2503,9 +2497,7 @@ img { display: block; max-width: 100%; }
   .about-block { padding: 24px 20px; }
 
   /* Team */
-  .team-grid { grid-template-columns: repeat(2, 1fr); }
-  .founders-grid { grid-template-columns: repeat(2, 1fr); }
-  .team-card { padding: 14px 16px; }
+  .dossier-grid { grid-template-columns: repeat(2, 1fr); }
 
   /* Mod list */
   .mods-grid { grid-template-columns: repeat(2, 1fr); }
@@ -2538,7 +2530,7 @@ img { display: block; max-width: 100%; }
   .stat:nth-child(3) { border-right: 1px solid var(--border); border-top: 1px solid var(--border); }
   .hero-title { letter-spacing: -1px; }
 
-  .team-grid, .founders-grid { grid-template-columns: 1fr; }
+  .dossier-grid { grid-template-columns: 1fr; }
   .mods-grid { grid-template-columns: 1fr; }
 
   .about-story h2 { font-size: 1.2rem; }
