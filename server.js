@@ -252,6 +252,10 @@ app.get('/admin/orders', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-orders.html'));
 });
 
+app.get('/map', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'map', 'index.html'));
+});
+
 app.get('/radio', (req, res) => {
   const trackFile = req.query.track;
   if (!trackFile) {
