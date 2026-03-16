@@ -32,7 +32,7 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { height: 100%; font-family: var(--body); background: var(--bg); color: var(--text); }
 
-        /* ---- Top Nav ---- */
+        /* ---- Top Nav (matches reforgedz.net) ---- */
         .nav {
             position: fixed;
             top: 0; left: 0; right: 0;
@@ -45,10 +45,10 @@
             max-width: 1180px;
             margin: 0 auto;
             padding: 0 40px;
-            height: 52px;
+            height: 68px;
             display: flex;
             align-items: center;
-            gap: 32px;
+            gap: 48px;
         }
         .nav-brand {
             display: flex;
@@ -56,7 +56,7 @@
             gap: 10px;
             font-family: var(--display);
             font-weight: 700;
-            font-size: 1rem;
+            font-size: 1.1rem;
             letter-spacing: 3px;
             color: #fff;
             text-decoration: none;
@@ -74,26 +74,94 @@
             border: none;
             color: var(--text-dim);
             font-family: var(--body);
-            font-size: 0.8rem;
+            font-size: 0.875rem;
             font-weight: 500;
-            padding: 6px 12px;
+            padding: 8px 14px;
             cursor: pointer;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             transition: color 0.2s;
+            letter-spacing: 0.01em;
             border-radius: 6px;
         }
         .nav-link:hover { color: var(--text); background: rgba(255,255,255,0.04); }
         .nav-link.active { color: #fff; }
+        .nav-cta {
+            display: inline-flex;
+            align-items: center;
+            padding: 9px 20px;
+            background: var(--accent);
+            color: #fff;
+            font-family: var(--body);
+            font-size: 0.85rem;
+            font-weight: 600;
+            border-radius: 6px;
+            text-decoration: none;
+            white-space: nowrap;
+            flex-shrink: 0;
+            transition: background 0.2s, transform 0.15s;
+        }
+        .nav-cta:hover { background: #e02525; transform: translateY(-1px); }
+        .nav-hamburger {
+            display: none !important;
+            -webkit-appearance: none;
+            appearance: none;
+            background: none;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 8px;
+            margin-left: auto;
+            flex-direction: column;
+            justify-content: center;
+            gap: 5px;
+            z-index: 110;
+            -webkit-tap-highlight-color: transparent;
+            width: 0; height: 0; overflow: hidden;
+        }
+        .nav-hamburger span {
+            display: block; width: 22px; height: 2px;
+            background: #fff; border-radius: 2px;
+            transition: transform 0.3s, opacity 0.3s;
+            pointer-events: none;
+        }
+        .nav-hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+        .nav-hamburger.open span:nth-child(2) { opacity: 0; }
+        .nav-hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+        @media (max-width: 768px) {
+            .nav-inner { padding: 0 16px; gap: 12px; }
+            .nav-hamburger { display: flex !important; width: auto; height: auto; overflow: visible; }
+            .nav-links {
+                display: none;
+                position: fixed;
+                top: 68px; left: 0; right: 0; bottom: 0;
+                background: rgba(8,8,8,0.98);
+                backdrop-filter: blur(12px);
+                flex-direction: column;
+                align-items: stretch;
+                padding: 24px 20px;
+                gap: 4px;
+                z-index: 105;
+                overflow-y: auto;
+            }
+            .nav-links.open { display: flex; }
+            .nav-links .nav-link { padding: 14px 16px; font-size: 1rem; border-radius: 8px; text-align: left; }
+            .nav-links .nav-link:hover, .nav-links .nav-link.active { background: rgba(255,255,255,0.06); }
+            .nav-cta { display: none; }
+            #sidebar { width: 100%; }
+            #sidebar.collapsed { transform: translateX(-100%); }
+            #sidebar-toggle { left: 10px; }
+            #sidebar:not(.collapsed) ~ #sidebar-toggle { left: calc(100% + 10px); display: none; }
+        }
 
         /* ---- Map Container ---- */
-        #map { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; background: #284563; }
+        #map { position: fixed; top: 68px; left: 0; right: 0; bottom: 0; background: #284563; }
 
         /* ---- Sidebar ---- */
         #sidebar {
             position: fixed;
-            top: 52px;
+            top: 68px;
             left: 0;
             width: 280px;
             bottom: 0;
@@ -109,7 +177,7 @@
 
         #sidebar-toggle {
             position: fixed;
-            top: 62px;
+            top: 78px;
             left: 290px;
             z-index: 1001;
             background: rgba(12, 12, 12, 0.95);
@@ -354,17 +422,21 @@
 </head>
 <body>
 
-<nav class="nav">
+<nav class="nav" id="nav">
     <div class="nav-inner">
         <a class="nav-brand" href="/">
             <span>REFORGED<span class="brand-z">Z</span></span>
         </a>
-        <div class="nav-links">
+        <button class="nav-hamburger" id="navHamburger" aria-label="Menu">
+            <span></span><span></span><span></span>
+        </button>
+        <div class="nav-links" id="navLinks">
             <a class="nav-link" href="/">Home</a>
-            <a class="nav-link" href="/shop">Shop</a>
+            <a class="nav-link" href="https://discord.gg/reforgedz" target="_blank">Community</a>
+            <a class="nav-link" href="https://wiki.reforgedz.net" target="_blank">Wiki</a>
             <a class="nav-link active" href="/map">Map</a>
-            <a class="nav-link" href="https://discord.gg/reforgedz" target="_blank">Discord</a>
         </div>
+        <a href="https://discord.gg/reforgedz" target="_blank" class="nav-cta">Join Discord</a>
     </div>
 </nav>
 
@@ -862,6 +934,12 @@ map.on('contextmenu', function(e) {
             .openOn(map);
         setTimeout(() => map.closePopup(popup), 1500);
     });
+});
+
+// Hamburger menu toggle
+document.getElementById('navHamburger').addEventListener('click', function() {
+    this.classList.toggle('open');
+    document.getElementById('navLinks').classList.toggle('open');
 });
 </script>
 </body>
