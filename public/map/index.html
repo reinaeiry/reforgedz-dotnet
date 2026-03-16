@@ -16,134 +16,220 @@
     <style>
         :root {
             --bg: #0c0c0c;
-            --surface: #181818;
-            --surface-raised: #202020;
-            --border: rgba(255,255,255,0.07);
-            --border-hover: rgba(255,255,255,0.15);
+            --bg-dark: #080808;
+            --surface: #141414;
+            --surface-raised: #1c1c1c;
+            --border: rgba(255,255,255,0.06);
+            --border-hover: rgba(255,255,255,0.12);
             --accent: #cc1f1f;
-            --accent-dim: rgba(204,31,31,0.12);
-            --text: #f0f0f0;
-            --text-dim: #aaa;
-            --text-ghost: #777;
+            --accent-dim: rgba(204,31,31,0.10);
+            --accent-hover: #e02525;
+            --text: #e8e8e8;
+            --text-dim: #999;
+            --text-ghost: #555;
             --display: 'Oswald', sans-serif;
             --body: 'Inter', sans-serif;
+            --radius: 4px;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { height: 100%; font-family: var(--body); background: var(--bg); color: var(--text); }
+        html, body { height: 100%; font-family: var(--body); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+        ::selection { background: var(--accent); color: #fff; }
 
-        /* ---- Top Nav (matches reforgedz.net) ---- */
+        /* Hide Leaflet attribution */
+        .leaflet-control-attribution { display: none !important; }
+
+        /* ---- Nav ---- */
         .nav {
-            position: fixed;
-            top: 0; left: 0; right: 0;
-            z-index: 2000;
-            background: rgba(8,8,8,0.96);
-            border-bottom: 1px solid var(--border);
-            backdrop-filter: blur(12px);
+            position: fixed; top: 0; left: 0; right: 0; z-index: 2000;
+            background: rgba(8,8,8,0.97); border-bottom: 1px solid var(--border); backdrop-filter: blur(16px);
         }
         .nav-inner {
-            max-width: 1180px;
-            margin: 0 auto;
-            padding: 0 40px;
-            height: 68px;
-            display: flex;
-            align-items: center;
-            gap: 48px;
+            max-width: 1180px; margin: 0 auto; padding: 0 40px; height: 68px;
+            display: flex; align-items: center; gap: 48px;
         }
         .nav-brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-family: var(--display);
-            font-weight: 700;
-            font-size: 1.1rem;
-            letter-spacing: 3px;
-            color: #fff;
-            text-decoration: none;
-            flex-shrink: 0;
+            display: flex; align-items: center; gap: 10px;
+            font-family: var(--display); font-weight: 700; font-size: 1.1rem;
+            letter-spacing: 3px; color: #fff; text-decoration: none; flex-shrink: 0;
         }
         .brand-z { color: var(--accent); }
-        .nav-links {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            flex: 1;
-        }
+        .nav-links { display: flex; align-items: center; gap: 4px; flex: 1; }
         .nav-link {
-            background: none;
-            border: none;
-            color: var(--text-dim);
-            font-family: var(--body);
-            font-size: 0.875rem;
-            font-weight: 500;
-            padding: 8px 14px;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            transition: color 0.2s;
-            letter-spacing: 0.01em;
-            border-radius: 6px;
+            background: none; border: none; color: var(--text-dim);
+            font-family: var(--body); font-size: 0.875rem; font-weight: 500;
+            padding: 8px 14px; cursor: pointer; text-decoration: none;
+            display: inline-flex; align-items: center; transition: color 0.2s;
+            letter-spacing: 0.01em; border-radius: 6px;
         }
         .nav-link:hover { color: var(--text); background: rgba(255,255,255,0.04); }
         .nav-link.active { color: #fff; }
         .nav-cta {
-            display: inline-flex;
-            align-items: center;
-            padding: 9px 20px;
-            background: var(--accent);
-            color: #fff;
-            font-family: var(--body);
-            font-size: 0.85rem;
-            font-weight: 600;
-            border-radius: 6px;
-            text-decoration: none;
-            white-space: nowrap;
-            flex-shrink: 0;
+            display: inline-flex; align-items: center; padding: 9px 20px;
+            background: var(--accent); color: #fff; font-family: var(--body);
+            font-size: 0.85rem; font-weight: 600; border-radius: 6px;
+            text-decoration: none; white-space: nowrap; flex-shrink: 0;
             transition: background 0.2s, transform 0.15s;
         }
-        .nav-cta:hover { background: #e02525; transform: translateY(-1px); }
+        .nav-cta:hover { background: var(--accent-hover); transform: translateY(-1px); }
         .nav-hamburger {
-            display: none !important;
-            -webkit-appearance: none;
-            appearance: none;
-            background: none;
-            border: none;
-            outline: none;
-            cursor: pointer;
-            padding: 8px;
-            margin-left: auto;
-            flex-direction: column;
-            justify-content: center;
-            gap: 5px;
-            z-index: 110;
-            -webkit-tap-highlight-color: transparent;
-            width: 0; height: 0; overflow: hidden;
+            display: none !important; appearance: none; background: none; border: none; outline: none;
+            cursor: pointer; padding: 8px; margin-left: auto; flex-direction: column;
+            justify-content: center; gap: 5px; z-index: 110; width: 0; height: 0; overflow: hidden;
         }
-        .nav-hamburger span {
-            display: block; width: 22px; height: 2px;
-            background: #fff; border-radius: 2px;
-            transition: transform 0.3s, opacity 0.3s;
-            pointer-events: none;
-        }
+        .nav-hamburger span { display: block; width: 22px; height: 2px; background: #fff; border-radius: 2px; transition: transform 0.3s, opacity 0.3s; pointer-events: none; }
         .nav-hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
         .nav-hamburger.open span:nth-child(2) { opacity: 0; }
         .nav-hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+        /* ---- Map ---- */
+        #map { position: fixed; top: 68px; left: 0; right: 0; bottom: 0; background: #1a2e42; }
+
+        /* ---- Sidebar ---- */
+        #sidebar {
+            position: fixed; top: 68px; left: 0; width: 260px; bottom: 0;
+            background: var(--bg-dark); color: var(--text); z-index: 1000;
+            overflow-y: auto; transition: transform 0.25s ease;
+            border-right: 1px solid var(--border);
+        }
+        #sidebar.collapsed { transform: translateX(-260px); }
+
+        #sidebar-toggle {
+            position: fixed; top: 78px; left: 270px; z-index: 1001;
+            background: var(--bg-dark); color: var(--text-dim);
+            border: 1px solid var(--border); padding: 5px 9px;
+            cursor: pointer; font-size: 13px; border-radius: var(--radius);
+            transition: left 0.25s ease, color 0.15s, border-color 0.15s;
+            line-height: 1;
+        }
+        #sidebar-toggle:hover { color: #fff; border-color: var(--border-hover); }
+        #sidebar.collapsed ~ #sidebar-toggle { left: 10px; }
+
+        .sidebar-header {
+            padding: 16px 16px 14px; border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(204,31,31,0.04) 0%, transparent 100%);
+        }
+        .sidebar-header h1 {
+            font-family: var(--display); font-size: 15px; font-weight: 600;
+            letter-spacing: 3px; color: #fff; margin-bottom: 1px;
+        }
+        .sidebar-header h1 span { color: var(--accent); }
+        .sidebar-header p { font-size: 10px; color: var(--text-ghost); letter-spacing: 0.5px; }
+
+        #search-box {
+            width: 100%; padding: 7px 10px; background: var(--surface); border: 1px solid var(--border);
+            color: var(--text); font-size: 12px; border-radius: var(--radius); margin-top: 10px; font-family: var(--body);
+        }
+        #search-box:focus { outline: none; border-color: rgba(204,31,31,0.4); box-shadow: 0 0 0 2px rgba(204,31,31,0.08); }
+        #search-box::placeholder { color: var(--text-ghost); }
+        #search-results { max-height: 180px; overflow-y: auto; margin-top: 2px; }
+        .search-result { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 12px; transition: background 0.1s; }
+        .search-result:hover { background: var(--accent-dim); }
+        .search-result .type-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 5px; font-weight: 600; }
+
+        .layer-section { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+        .layer-section h3 {
+            font-family: var(--display); font-size: 10px; text-transform: uppercase;
+            color: var(--text-ghost); margin-bottom: 6px; letter-spacing: 2px; font-weight: 500;
+        }
+        .layer-toggle { display: flex; align-items: center; padding: 3px 0; cursor: pointer; font-size: 12px; color: var(--text-dim); transition: color 0.1s; }
+        .layer-toggle:hover { color: var(--text); }
+        .layer-toggle input { margin-right: 8px; accent-color: var(--accent); width: 13px; height: 13px; }
+        .layer-icon { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; flex-shrink: 0; }
+        .layer-count { margin-left: auto; font-size: 10px; color: var(--text-ghost); font-variant-numeric: tabular-nums; }
+
+        /* Coords */
+        #coords-display {
+            position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+            background: rgba(8,8,8,0.85); color: var(--text-dim); padding: 4px 12px;
+            border-radius: var(--radius); font-size: 11px; font-family: 'Consolas', 'SF Mono', monospace;
+            z-index: 1000; border: 1px solid var(--border); backdrop-filter: blur(8px);
+        }
+
+        /* Credits */
+        #credits {
+            position: fixed; bottom: 8px; right: 8px;
+            background: rgba(8,8,8,0.75); color: var(--text-ghost); padding: 3px 8px;
+            border-radius: var(--radius); font-size: 9px; z-index: 1000; letter-spacing: 0.3px;
+        }
+
+        .grid-label { color: rgba(255,255,255,0.25); font-size: 10px; font-family: monospace; white-space: nowrap; }
+
+        /* Markers */
+        .custom-marker {
+            display: flex; align-items: center; justify-content: center; border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.9); box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+            font-size: 13px; color: #fff; text-align: center; line-height: 1;
+        }
+
+        /* Popups */
+        .leaflet-popup-content-wrapper { background: rgba(10,10,10,0.96); color: var(--text); border-radius: 6px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+        .leaflet-popup-tip { background: rgba(10,10,10,0.96); }
+        .leaflet-popup-close-button { color: var(--text-ghost) !important; }
+        .leaflet-popup-close-button:hover { color: #fff !important; }
+        .popup-title { font-family: var(--display); font-size: 14px; font-weight: 600; letter-spacing: 1px; color: #fff; }
+        .popup-type { font-size: 10px; color: var(--text-ghost); text-transform: uppercase; letter-spacing: 1.5px; margin: 2px 0 6px; }
+        .popup-coords { font-size: 11px; color: var(--text-dim); font-family: 'Consolas', monospace; }
+        .popup-desc { font-size: 11px; margin-top: 6px; color: var(--text-dim); line-height: 1.4; }
+
+        /* Zoom controls */
+        .leaflet-control-zoom a {
+            background: var(--bg-dark) !important; color: var(--text-dim) !important;
+            border-color: var(--border) !important; width: 30px !important; height: 30px !important;
+            line-height: 30px !important; font-size: 14px !important;
+        }
+        .leaflet-control-zoom a:hover { background: var(--surface-raised) !important; color: #fff !important; }
+
+        /* Custom markers form */
+        .user-marker-form { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+        .user-marker-form h3 { font-family: var(--display); font-size: 10px; text-transform: uppercase; color: var(--text-ghost); margin-bottom: 6px; letter-spacing: 2px; font-weight: 500; }
+        .user-marker-form input, .user-marker-form select {
+            width: 100%; padding: 6px 9px; margin-bottom: 5px; background: var(--surface);
+            border: 1px solid var(--border); color: var(--text); border-radius: var(--radius);
+            font-size: 12px; font-family: var(--body);
+        }
+        .user-marker-form input:focus, .user-marker-form select:focus { outline: none; border-color: rgba(204,31,31,0.4); }
+        .btn {
+            padding: 6px 12px; background: var(--surface-raised); color: var(--text-dim);
+            border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+            font-size: 11px; width: 100%; font-family: var(--body); transition: all 0.15s; font-weight: 500;
+        }
+        .btn:hover { border-color: var(--border-hover); color: var(--text); background: #222; }
+        .btn-accent { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+        .btn-accent:hover { background: var(--accent-hover); }
+        .btn-danger { color: var(--accent); border-color: rgba(204,31,31,0.2); }
+        .btn-danger:hover { background: var(--accent-dim); border-color: rgba(204,31,31,0.35); }
+
+        .custom-marker-item { display: flex; align-items: center; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+        .custom-marker-item .marker-info { cursor: pointer; flex: 1; color: var(--text-dim); transition: color 0.1s; }
+        .custom-marker-item .marker-info:hover { color: #fff; }
+        .custom-marker-item .marker-delete {
+            background: none; color: var(--text-ghost); border: none; padding: 2px 6px;
+            border-radius: 3px; cursor: pointer; font-size: 10px; margin-left: 6px; transition: color 0.1s;
+        }
+        .custom-marker-item .marker-delete:hover { color: var(--accent); }
+
+        #place-marker-hint {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(8,8,8,0.95); color: #fff; padding: 14px 24px; border-radius: 6px;
+            z-index: 2000; font-size: 13px; border: 1px solid var(--accent); font-weight: 500;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+        }
+
+        /* Scrollbar */
+        #sidebar::-webkit-scrollbar { width: 3px; }
+        #sidebar::-webkit-scrollbar-track { background: transparent; }
+        #sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+        #sidebar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+        /* Mobile */
         @media (max-width: 768px) {
             .nav-inner { padding: 0 16px; gap: 12px; }
             .nav-hamburger { display: flex !important; width: auto; height: auto; overflow: visible; }
             .nav-links {
-                display: none;
-                position: fixed;
-                top: 68px; left: 0; right: 0; bottom: 0;
-                background: rgba(8,8,8,0.98);
-                backdrop-filter: blur(12px);
-                flex-direction: column;
-                align-items: stretch;
-                padding: 24px 20px;
-                gap: 4px;
-                z-index: 105;
-                overflow-y: auto;
+                display: none; position: fixed; top: 68px; left: 0; right: 0; bottom: 0;
+                background: rgba(8,8,8,0.98); backdrop-filter: blur(12px);
+                flex-direction: column; align-items: stretch; padding: 24px 20px; gap: 4px; z-index: 105; overflow-y: auto;
             }
             .nav-links.open { display: flex; }
             .nav-links .nav-link { padding: 14px 16px; font-size: 1rem; border-radius: 8px; text-align: left; }
@@ -152,272 +238,8 @@
             #sidebar { width: 100%; }
             #sidebar.collapsed { transform: translateX(-100%); }
             #sidebar-toggle { left: 10px; }
-            #sidebar:not(.collapsed) ~ #sidebar-toggle { left: calc(100% + 10px); display: none; }
+            #sidebar:not(.collapsed) ~ #sidebar-toggle { display: none; }
         }
-
-        /* ---- Map Container ---- */
-        #map { position: fixed; top: 68px; left: 0; right: 0; bottom: 0; background: #284563; }
-
-        /* ---- Sidebar ---- */
-        #sidebar {
-            position: fixed;
-            top: 68px;
-            left: 0;
-            width: 280px;
-            bottom: 0;
-            background: rgba(12, 12, 12, 0.95);
-            color: var(--text);
-            z-index: 1000;
-            overflow-y: auto;
-            transition: transform 0.3s ease;
-            border-right: 1px solid var(--border);
-            backdrop-filter: blur(8px);
-        }
-        #sidebar.collapsed { transform: translateX(-280px); }
-
-        #sidebar-toggle {
-            position: fixed;
-            top: 78px;
-            left: 290px;
-            z-index: 1001;
-            background: rgba(12, 12, 12, 0.95);
-            color: var(--text-dim);
-            border: 1px solid var(--border);
-            padding: 6px 10px;
-            cursor: pointer;
-            font-size: 14px;
-            border-radius: 4px;
-            transition: left 0.3s ease;
-        }
-        #sidebar-toggle:hover { color: #fff; border-color: var(--border-hover); }
-        #sidebar.collapsed ~ #sidebar-toggle { left: 10px; }
-
-        .sidebar-header {
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--border);
-        }
-        .sidebar-header h1 {
-            font-family: var(--display);
-            font-size: 16px;
-            font-weight: 600;
-            letter-spacing: 2px;
-            color: #fff;
-            margin-bottom: 2px;
-        }
-        .sidebar-header p {
-            font-size: 11px;
-            color: var(--text-ghost);
-        }
-
-        /* Search */
-        #search-box {
-            width: 100%;
-            padding: 8px 12px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            color: var(--text);
-            font-size: 13px;
-            border-radius: 4px;
-            margin-top: 10px;
-            font-family: var(--body);
-        }
-        #search-box:focus { outline: none; border-color: var(--accent); }
-        #search-box::placeholder { color: var(--text-ghost); }
-        #search-results { max-height: 200px; overflow-y: auto; margin-top: 4px; }
-        .search-result {
-            padding: 6px 12px;
-            cursor: pointer;
-            border-bottom: 1px solid var(--border);
-            font-size: 12px;
-        }
-        .search-result:hover { background: var(--accent-dim); }
-        .search-result .type-badge {
-            font-size: 9px;
-            padding: 1px 5px;
-            border-radius: 3px;
-            margin-left: 6px;
-        }
-
-        /* Layer controls */
-        .layer-section {
-            padding: 12px 20px;
-            border-bottom: 1px solid var(--border);
-        }
-        .layer-section h3 {
-            font-family: var(--display);
-            font-size: 11px;
-            text-transform: uppercase;
-            color: var(--text-ghost);
-            margin-bottom: 8px;
-            letter-spacing: 2px;
-        }
-        .layer-toggle {
-            display: flex;
-            align-items: center;
-            padding: 4px 0;
-            cursor: pointer;
-            font-size: 13px;
-        }
-        .layer-toggle input { margin-right: 8px; accent-color: var(--accent); }
-        .layer-icon {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            display: inline-block;
-            margin-right: 8px;
-        }
-        .layer-count {
-            margin-left: auto;
-            font-size: 10px;
-            color: var(--text-ghost);
-        }
-
-        /* Coordinate display */
-        #coords-display {
-            position: fixed;
-            bottom: 10px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(12, 12, 12, 0.9);
-            color: var(--text-dim);
-            padding: 5px 14px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-family: 'Consolas', monospace;
-            z-index: 1000;
-            border: 1px solid var(--border);
-        }
-
-        /* Credits */
-        #credits {
-            position: fixed;
-            bottom: 10px;
-            right: 10px;
-            background: rgba(12, 12, 12, 0.85);
-            color: var(--text-ghost);
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 10px;
-            z-index: 1000;
-            border: 1px solid var(--border);
-        }
-
-        /* Grid overlay label */
-        .grid-label {
-            color: rgba(255,255,255,0.3);
-            font-size: 11px;
-            font-family: monospace;
-            white-space: nowrap;
-        }
-
-        /* Custom marker styles */
-        .custom-marker {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            border: 2px solid #fff;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-            font-size: 14px;
-            color: #fff;
-            text-align: center;
-            line-height: 1;
-        }
-
-        /* Popup styling */
-        .leaflet-popup-content-wrapper {
-            background: rgba(12, 12, 12, 0.95);
-            color: var(--text);
-            border-radius: 6px;
-            border: 1px solid var(--border);
-        }
-        .leaflet-popup-tip { background: rgba(12, 12, 12, 0.95); }
-        .popup-title { font-family: var(--display); font-size: 15px; font-weight: 600; letter-spacing: 1px; margin-bottom: 4px; color: #fff; }
-        .popup-type { font-size: 11px; color: var(--text-ghost); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
-        .popup-coords { font-size: 11px; color: var(--text-dim); font-family: monospace; }
-        .popup-desc { font-size: 12px; margin-top: 6px; color: var(--text-dim); }
-
-        /* User markers panel */
-        .user-marker-form { padding: 12px 20px; border-bottom: 1px solid var(--border); }
-        .user-marker-form h3 {
-            font-family: var(--display);
-            font-size: 11px;
-            text-transform: uppercase;
-            color: var(--text-ghost);
-            margin-bottom: 8px;
-            letter-spacing: 2px;
-        }
-        .user-marker-form input, .user-marker-form select {
-            width: 100%;
-            padding: 7px 10px;
-            margin-bottom: 6px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            color: var(--text);
-            border-radius: 4px;
-            font-size: 12px;
-            font-family: var(--body);
-        }
-        .user-marker-form input:focus, .user-marker-form select:focus { outline: none; border-color: var(--accent); }
-        .btn {
-            padding: 7px 14px;
-            background: var(--surface-raised);
-            color: var(--text);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            width: 100%;
-            font-family: var(--body);
-            transition: border-color 0.2s, background 0.2s;
-        }
-        .btn:hover { border-color: var(--border-hover); background: #282828; }
-        .btn-accent { background: var(--accent); border-color: var(--accent); color: #fff; }
-        .btn-accent:hover { background: #e02525; }
-        .btn-danger { background: rgba(204,31,31,0.15); border-color: rgba(204,31,31,0.3); color: var(--accent); }
-        .btn-danger:hover { background: rgba(204,31,31,0.25); }
-
-        .custom-marker-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 4px 0;
-            border-bottom: 1px solid var(--border);
-            font-size: 12px;
-        }
-        .custom-marker-item .marker-info { cursor: pointer; flex: 1; }
-        .custom-marker-item .marker-info:hover { color: #fff; }
-        .custom-marker-item .marker-delete {
-            background: rgba(204,31,31,0.15);
-            color: var(--accent);
-            border: none;
-            padding: 2px 8px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 10px;
-            margin-left: 8px;
-        }
-        .custom-marker-item .marker-delete:hover { background: rgba(204,31,31,0.3); }
-
-        #place-marker-hint {
-            display: none;
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(12, 12, 12, 0.95);
-            color: #fff;
-            padding: 16px 28px;
-            border-radius: 6px;
-            z-index: 2000;
-            font-size: 14px;
-            border: 1px solid var(--accent);
-        }
-
-        /* Scrollbar */
-        #sidebar::-webkit-scrollbar { width: 4px; }
-        #sidebar::-webkit-scrollbar-track { background: transparent; }
-        #sidebar::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 2px; }
     </style>
 </head>
 <body>
@@ -442,8 +264,8 @@
 
 <div id="sidebar">
     <div class="sidebar-header">
-        <h1>CHERNARUS</h1>
-        <p>Interactive Terrain Map - 15.36km x 15.36km</p>
+        <h1>CHERNARUS <span>MAP</span></h1>
+        <p>15.36km x 15.36km &mdash; Right-click to copy coords</p>
         <input type="text" id="search-box" placeholder="Search locations..." />
         <div id="search-results"></div>
     </div>
@@ -457,13 +279,13 @@
         <h3>Overlays</h3>
         <label class="layer-toggle">
             <input type="checkbox" id="toggle-grid" />
-            <span class="layer-icon" style="background: rgba(255,255,255,0.3);"></span>
-            Grid Overlay (1km)
+            <span class="layer-icon" style="background: rgba(255,255,255,0.25);"></span>
+            Grid (1km)
         </label>
         <label class="layer-toggle">
             <input type="checkbox" id="toggle-coords" checked />
             <span class="layer-icon" style="background: var(--accent);"></span>
-            Coordinate Display
+            Coordinates
         </label>
     </div>
 
@@ -478,11 +300,13 @@
             <option value="loot">Loot Spot</option>
             <option value="objective">Objective</option>
         </select>
-        <button class="btn btn-accent" id="btn-place-marker">Click to Place Marker</button>
-        <button class="btn" id="btn-export-markers" style="margin-top:5px;">Export Markers (JSON)</button>
-        <button class="btn" id="btn-import-markers" style="margin-top:5px;">Import Markers (JSON)</button>
+        <button class="btn btn-accent" id="btn-place-marker">Place Marker</button>
+        <div style="display:flex;gap:4px;margin-top:4px;">
+            <button class="btn" id="btn-export-markers" style="flex:1;">Export</button>
+            <button class="btn" id="btn-import-markers" style="flex:1;">Import</button>
+        </div>
         <input type="file" id="import-file" accept=".json" style="display:none;" />
-        <button class="btn btn-danger" id="btn-clear-custom" style="margin-top:5px;">Clear All Custom</button>
+        <button class="btn btn-danger" id="btn-clear-custom" style="margin-top:4px;">Clear All</button>
     </div>
 
     <div class="layer-section" id="custom-markers-list-section" style="display:none;">
@@ -502,21 +326,16 @@
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="map-data.js"></script>
 <script>
-// ============================================================
-// CONFIG
-// ============================================================
 const MAP_SIZE = 15360;
-const TILE_DIR = 'tiles';
 const USE_TILES = false;
 const MAX_ZOOM = 7;
 const MIN_ZOOM = -4;
 const DEFAULT_ZOOM = 0;
 
-// Image bounds offset to align tiles with game coordinates
 const IMG_OFFSET_X = 178;
 const IMG_OFFSET_Z = 72;
-// Right edge pulled in by 128 to fix border alignment
-const mapBounds = [[IMG_OFFSET_Z, IMG_OFFSET_X], [MAP_SIZE + IMG_OFFSET_Z, MAP_SIZE + IMG_OFFSET_X - 128]];
+const imageBounds = [[IMG_OFFSET_Z, IMG_OFFSET_X], [MAP_SIZE + IMG_OFFSET_Z, MAP_SIZE + IMG_OFFSET_X]];
+const borderBounds = [[IMG_OFFSET_Z, IMG_OFFSET_X], [MAP_SIZE + IMG_OFFSET_Z, MAP_SIZE + IMG_OFFSET_X - 128]];
 
 const map = L.map('map', {
     crs: L.CRS.Simple,
@@ -524,53 +343,32 @@ const map = L.map('map', {
     maxZoom: MAX_ZOOM,
     maxBounds: [[-5000, -5000], [MAP_SIZE + 5000, MAP_SIZE + 5000]],
     maxBoundsViscosity: 0.5,
-    zoomControl: false
+    zoomControl: false,
+    attributionControl: false
 });
 
 L.control.zoom({ position: 'topright' }).addTo(map);
 map.setView([MAP_SIZE / 2, MAP_SIZE / 2], DEFAULT_ZOOM);
 
-// ============================================================
-// BASE MAP LAYER
-// ============================================================
 if (USE_TILES) {
-    L.tileLayer(TILE_DIR + '/{z}/{x}/{y}.png', {
-        minZoom: 0,
-        maxZoom: 5,
-        maxNativeZoom: 5,
-        noWrap: true,
-        bounds: mapBounds,
-        tileSize: 256,
-        tms: true
+    L.tileLayer('tiles/{z}/{x}/{y}.png', {
+        minZoom: 0, maxZoom: 5, maxNativeZoom: 5, noWrap: true,
+        bounds: imageBounds, tileSize: 256, tms: true
     }).addTo(map);
 } else {
-    try {
-        L.imageOverlay('map-image-hires.jpg', mapBounds).addTo(map);
-    } catch(e) {
-        console.log('No map image found.');
-    }
+    try { L.imageOverlay('map-image-hires.jpg', imageBounds).addTo(map); } catch(e) {}
 }
 
-// Map boundary outline
-L.rectangle(mapBounds, {
-    color: '#000000',
-    weight: 2,
-    fill: false,
-    interactive: false
-}).addTo(map);
+L.rectangle(borderBounds, { color: '#000', weight: 2, fill: false, interactive: false }).addTo(map);
 
-// ============================================================
-// MARKER DEFINITIONS
-// ============================================================
 const MARKER_STYLES = {
     city:       { color: '#FFD700', icon: '🏙️', size: 28 },
     town:       { color: '#4a9eff', icon: '🏘️', size: 24 },
     village:    { color: '#6bc46b', icon: '🏠', size: 20 },
     military:   { color: '#cc1f1f', icon: '⚔️', size: 26 },
     quest:      { color: '#cc66ff', icon: '❗', size: 22 },
-    landmark:   { color: '#ff9900', icon: '📍', size: 22 },
-    road:       { color: '#888888', icon: '🛣️', size: 18 },
-    custom:     { color: '#ffffff', icon: '📌', size: 22 },
+    road:       { color: '#666',    icon: '🛣️', size: 18 },
+    custom:     { color: '#fff',    icon: '📌', size: 22 },
     base:       { color: '#00cc66', icon: '🏕️', size: 24 },
     danger:     { color: '#cc1f1f', icon: '☠️', size: 24 },
     loot:       { color: '#ffcc00', icon: '💰', size: 22 },
@@ -578,369 +376,172 @@ const MARKER_STYLES = {
 };
 
 function createMarkerIcon(type) {
-    const style = MARKER_STYLES[type] || MARKER_STYLES.custom;
+    const s = MARKER_STYLES[type] || MARKER_STYLES.custom;
     return L.divIcon({
-        html: `<div class="custom-marker" style="background:${style.color}; width:${style.size}px; height:${style.size}px;">${style.icon}</div>`,
-        iconSize: [style.size, style.size],
-        iconAnchor: [style.size/2, style.size/2],
-        className: ''
+        html: `<div class="custom-marker" style="background:${s.color};width:${s.size}px;height:${s.size}px;">${s.icon}</div>`,
+        iconSize: [s.size, s.size], iconAnchor: [s.size/2, s.size/2], className: ''
     });
 }
 
-function createPopup(marker) {
-    const style = MARKER_STYLES[marker.type] || MARKER_STYLES.custom;
-    return `
-        <div class="popup-title">${marker.name}</div>
-        <div class="popup-type" style="color:${style.color}">${marker.type}</div>
-        <div class="popup-coords">X: ${Math.round(marker.x)} | Z: ${Math.round(marker.z)}${marker.y ? ' | Y: ' + Math.round(marker.y) : ''}</div>
-        ${marker.description ? `<div class="popup-desc">${marker.description}</div>` : ''}
-    `;
+function createPopup(m) {
+    const s = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
+    return `<div class="popup-title">${m.name}</div>
+        <div class="popup-type" style="color:${s.color}">${m.type}</div>
+        <div class="popup-coords">X: ${Math.round(m.x)} | Z: ${Math.round(m.z)}${m.y ? ' | Y: '+Math.round(m.y) : ''}</div>
+        ${m.description ? `<div class="popup-desc">${m.description}</div>` : ''}`;
 }
 
-// ============================================================
-// LAYER GROUPS
-// ============================================================
-const layerGroups = {};
-const layerCounts = {};
+const layerGroups = {}, layerCounts = {};
 
 function initLayers() {
-    const types = [...new Set(MAP_MARKERS.map(m => m.type))];
-    types.forEach(type => {
-        layerGroups[type] = L.layerGroup().addTo(map);
-        layerCounts[type] = 0;
-    });
+    [...new Set(MAP_MARKERS.map(m => m.type))].forEach(t => { layerGroups[t] = L.layerGroup().addTo(map); layerCounts[t] = 0; });
     if (!layerGroups.custom) layerGroups.custom = L.layerGroup().addTo(map);
 }
 
-// ============================================================
-// POPULATE MARKERS
-// ============================================================
 function loadMarkers() {
     initLayers();
-    MAP_MARKERS.forEach(m => {
-        const leafletMarker = L.marker([m.z, m.x], {
-            icon: createMarkerIcon(m.type),
-            title: m.name
-        });
-        leafletMarker.bindPopup(createPopup(m));
-        leafletMarker.addTo(layerGroups[m.type]);
+    MAP_MARKERS.filter(m => m.type !== 'landmark').forEach(m => {
+        L.marker([m.z, m.x], { icon: createMarkerIcon(m.type), title: m.name }).bindPopup(createPopup(m)).addTo(layerGroups[m.type]);
         layerCounts[m.type] = (layerCounts[m.type] || 0) + 1;
     });
     buildLayerToggles();
 }
 
-// ============================================================
-// LAYER TOGGLE UI
-// ============================================================
 function buildLayerToggles() {
-    const container = document.getElementById('layer-toggles');
-    container.innerHTML = '';
+    const c = document.getElementById('layer-toggles');
+    c.innerHTML = '';
     Object.keys(layerGroups).forEach(type => {
-        const style = MARKER_STYLES[type] || MARKER_STYLES.custom;
-        const count = layerCounts[type] || 0;
+        const s = MARKER_STYLES[type] || MARKER_STYLES.custom;
         const label = document.createElement('label');
         label.className = 'layer-toggle';
-        label.innerHTML = `
-            <input type="checkbox" checked data-layer="${type}" />
-            <span class="layer-icon" style="background:${style.color};"></span>
-            ${type.charAt(0).toUpperCase() + type.slice(1)}
-            <span class="layer-count">${count}</span>
-        `;
-        container.appendChild(label);
+        label.innerHTML = `<input type="checkbox" checked data-layer="${type}" /><span class="layer-icon" style="background:${s.color};"></span>${type.charAt(0).toUpperCase()+type.slice(1)}<span class="layer-count">${layerCounts[type]||0}</span>`;
+        c.appendChild(label);
         label.querySelector('input').addEventListener('change', function() {
-            if (this.checked) map.addLayer(layerGroups[type]);
-            else map.removeLayer(layerGroups[type]);
+            this.checked ? map.addLayer(layerGroups[type]) : map.removeLayer(layerGroups[type]);
             saveLayerPrefs();
         });
     });
 }
 
-// ============================================================
-// SEARCH
-// ============================================================
-const searchBox = document.getElementById('search-box');
-const searchResults = document.getElementById('search-results');
-
+// Search
+const searchBox = document.getElementById('search-box'), searchResults = document.getElementById('search-results');
 searchBox.addEventListener('input', function() {
-    const query = this.value.toLowerCase().trim();
+    const q = this.value.toLowerCase().trim();
     searchResults.innerHTML = '';
-    if (query.length < 2) return;
-    const matches = MAP_MARKERS.filter(m => m.name.toLowerCase().includes(query)).slice(0, 10);
-    matches.forEach(m => {
-        const style = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
+    if (q.length < 2) return;
+    MAP_MARKERS.filter(m => m.name.toLowerCase().includes(q)).slice(0, 10).forEach(m => {
+        const s = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
         const div = document.createElement('div');
         div.className = 'search-result';
-        div.innerHTML = `${m.name} <span class="type-badge" style="background:${style.color};color:#000;">${m.type}</span>`;
+        div.innerHTML = `${m.name} <span class="type-badge" style="background:${s.color};color:#000;">${m.type}</span>`;
         div.addEventListener('click', () => {
-            map.setView([m.z, m.x], 5);
-            searchResults.innerHTML = '';
-            searchBox.value = m.name;
-            layerGroups[m.type].eachLayer(layer => {
-                if (layer.options.title === m.name) layer.openPopup();
-            });
+            map.setView([m.z, m.x], 5); searchResults.innerHTML = ''; searchBox.value = m.name;
+            layerGroups[m.type].eachLayer(l => { if (l.options.title === m.name) l.openPopup(); });
         });
         searchResults.appendChild(div);
     });
 });
 
-// ============================================================
-// GRID OVERLAY
-// ============================================================
+// Grid
 const gridLayer = L.layerGroup();
-const GRID_SIZE = 1000;
-
-function createGrid() {
-    for (let x = 0; x <= MAP_SIZE; x += GRID_SIZE) {
-        L.polyline([[0, x], [MAP_SIZE, x]], { color: 'rgba(255,255,255,0.12)', weight: 1 }).addTo(gridLayer);
-        if (x < MAP_SIZE) {
-            L.marker([200, x + GRID_SIZE/2], {
-                icon: L.divIcon({ className: 'grid-label', html: `${x/1000}`, iconSize: [30, 15] })
-            }).addTo(gridLayer);
-        }
+(function createGrid() {
+    for (let x = 0; x <= MAP_SIZE; x += 1000) {
+        L.polyline([[0, x], [MAP_SIZE, x]], { color: 'rgba(255,255,255,0.1)', weight: 1 }).addTo(gridLayer);
+        if (x < MAP_SIZE) L.marker([200, x+500], { icon: L.divIcon({ className: 'grid-label', html: `${x/1000}`, iconSize: [30, 15] }) }).addTo(gridLayer);
     }
-    for (let z = 0; z <= MAP_SIZE; z += GRID_SIZE) {
-        L.polyline([[z, 0], [z, MAP_SIZE]], { color: 'rgba(255,255,255,0.12)', weight: 1 }).addTo(gridLayer);
-        if (z < MAP_SIZE) {
-            L.marker([z + GRID_SIZE/2, 200], {
-                icon: L.divIcon({ className: 'grid-label', html: `${z/1000}`, iconSize: [30, 15] })
-            }).addTo(gridLayer);
-        }
+    for (let z = 0; z <= MAP_SIZE; z += 1000) {
+        L.polyline([[z, 0], [z, MAP_SIZE]], { color: 'rgba(255,255,255,0.1)', weight: 1 }).addTo(gridLayer);
+        if (z < MAP_SIZE) L.marker([z+500, 200], { icon: L.divIcon({ className: 'grid-label', html: `${z/1000}`, iconSize: [30, 15] }) }).addTo(gridLayer);
     }
-}
-createGrid();
+})();
+document.getElementById('toggle-grid').addEventListener('change', function() { this.checked ? map.addLayer(gridLayer) : map.removeLayer(gridLayer); });
 
-document.getElementById('toggle-grid').addEventListener('change', function() {
-    if (this.checked) map.addLayer(gridLayer);
-    else map.removeLayer(gridLayer);
-});
-
-// ============================================================
-// COORDINATE DISPLAY
-// ============================================================
+// Coords
 const coordsDisplay = document.getElementById('coords-display');
-map.on('mousemove', function(e) {
-    coordsDisplay.textContent = `X: ${Math.round(e.latlng.lng)} | Z: ${Math.round(e.latlng.lat)}`;
-});
-document.getElementById('toggle-coords').addEventListener('change', function() {
-    coordsDisplay.style.display = this.checked ? 'block' : 'none';
-});
+map.on('mousemove', e => { coordsDisplay.textContent = `X: ${Math.round(e.latlng.lng)} | Z: ${Math.round(e.latlng.lat)}`; });
+document.getElementById('toggle-coords').addEventListener('change', function() { coordsDisplay.style.display = this.checked ? 'block' : 'none'; });
 
-// ============================================================
-// CUSTOM MARKER SYSTEM
-// ============================================================
+// Custom markers
 let placingMarker = false;
 let customMarkers = JSON.parse(localStorage.getItem('customMarkers') || '[]');
 const customLeafletMarkers = {};
 const hint = document.getElementById('place-marker-hint');
+const genId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+const saveCustomMarkers = () => { localStorage.setItem('customMarkers', JSON.stringify(customMarkers)); renderCustomMarkersList(); };
+const saveLayerPrefs = () => { const p = {}; document.querySelectorAll('#layer-toggles input[data-layer]').forEach(cb => p[cb.dataset.layer] = cb.checked); localStorage.setItem('layerPrefs', JSON.stringify(p)); };
+const loadLayerPrefs = () => { const p = JSON.parse(localStorage.getItem('layerPrefs') || '{}'); Object.entries(p).forEach(([t, v]) => { const cb = document.querySelector(`#layer-toggles input[data-layer="${t}"]`); if (cb && !v) { cb.checked = false; if (layerGroups[t]) map.removeLayer(layerGroups[t]); } }); };
 
-function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-}
-
-function saveCustomMarkers() {
-    localStorage.setItem('customMarkers', JSON.stringify(customMarkers));
-    renderCustomMarkersList();
-}
-
-function saveLayerPrefs() {
-    const prefs = {};
-    document.querySelectorAll('#layer-toggles input[data-layer]').forEach(cb => {
-        prefs[cb.dataset.layer] = cb.checked;
-    });
-    localStorage.setItem('layerPrefs', JSON.stringify(prefs));
-}
-
-function loadLayerPrefs() {
-    const prefs = JSON.parse(localStorage.getItem('layerPrefs') || '{}');
-    Object.entries(prefs).forEach(([type, visible]) => {
-        const cb = document.querySelector(`#layer-toggles input[data-layer="${type}"]`);
-        if (cb && !visible) {
-            cb.checked = false;
-            if (layerGroups[type]) map.removeLayer(layerGroups[type]);
-        }
-    });
-}
-
-function addCustomMarkerToMap(markerData) {
-    if (!layerGroups[markerData.type]) {
-        layerGroups[markerData.type] = L.layerGroup().addTo(map);
-    }
-    const popupContent = `
-        ${createPopup(markerData)}
-        <button onclick="deleteCustomMarker('${markerData.id}')"
-                style="margin-top:8px;padding:4px 12px;background:rgba(204,31,31,0.15);color:#cc1f1f;border:1px solid rgba(204,31,31,0.3);border-radius:4px;cursor:pointer;font-size:11px;width:100%;">
-            Delete Marker
-        </button>
-    `;
-    const leafletMarker = L.marker([markerData.z, markerData.x], {
-        icon: createMarkerIcon(markerData.type),
-        title: markerData.name
-    });
-    leafletMarker.bindPopup(popupContent);
-    leafletMarker.addTo(layerGroups[markerData.type]);
-    customLeafletMarkers[markerData.id] = leafletMarker;
+function addCustomMarkerToMap(d) {
+    if (!layerGroups[d.type]) layerGroups[d.type] = L.layerGroup().addTo(map);
+    const popup = `${createPopup(d)}<button onclick="deleteCustomMarker('${d.id}')" style="margin-top:8px;padding:4px 10px;background:none;color:#cc1f1f;border:1px solid rgba(204,31,31,0.3);border-radius:4px;cursor:pointer;font-size:10px;width:100%;font-family:var(--body);">Delete Marker</button>`;
+    const lm = L.marker([d.z, d.x], { icon: createMarkerIcon(d.type), title: d.name }).bindPopup(popup);
+    lm.addTo(layerGroups[d.type]);
+    customLeafletMarkers[d.id] = lm;
 }
 
 function deleteCustomMarker(id) {
-    const idx = customMarkers.findIndex(m => m.id === id);
-    if (idx === -1) return;
-    const marker = customMarkers[idx];
-    if (customLeafletMarkers[id]) {
-        if (layerGroups[marker.type]) layerGroups[marker.type].removeLayer(customLeafletMarkers[id]);
-        delete customLeafletMarkers[id];
-    }
-    customMarkers.splice(idx, 1);
-    saveCustomMarkers();
-    map.closePopup();
+    const i = customMarkers.findIndex(m => m.id === id);
+    if (i === -1) return;
+    const m = customMarkers[i];
+    if (customLeafletMarkers[id]) { if (layerGroups[m.type]) layerGroups[m.type].removeLayer(customLeafletMarkers[id]); delete customLeafletMarkers[id]; }
+    customMarkers.splice(i, 1); saveCustomMarkers(); map.closePopup();
 }
 window.deleteCustomMarker = deleteCustomMarker;
 
 function renderCustomMarkersList() {
-    const list = document.getElementById('custom-markers-list');
-    const section = document.getElementById('custom-markers-list-section');
-    if (customMarkers.length === 0) { section.style.display = 'none'; return; }
-    section.style.display = 'block';
-    list.innerHTML = '';
+    const list = document.getElementById('custom-markers-list'), section = document.getElementById('custom-markers-list-section');
+    if (!customMarkers.length) { section.style.display = 'none'; return; }
+    section.style.display = 'block'; list.innerHTML = '';
     customMarkers.forEach(m => {
-        const style = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
+        const s = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
         const div = document.createElement('div');
         div.className = 'custom-marker-item';
-        div.innerHTML = `
-            <span class="marker-info" data-id="${m.id}">
-                <span class="layer-icon" style="background:${style.color};"></span>
-                ${m.name} <span style="color:var(--text-ghost);font-size:10px;">(${m.x}, ${m.z})</span>
-            </span>
-            <button class="marker-delete" data-id="${m.id}">X</button>
-        `;
+        div.innerHTML = `<span class="marker-info" data-id="${m.id}"><span class="layer-icon" style="background:${s.color};"></span>${m.name} <span style="color:var(--text-ghost);font-size:9px;">(${m.x},${m.z})</span></span><button class="marker-delete" data-id="${m.id}">x</button>`;
         list.appendChild(div);
-        div.querySelector('.marker-info').addEventListener('click', () => {
-            map.setView([m.z, m.x], 5);
-            if (customLeafletMarkers[m.id]) customLeafletMarkers[m.id].openPopup();
-        });
+        div.querySelector('.marker-info').addEventListener('click', () => { map.setView([m.z, m.x], 5); if (customLeafletMarkers[m.id]) customLeafletMarkers[m.id].openPopup(); });
         div.querySelector('.marker-delete').addEventListener('click', () => deleteCustomMarker(m.id));
     });
 }
 
-document.getElementById('btn-place-marker').addEventListener('click', function() {
-    placingMarker = true;
-    hint.style.display = 'block';
-    map.getContainer().style.cursor = 'crosshair';
-});
-
-map.on('click', function(e) {
+document.getElementById('btn-place-marker').addEventListener('click', () => { placingMarker = true; hint.style.display = 'block'; map.getContainer().style.cursor = 'crosshair'; });
+map.on('click', e => {
     if (!placingMarker) return;
-    placingMarker = false;
-    hint.style.display = 'none';
-    map.getContainer().style.cursor = '';
-    const markerData = {
-        id: generateId(),
-        name: document.getElementById('custom-name').value || 'Custom Marker',
-        type: document.getElementById('custom-type').value,
-        x: Math.round(e.latlng.lng),
-        z: Math.round(e.latlng.lat),
-        y: 0,
-        description: document.getElementById('custom-desc').value || '',
-        created: new Date().toISOString()
-    };
-    customMarkers.push(markerData);
-    addCustomMarkerToMap(markerData);
-    saveCustomMarkers();
-    document.getElementById('custom-name').value = '';
-    document.getElementById('custom-desc').value = '';
+    placingMarker = false; hint.style.display = 'none'; map.getContainer().style.cursor = '';
+    const d = { id: genId(), name: document.getElementById('custom-name').value || 'Custom Marker', type: document.getElementById('custom-type').value, x: Math.round(e.latlng.lng), z: Math.round(e.latlng.lat), y: 0, description: document.getElementById('custom-desc').value || '', created: new Date().toISOString() };
+    customMarkers.push(d); addCustomMarkerToMap(d); saveCustomMarkers();
+    document.getElementById('custom-name').value = ''; document.getElementById('custom-desc').value = '';
 });
 
-customMarkers.forEach(m => {
-    if (!m.id) m.id = generateId();
-    addCustomMarkerToMap(m);
-});
+customMarkers.forEach(m => { if (!m.id) m.id = genId(); addCustomMarkerToMap(m); });
 renderCustomMarkersList();
 
-document.getElementById('btn-export-markers').addEventListener('click', function() {
-    if (customMarkers.length === 0) { alert('No custom markers to export.'); return; }
-    const blob = new Blob([JSON.stringify(customMarkers, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `chernarus-markers-${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+document.getElementById('btn-export-markers').addEventListener('click', () => {
+    if (!customMarkers.length) return;
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(customMarkers, null, 2)], { type: 'application/json' }));
+    a.download = `chernarus-markers-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(a.href);
 });
-
-document.getElementById('btn-import-markers').addEventListener('click', function() {
-    document.getElementById('import-file').click();
-});
-
+document.getElementById('btn-import-markers').addEventListener('click', () => document.getElementById('import-file').click());
 document.getElementById('import-file').addEventListener('change', function(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = function(ev) {
-        try {
-            const imported = JSON.parse(ev.target.result);
-            if (!Array.isArray(imported)) throw new Error('Not an array');
-            let count = 0;
-            imported.forEach(m => {
-                m.id = generateId();
-                if (!m.name || !m.type || m.x === undefined || m.z === undefined) return;
-                customMarkers.push(m);
-                addCustomMarkerToMap(m);
-                count++;
-            });
-            saveCustomMarkers();
-            alert(`Imported ${count} markers.`);
-        } catch (err) { alert('Invalid marker file: ' + err.message); }
-    };
-    reader.readAsText(file);
-    this.value = '';
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = ev => { try { const arr = JSON.parse(ev.target.result); if (!Array.isArray(arr)) throw new Error('Not an array'); let c = 0; arr.forEach(m => { m.id = genId(); if (!m.name||!m.type||m.x===undefined||m.z===undefined) return; customMarkers.push(m); addCustomMarkerToMap(m); c++; }); saveCustomMarkers(); alert(`Imported ${c} markers.`); } catch(err) { alert('Invalid file: '+err.message); } };
+    r.readAsText(f); this.value = '';
+});
+document.getElementById('btn-clear-custom').addEventListener('click', () => {
+    if (!customMarkers.length || !confirm(`Delete all ${customMarkers.length} custom markers?`)) return;
+    customMarkers.forEach(m => { if (customLeafletMarkers[m.id] && layerGroups[m.type]) layerGroups[m.type].removeLayer(customLeafletMarkers[m.id]); });
+    customMarkers.length = 0; Object.keys(customLeafletMarkers).forEach(k => delete customLeafletMarkers[k]); saveCustomMarkers();
 });
 
-document.getElementById('btn-clear-custom').addEventListener('click', function() {
-    if (customMarkers.length === 0) return;
-    if (!confirm(`Delete all ${customMarkers.length} custom markers?`)) return;
-    customMarkers.forEach(m => {
-        if (customLeafletMarkers[m.id] && layerGroups[m.type]) layerGroups[m.type].removeLayer(customLeafletMarkers[m.id]);
-    });
-    customMarkers.length = 0;
-    Object.keys(customLeafletMarkers).forEach(k => delete customLeafletMarkers[k]);
-    saveCustomMarkers();
-});
+// Sidebar
+document.getElementById('sidebar-toggle').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('collapsed'));
 
-// ============================================================
-// SIDEBAR TOGGLE
-// ============================================================
-document.getElementById('sidebar-toggle').addEventListener('click', function() {
-    document.getElementById('sidebar').classList.toggle('collapsed');
-});
-
-// ============================================================
-// INIT
-// ============================================================
-loadMarkers();
-loadLayerPrefs();
-
-map.on('moveend', function() {
-    const c = map.getCenter();
-    localStorage.setItem('mapView', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
-});
-
-const savedView = JSON.parse(localStorage.getItem('mapView') || 'null');
-if (savedView) map.setView([savedView.lat, savedView.lng], savedView.zoom);
-
-map.on('contextmenu', function(e) {
-    const x = Math.round(e.latlng.lng);
-    const z = Math.round(e.latlng.lat);
-    navigator.clipboard.writeText(`${x}, ${z}`).then(() => {
-        const popup = L.popup().setLatLng(e.latlng)
-            .setContent(`<div style="font-size:12px;">Copied: <b>${x}, ${z}</b></div>`)
-            .openOn(map);
-        setTimeout(() => map.closePopup(popup), 1500);
-    });
-});
-
-// Hamburger menu toggle
-document.getElementById('navHamburger').addEventListener('click', function() {
-    this.classList.toggle('open');
-    document.getElementById('navLinks').classList.toggle('open');
-});
+// Init
+loadMarkers(); loadLayerPrefs();
+map.on('moveend', () => { const c = map.getCenter(); localStorage.setItem('mapView', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() })); });
+const sv = JSON.parse(localStorage.getItem('mapView') || 'null'); if (sv) map.setView([sv.lat, sv.lng], sv.zoom);
+map.on('contextmenu', e => { const x = Math.round(e.latlng.lng), z = Math.round(e.latlng.lat); navigator.clipboard.writeText(`${x}, ${z}`).then(() => { const p = L.popup().setLatLng(e.latlng).setContent(`<div style="font-size:11px;font-family:var(--body);">Copied <b>${x}, ${z}</b></div>`).openOn(map); setTimeout(() => map.closePopup(p), 1200); }); });
+document.getElementById('navHamburger').addEventListener('click', function() { this.classList.toggle('open'); document.getElementById('navLinks').classList.toggle('open'); });
 </script>
 </body>
 </html>
