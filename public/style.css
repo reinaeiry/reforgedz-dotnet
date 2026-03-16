@@ -736,21 +736,40 @@ img { display: block; max-width: 100%; }
   color: #a855f7;
 }
 
-.collab-card {
-  border-top: 2px solid #8ab4cc;
+.dev-card {
+  border-top: 2px solid #22c55e;
 }
 
-.collab-card .team-role {
-  color: #8ab4cc;
-}
-
-.gm-card {
+.staff-card {
   border-top: 2px solid #eab308;
 }
 
-.gm-card .team-role {
-  color: #eab308;
+.team-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
 }
+
+.team-tag {
+  font-size: 0.6rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  white-space: nowrap;
+}
+
+.tag-dev       { background: rgba(204,31,31,0.12); color: #cc1f1f; }
+.tag-mapper    { background: rgba(34,197,94,0.12); color: #22c55e; }
+.tag-assets    { background: rgba(138,180,204,0.12); color: #8ab4cc; }
+.tag-audio     { background: rgba(168,85,247,0.12); color: #a855f7; }
+.tag-gm        { background: rgba(234,179,8,0.12); color: #eab308; }
+.tag-support   { background: rgba(234,179,8,0.08); color: #ca8a04; }
+.tag-wiki      { background: rgba(156,163,175,0.10); color: #9ca3af; }
+.tag-mod       { background: rgba(156,163,175,0.10); color: #9ca3af; }
+.tag-collab    { background: rgba(138,180,204,0.10); color: #8ab4cc; }
 
 .hof-card {
   border-top: 2px solid #9ca3af;
