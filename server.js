@@ -275,13 +275,18 @@ function formatUptime(ms) {
 async function pollServerStatus() {
   if (!PTERO_URL || !PTERO_KEY) return;
   try {
-    const listRes = await pteroFetch('/api/client?type=admin&per_page=50');
+    const listRes = await pteroFetch('/api/client?per_page=50');
     const servers = listRes.data || [];
     const statusList = [];
 
     for (const srv of servers) {
       const attr = srv.attributes;
       const id = attr.identifier;
+      const nameLower = (attr.name || '').toLowerCase();
+
+      // Skip dev servers and web servers
+      if (nameLower.includes('dev') || nameLower.includes('.net') || nameLower.includes('.com')) continue;
+
       const region = detectRegion(attr.name, attr.node);
 
       // Get default allocation for IP:port
