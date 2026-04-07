@@ -235,6 +235,89 @@ app.post('/api/radio/listened', (req, res) => {
   res.sendStatus(200);
 });
 
+// ---- Pterodactyl Server Status ----
+const PTERO_URL = (process.env.PTERODACTYL_PANEL_URL || '').replace(/\/+$/, '');
+const PTERO_KEY = process.env.PTERODACTYL_CLIENT_API_KEY || '';
+const STATUS_POLL_INTERVAL = 30000;
+
+let serverStatusCache = { servers: [], lastUpdate: null };
+
+async function pteroFetch(endpoint) {
+  const res = await fetch(`${PTERO_URL}${endpoint}`, {
+    headers: {
+      'Authorization': `Bearer ${PTERO_KEY}`,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    }
+  });
+  if (!res.ok) throw new Error(`Pterodactyl API ${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+function detectRegion(name, node) {
+  const n = ((name || '') + ' ' + (node || '')).toLowerCase();
+  if (n.includes('eu') || n.includes('europe')) return 'EU';
+  if (n.includes('na') || n.includes('us') || n.includes('america')) return 'NA';
+  return '??';
+}
+
+function formatUptime(ms) {
+  if (!ms || ms <= 0) return null;
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+async function pollServerStatus() {
+  if (!PTERO_URL || !PTERO_KEY) return;
+  try {
+    const listRes = await pteroFetch('/api/client?type=admin&per_page=50');
+    const servers = listRes.data || [];
+    const statusList = [];
+
+    for (const srv of servers) {
+      const attr = srv.attributes;
+      const id = attr.identifier;
+      const region = detectRegion(attr.name, attr.node);
+
+      // Get default allocation for IP:port
+      const allocs = attr.relationships?.allocations?.data || [];
+      const def = allocs.find(a => a.attributes?.is_default) || allocs[0];
+      const ip = def ? `${def.attributes.ip_alias || def.attributes.ip}:${def.attributes.port}` : null;
+
+      let state = 'unknown';
+      let uptime = null;
+      try {
+        const res = await pteroFetch(`/api/client/servers/${id}/resources`);
+        state = res.attributes?.current_state || 'unknown';
+        uptime = res.attributes?.resources?.uptime || null;
+      } catch (e) {
+        state = 'unknown';
+      }
+
+      statusList.push({ name: attr.name, identifier: id, region, state, ip, uptime: formatUptime(uptime) });
+    }
+
+    serverStatusCache = { servers: statusList, lastUpdate: new Date().toISOString() };
+  } catch (e) {
+    console.error('Pterodactyl poll error:', e.message);
+  }
+}
+
+if (PTERO_URL && PTERO_KEY) {
+  pollServerStatus();
+  setInterval(pollServerStatus, STATUS_POLL_INTERVAL);
+  console.log('Server status polling started');
+}
+
+app.get('/api/servers/status', (req, res) => {
+  res.json(serverStatusCache);
+});
+
 // ---- Page routes ----
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

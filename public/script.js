@@ -90,6 +90,53 @@ const counterObserver = new IntersectionObserver((entries) => {
 
 document.querySelectorAll('[data-count]').forEach(el => counterObserver.observe(el));
 
+// ---- Server Status ----
+const serversGrid = document.getElementById('serversGrid');
+const serversUpdated = document.getElementById('serversUpdated');
+
+function stateLabel(s) {
+  const map = { running: 'Online', offline: 'Offline', starting: 'Starting', stopping: 'Stopping' };
+  return map[s] || 'Unknown';
+}
+
+function renderServers(data) {
+  if (!serversGrid) return;
+  if (!data.servers || data.servers.length === 0) {
+    serversGrid.innerHTML = '<div class="server-card server-placeholder"><span class="server-placeholder-text">No servers found</span></div>';
+    return;
+  }
+
+  serversGrid.innerHTML = data.servers.map(srv => `
+    <div class="server-card">
+      <div class="server-top">
+        <span class="server-status-dot ${srv.state}"></span>
+        <span class="server-state ${srv.state}">${stateLabel(srv.state)}</span>
+        <span class="server-region">${srv.region}</span>
+      </div>
+      <div class="server-name">${srv.name}</div>
+      <div class="server-meta">
+        ${srv.ip ? `<span class="server-ip" title="Click to copy" onclick="navigator.clipboard.writeText('${srv.ip}')">${srv.ip}</span>` : ''}
+        ${srv.uptime ? `<span class="server-uptime">Up ${srv.uptime}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+
+  if (serversUpdated && data.lastUpdate) {
+    const ago = Math.round((Date.now() - new Date(data.lastUpdate).getTime()) / 1000);
+    serversUpdated.textContent = ago < 5 ? 'Just updated' : `Updated ${ago}s ago`;
+  }
+}
+
+function fetchServerStatus() {
+  fetch('/api/servers/status')
+    .then(r => r.json())
+    .then(renderServers)
+    .catch(() => {});
+}
+
+fetchServerStatus();
+setInterval(fetchServerStatus, 30000);
+
 // ---- URL-based tab routing ----
 const pathTab = window.location.pathname.replace(/^\/+|\/+$/g, '');
 if (pathTab && document.getElementById('tab-' + pathTab)) {
