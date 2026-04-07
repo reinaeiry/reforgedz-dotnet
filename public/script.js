@@ -121,7 +121,8 @@ function renderServers(data) {
     const tag = shortName(srv.name);
     const map = mapName(tag);
     const info = srv.state === 'running' && srv.uptime ? `Online \u00b7 ${srv.uptime}` : stateLabel(srv.state);
-    return `<div class="status-tile reveal visible">
+    return `<div class="status-tile ${srv.state} reveal visible">
+      <span class="status-region">${srv.region}</span>
       <span class="status-dot ${srv.state}"></span>
       <span class="status-tag">${tag}</span>
       <span class="status-map">${map}</span>
