@@ -99,27 +99,38 @@ function stateLabel(s) {
   return map[s] || 'Unknown';
 }
 
+function shortName(name) {
+  const m = name.match(/\[([^\]]+)\]/);
+  return m ? m[1] : name;
+}
+
+function copyIp(el, ip) {
+  navigator.clipboard.writeText(ip);
+  el.textContent = 'Copied!';
+  el.classList.add('status-addr-copied');
+  setTimeout(() => {
+    el.textContent = ip;
+    el.classList.remove('status-addr-copied');
+  }, 1200);
+}
+
 function renderServers(data) {
   if (!serversGrid) return;
   if (!data.servers || data.servers.length === 0) {
-    serversGrid.innerHTML = '<div class="server-card server-placeholder"><span class="server-placeholder-text">No servers found</span></div>';
+    serversGrid.innerHTML = '<div class="status-row status-placeholder"><span class="status-placeholder-text">No servers found</span></div>';
     return;
   }
 
-  serversGrid.innerHTML = data.servers.map(srv => `
-    <div class="server-card">
-      <div class="server-top">
-        <span class="server-status-dot ${srv.state}"></span>
-        <span class="server-state ${srv.state}">${stateLabel(srv.state)}</span>
-        <span class="server-region">${srv.region}</span>
-      </div>
-      <div class="server-name">${srv.name}</div>
-      <div class="server-meta">
-        ${srv.ip ? `<span class="server-ip" title="Click to copy" onclick="navigator.clipboard.writeText('${srv.ip}')">${srv.ip}</span>` : ''}
-        ${srv.uptime ? `<span class="server-uptime">Up ${srv.uptime}</span>` : ''}
-      </div>
-    </div>
-  `).join('');
+  serversGrid.innerHTML = data.servers.map(srv => {
+    const tag = shortName(srv.name);
+    return `<div class="status-row">
+      <span class="status-dot ${srv.state}"></span>
+      <span class="status-label">${tag}</span>
+      ${srv.ip ? `<span class="status-addr" title="Click to copy" onclick="copyIp(this,'${srv.ip}')">${srv.ip}</span>` : '<span class="status-addr"></span>'}
+      <span class="status-state ${srv.state}">${stateLabel(srv.state)}</span>
+      <span class="status-uptime">${srv.uptime ? srv.uptime : '\u2014'}</span>
+    </div>`;
+  }).join('');
 
   if (serversUpdated && data.lastUpdate) {
     const ago = Math.round((Date.now() - new Date(data.lastUpdate).getTime()) / 1000);
