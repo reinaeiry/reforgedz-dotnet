@@ -104,31 +104,28 @@ function shortName(name) {
   return m ? m[1] : name;
 }
 
-function copyIp(el, ip) {
-  navigator.clipboard.writeText(ip);
-  el.textContent = 'Copied!';
-  el.classList.add('status-addr-copied');
-  setTimeout(() => {
-    el.textContent = ip;
-    el.classList.remove('status-addr-copied');
-  }, 1200);
+function mapName(tag) {
+  if (tag.endsWith('1')) return 'Chernarus';
+  if (tag.endsWith('2')) return 'Everon';
+  return 'Chernarus';
 }
 
 function renderServers(data) {
   if (!serversGrid) return;
   if (!data.servers || data.servers.length === 0) {
-    serversGrid.innerHTML = '<div class="status-row status-placeholder"><span class="status-placeholder-text">No servers found</span></div>';
+    serversGrid.innerHTML = '<div class="status-placeholder"><span class="status-placeholder-text">No servers found</span></div>';
     return;
   }
 
   serversGrid.innerHTML = data.servers.map(srv => {
     const tag = shortName(srv.name);
-    return `<div class="status-row">
+    const map = mapName(tag);
+    const info = srv.state === 'running' && srv.uptime ? `Online \u00b7 ${srv.uptime}` : stateLabel(srv.state);
+    return `<div class="status-tile reveal visible">
       <span class="status-dot ${srv.state}"></span>
-      <span class="status-label">${tag}</span>
-      ${srv.ip ? `<span class="status-addr" title="Click to copy" onclick="copyIp(this,'${srv.ip}')">${srv.ip}</span>` : '<span class="status-addr"></span>'}
-      <span class="status-state ${srv.state}">${stateLabel(srv.state)}</span>
-      <span class="status-uptime">${srv.uptime ? srv.uptime : '\u2014'}</span>
+      <span class="status-tag">${tag}</span>
+      <span class="status-map">${map}</span>
+      <span class="status-info ${srv.state}">${info}</span>
     </div>`;
   }).join('');
 

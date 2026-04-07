@@ -462,30 +462,35 @@ img { display: block; max-width: 100%; }
    Server Status
    ============================================ */
 
-.status-board {
+.status-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
 }
 
-.status-row {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 18px 28px;
+.status-tile {
+  padding: 40px 24px;
+  text-align: center;
+  border-right: 1px solid var(--border);
   background: var(--bg-black);
-  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
   transition: background 0.2s;
 }
 
-.status-row:last-child { border-bottom: none; }
-.status-row:hover { background: var(--surface); }
+.status-tile:last-child { border-right: none; }
+.status-tile:hover { background: var(--surface); }
 
 .status-dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  flex-shrink: 0;
+  margin-bottom: 4px;
 }
 
 .status-dot.running {
@@ -495,7 +500,7 @@ img { display: block; max-width: 100%; }
 
 @keyframes dot-pulse {
   0%, 100% { box-shadow: 0 0 4px rgba(46,204,113,0.3); }
-  50% { box-shadow: 0 0 10px rgba(46,204,113,0.7); }
+  50% { box-shadow: 0 0 12px rgba(46,204,113,0.6); }
 }
 
 .status-dot.offline { background: #e74c3c; box-shadow: 0 0 6px rgba(231,76,60,0.4); }
@@ -503,53 +508,41 @@ img { display: block; max-width: 100%; }
 .status-dot.stopping { background: #f1c40f; box-shadow: 0 0 6px rgba(241,196,15,0.4); }
 .status-dot.unknown { background: var(--text-ghost); }
 
-.status-label {
+.status-tag {
   font-family: var(--display);
-  font-size: 0.95rem;
-  font-weight: 600;
-  letter-spacing: 2px;
+  font-size: 1.6rem;
+  font-weight: 700;
   color: #fff;
-  min-width: 44px;
+  letter-spacing: 1px;
 }
 
-.status-addr {
-  font-family: 'Courier New', Courier, monospace;
+.status-map {
   font-size: 0.8rem;
   color: var(--text-dim);
-  cursor: pointer;
-  transition: color 0.15s;
-  flex: 1;
+  letter-spacing: 1px;
 }
 
-.status-addr:hover { color: var(--accent); }
-.status-addr-copied { color: var(--accent) !important; }
-
-.status-state {
+.status-info {
   font-family: var(--display);
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 2px;
   text-transform: uppercase;
-  min-width: 72px;
-  text-align: right;
+  margin-top: 4px;
 }
 
-.status-state.running { color: #2ecc71; }
-.status-state.offline { color: #e74c3c; }
-.status-state.starting,
-.status-state.stopping { color: #f1c40f; }
-.status-state.unknown { color: var(--text-ghost); }
-
-.status-uptime {
-  font-size: 0.75rem;
-  color: var(--text-ghost);
-  min-width: 56px;
-  text-align: right;
-}
+.status-info.running { color: #2ecc71; }
+.status-info.offline { color: #e74c3c; }
+.status-info.starting,
+.status-info.stopping { color: #f1c40f; }
+.status-info.unknown { color: var(--text-ghost); }
 
 .status-placeholder {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
   justify-content: center;
-  padding: 40px 28px;
+  padding: 48px 24px;
 }
 
 .status-placeholder-text {
@@ -2569,8 +2562,9 @@ img { display: block; max-width: 100%; }
   .dossier-grid { grid-template-columns: repeat(3, 1fr); }
   .mods-grid { grid-template-columns: repeat(3, 1fr); }
   .features-grid { grid-template-columns: repeat(2, 1fr); }
-  .status-row { gap: 14px; padding: 16px 20px; }
-  .status-addr { display: none; }
+  .status-tiles { grid-template-columns: repeat(2, 1fr); }
+  .status-tile:nth-child(2) { border-right: none; }
+  .status-tile:nth-child(n+3) { border-top: 1px solid var(--border); }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .stat:nth-child(2) { border-right: none; }
   .stat:nth-child(3) { border-right: 1px solid var(--border); }
@@ -2625,9 +2619,9 @@ img { display: block; max-width: 100%; }
   /* Features / stats / servers */
   .features-grid { grid-template-columns: 1fr; }
   .feature { padding: 28px 20px; }
-  .status-row { padding: 14px 16px; gap: 12px; }
-  .status-label { font-size: 0.85rem; min-width: 36px; }
-  .status-uptime { display: none; }
+  .status-tiles { grid-template-columns: repeat(2, 1fr); }
+  .status-tile { padding: 28px 16px; }
+  .status-tag { font-size: 1.3rem; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .stat { padding: 32px 16px; }
   .stat-num { font-size: 1.8rem; }
