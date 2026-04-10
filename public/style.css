@@ -464,74 +464,62 @@ img { display: block; max-width: 100%; }
 
 .status-tiles {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
 }
 
 .status-tile {
-  padding: 36px 24px 32px;
+  padding: 32px 24px;
   text-align: center;
-  border-right: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   background: var(--bg-black);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  transition: background 0.3s, box-shadow 0.3s;
-  position: relative;
+  transition: background 0.3s;
   border-top: 3px solid transparent;
 }
 
-.status-tile:last-child { border-right: none; }
 .status-tile:hover { background: var(--surface); }
 
 .status-tile.running {
   border-top-color: #2ecc71;
-  box-shadow: inset 0 4px 20px rgba(46,204,113,0.05);
+  background: linear-gradient(180deg, rgba(46,204,113,0.04) 0%, var(--bg-black) 60%);
+}
+
+.status-tile.running:hover {
+  background: linear-gradient(180deg, rgba(46,204,113,0.06) 0%, var(--surface) 60%);
 }
 
 .status-tile.offline {
   border-top-color: #e74c3c;
+  background: linear-gradient(180deg, rgba(231,76,60,0.03) 0%, var(--bg-black) 60%);
+}
+
+.status-tile.offline:hover {
+  background: linear-gradient(180deg, rgba(231,76,60,0.05) 0%, var(--surface) 60%);
 }
 
 .status-tile.starting,
 .status-tile.stopping {
   border-top-color: #f1c40f;
+  background: linear-gradient(180deg, rgba(241,196,15,0.03) 0%, var(--bg-black) 60%);
 }
 
-.status-region {
-  font-family: var(--display);
-  font-size: 0.6rem;
-  font-weight: 600;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  color: var(--text-ghost);
-  background: rgba(255,255,255,0.05);
-  padding: 3px 12px;
-  border-radius: 3px;
-  margin-bottom: 4px;
+.status-tile.unknown {
+  border-top-color: var(--text-ghost);
 }
 
 .status-dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 
-.status-dot.running {
-  background: #2ecc71;
-  animation: dot-pulse 2s ease-in-out infinite;
-}
-
-@keyframes dot-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(46,204,113,0.3); }
-  50% { box-shadow: 0 0 12px rgba(46,204,113,0.6); }
-}
-
+.status-dot.running { background: #2ecc71; box-shadow: 0 0 6px rgba(46,204,113,0.4); }
 .status-dot.offline { background: #e74c3c; box-shadow: 0 0 6px rgba(231,76,60,0.4); }
 .status-dot.starting,
 .status-dot.stopping { background: #f1c40f; box-shadow: 0 0 6px rgba(241,196,15,0.4); }
@@ -549,7 +537,6 @@ img { display: block; max-width: 100%; }
   font-size: 0.8rem;
   color: var(--text-dim);
   letter-spacing: 1px;
-  font-style: italic;
 }
 
 .status-info {
@@ -558,7 +545,7 @@ img { display: block; max-width: 100%; }
   font-weight: 600;
   letter-spacing: 2px;
   text-transform: uppercase;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .status-info.running { color: #2ecc71; }
@@ -573,6 +560,9 @@ img { display: block; max-width: 100%; }
   align-items: center;
   justify-content: center;
   padding: 48px 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-black);
 }
 
 .status-placeholder-text {
@@ -2592,9 +2582,8 @@ img { display: block; max-width: 100%; }
   .dossier-grid { grid-template-columns: repeat(3, 1fr); }
   .mods-grid { grid-template-columns: repeat(3, 1fr); }
   .features-grid { grid-template-columns: repeat(2, 1fr); }
-  .status-tiles { grid-template-columns: repeat(2, 1fr); }
-  .status-tile:nth-child(2) { border-right: none; }
-  .status-tile:nth-child(n+3) { border-top: 1px solid var(--border); }
+  .status-tiles { gap: 10px; }
+  .status-tile { padding: 28px 20px; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .stat:nth-child(2) { border-right: none; }
   .stat:nth-child(3) { border-right: 1px solid var(--border); }
@@ -2649,9 +2638,9 @@ img { display: block; max-width: 100%; }
   /* Features / stats / servers */
   .features-grid { grid-template-columns: 1fr; }
   .feature { padding: 28px 20px; }
-  .status-tiles { grid-template-columns: repeat(2, 1fr); }
-  .status-tile { padding: 28px 16px; }
-  .status-tag { font-size: 1.3rem; }
+  .status-tiles { gap: 8px; }
+  .status-tile { padding: 24px 16px; }
+  .status-tag { font-size: 1.4rem; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .stat { padding: 32px 16px; }
   .stat-num { font-size: 1.8rem; }
