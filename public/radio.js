@@ -41,6 +41,7 @@
   let trackPlayStart = null; // timestamp when current track started
 
   const genreColors = {
+    'Community': ['#e94560', '#b8354d'],
     'Country': ['#b8860b', '#8b6914'],
     'Dance': ['#8b5cf6', '#6d28d9'],
     'Pop': ['#e84393', '#c23070'],
