@@ -102,8 +102,9 @@ function readMp3Meta(filePath) {
     const stats = fs.statSync(filePath);
     const fileSize = stats.size;
     const fd = fs.openSync(filePath, 'r');
-    const headerBuf = Buffer.alloc(2048);
-    fs.readSync(fd, headerBuf, 0, 2048, 0);
+    const readSize = Math.min(65536, fs.statSync(filePath).size);
+    const headerBuf = Buffer.alloc(readSize);
+    fs.readSync(fd, headerBuf, 0, readSize, 0);
 
     let id3Size = 0;
     if (headerBuf.toString('ascii', 0, 3) === 'ID3') {
@@ -163,15 +164,16 @@ function loadAllTracks() {
       const files = fs.readdirSync(folderPath)
         .filter(f => /\.(mp3|wav)$/i.test(f))
         .map(f => {
-          const name = f.replace(/\.(mp3|wav)$/i, '')
-            .replace(/[-_]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+          const rawName = f.replace(/\.(mp3|wav)$/i, '').trim();
+          // Split on " - " to separate title from artist in filename
+          const parts = rawName.split(' - ');
+          const nameFromFile = parts[0].replace(/[_]/g, ' ').replace(/\s+/g, ' ').trim();
+          const artistFromFile = parts.length > 1 ? parts.slice(1).join(' - ').trim() : '';
           const mp3Meta = /\.mp3$/i.test(f) ? readMp3Meta(path.join(folderPath, f)) : { artist: '', duration: 0 };
           const fp = `/radio/${encodeURIComponent(folder.name)}/${encodeURIComponent(f)}`;
           const track = {
-            title: name,
-            artist: mp3Meta.artist || 'Modest',
+            title: nameFromFile,
+            artist: mp3Meta.artist || artistFromFile || 'Modest',
             duration: mp3Meta.duration,
             file: fp,
             category: folder.name
