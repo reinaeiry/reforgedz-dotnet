@@ -462,9 +462,45 @@ img { display: block; max-width: 100%; }
    Server Status
    ============================================ */
 
+.status-regions {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.status-region {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.status-region-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.status-region-label {
+  font-family: var(--display);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.status-region-count {
+  font-size: 0.7rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-ghost);
+}
+
 .status-tiles {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
 
@@ -563,6 +599,7 @@ img { display: block; max-width: 100%; }
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-black);
+  width: 100%;
 }
 
 .status-placeholder-text {
@@ -2582,7 +2619,7 @@ img { display: block; max-width: 100%; }
   .dossier-grid { grid-template-columns: repeat(3, 1fr); }
   .mods-grid { grid-template-columns: repeat(3, 1fr); }
   .features-grid { grid-template-columns: repeat(2, 1fr); }
-  .status-tiles { gap: 10px; }
+  .status-tiles { grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .status-tile { padding: 28px 20px; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .stat:nth-child(2) { border-right: none; }
@@ -2638,7 +2675,8 @@ img { display: block; max-width: 100%; }
   /* Features / stats / servers */
   .features-grid { grid-template-columns: 1fr; }
   .feature { padding: 28px 20px; }
-  .status-tiles { gap: 8px; }
+  .status-regions { gap: 20px; }
+  .status-tiles { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .status-tile { padding: 24px 16px; }
   .status-tag { font-size: 1.4rem; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }

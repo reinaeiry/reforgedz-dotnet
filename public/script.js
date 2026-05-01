@@ -110,6 +110,9 @@ function mapName(tag) {
   return 'Chernarus';
 }
 
+const REGION_ORDER = ['EU', 'NA', '??'];
+const REGION_LABELS = { EU: 'Europe', NA: 'North America', '??': 'Other' };
+
 function renderServers(data) {
   if (!serversGrid) return;
   if (!data.servers || data.servers.length === 0) {
@@ -117,14 +120,36 @@ function renderServers(data) {
     return;
   }
 
-  serversGrid.innerHTML = data.servers.map(srv => {
-    const tag = shortName(srv.name);
-    const map = mapName(tag);
-    return `<div class="status-tile ${srv.state} reveal visible">
-      <span class="status-dot ${srv.state}"></span>
-      <span class="status-tag">${tag}</span>
-      <span class="status-map">${map}</span>
-      <span class="status-info ${srv.state}">${stateLabel(srv.state)}</span>
+  const groups = {};
+  for (const srv of data.servers) {
+    const region = srv.region || '??';
+    (groups[region] = groups[region] || []).push(srv);
+  }
+
+  const regionKeys = REGION_ORDER.filter(r => groups[r]);
+  for (const k of Object.keys(groups)) {
+    if (!regionKeys.includes(k)) regionKeys.push(k);
+  }
+
+  serversGrid.innerHTML = regionKeys.map(region => {
+    const list = groups[region].slice().sort((a, b) => shortName(a.name).localeCompare(shortName(b.name)));
+    const tiles = list.map(srv => {
+      const tag = shortName(srv.name);
+      const map = mapName(tag);
+      return `<div class="status-tile ${srv.state} reveal visible">
+        <span class="status-dot ${srv.state}"></span>
+        <span class="status-tag">${tag}</span>
+        <span class="status-map">${map}</span>
+        <span class="status-info ${srv.state}">${stateLabel(srv.state)}</span>
+      </div>`;
+    }).join('');
+    const label = REGION_LABELS[region] || region;
+    return `<div class="status-region">
+      <div class="status-region-head">
+        <span class="status-region-label">${label}</span>
+        <span class="status-region-count">${list.length} server${list.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="status-tiles">${tiles}</div>
     </div>`;
   }).join('');
 
