@@ -136,11 +136,23 @@ function renderServers(data) {
     const tiles = list.map(srv => {
       const tag = shortName(srv.name);
       const map = mapName(tag);
+      const hasCount = srv.players != null && srv.max != null && srv.max > 0;
+      const players = hasCount ? srv.players : null;
+      const max = hasCount ? srv.max : null;
+      const pct = hasCount ? Math.max(0, Math.min(100, Math.round((players / max) * 100))) : 0;
+      const countText = hasCount ? `${players}/${max}` : '--/--';
       return `<div class="status-tile ${srv.state} reveal visible">
-        <span class="status-dot ${srv.state}"></span>
-        <span class="status-tag">${tag}</span>
-        <span class="status-map">${map}</span>
-        <span class="status-info ${srv.state}">${stateLabel(srv.state)}</span>
+        <div class="status-head">
+          <span class="status-dot ${srv.state}"></span>
+          <span class="status-tag">${tag}</span>
+          <span class="status-spacer"></span>
+          <span class="status-info ${srv.state}">${stateLabel(srv.state)}</span>
+        </div>
+        <div class="status-players">
+          <div class="status-bar"><div class="status-bar-fill" style="width:${pct}%"></div></div>
+          <div class="status-bar-text">${countText}</div>
+        </div>
+        <div class="status-map">${map}</div>
       </div>`;
     }).join('');
     const label = REGION_LABELS[region] || region;

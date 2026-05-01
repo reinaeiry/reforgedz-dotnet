@@ -242,7 +242,52 @@ const PTERO_URL = (process.env.PTERODACTYL_PANEL_URL || '').replace(/\/+$/, '');
 const PTERO_KEY = process.env.PTERODACTYL_CLIENT_API_KEY || '';
 const STATUS_POLL_INTERVAL = 30000;
 
+// BattleMetrics IDs are resolved automatically per server (by IP, then port,
+// then by server name) and cached for the lifetime of the process.
+const bmIdCache = new Map();
+
 let serverStatusCache = { servers: [], lastUpdate: null };
+
+async function fetchBattleMetricsPlayers(bmId) {
+  try {
+    const res = await fetch(`https://api.battlemetrics.com/servers/${bmId}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const a = data?.data?.attributes;
+    if (!a) return null;
+    return { players: a.players ?? 0, max: a.maxPlayers ?? 0 };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveBattleMetricsId(rawIp, port, serverName) {
+  if (!rawIp) return null;
+  const portNum = Number(port);
+  try {
+    const ipUrl = `https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(rawIp)}&page[size]=10`;
+    const res = await fetch(ipUrl);
+    if (res.ok) {
+      const list = (await res.json())?.data || [];
+      const exact = list.find(s => s.attributes?.ip === rawIp && Number(s.attributes?.port) === portNum);
+      if (exact?.id) return exact.id;
+      const ipOnly = list.find(s => s.attributes?.ip === rawIp);
+      if (ipOnly?.id) return ipOnly.id;
+    }
+    const tagMatch = (serverName || '').match(/\[([^\]]+)\]/);
+    const tag = tagMatch ? tagMatch[1] : null;
+    if (tag) {
+      const nameRes = await fetch(`https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(tag)}&page[size]=5`);
+      if (nameRes.ok) {
+        const nd = (await nameRes.json())?.data || [];
+        const tagUpper = tag.toUpperCase();
+        const nameHit = nd.find(s => (s.attributes?.name || '').toUpperCase().includes(tagUpper));
+        if (nameHit?.id) return nameHit.id;
+      }
+    }
+  } catch {}
+  return null;
+}
 
 async function pteroFetch(endpoint) {
   const res = await fetch(`${PTERO_URL}${endpoint}`, {
@@ -306,7 +351,26 @@ async function pollServerStatus() {
         state = 'unknown';
       }
 
-      statusList.push({ name: attr.name, identifier: id, region, state, ip, uptime: formatUptime(uptime) });
+      let players = null;
+      let max = null;
+      let bmId = bmIdCache.get(id);
+      if (!bmId) {
+        bmId = await resolveBattleMetricsId(def?.attributes?.ip, def?.attributes?.port, attr.name);
+        if (bmId) {
+          bmIdCache.set(id, bmId);
+          console.log(`Resolved BattleMetrics ID for ${attr.name}: ${bmId}`);
+        }
+      }
+      if (bmId) {
+        const bm = await fetchBattleMetricsPlayers(bmId);
+        if (bm) { players = bm.players; max = bm.max; }
+      }
+      if (state !== 'running') {
+        players = 0;
+        if (max == null) max = 64;
+      }
+
+      statusList.push({ name: attr.name, identifier: id, region, state, ip, uptime: formatUptime(uptime), players, max });
     }
 
     serverStatusCache = { servers: statusList, lastUpdate: new Date().toISOString() };
