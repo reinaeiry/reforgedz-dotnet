@@ -104,9 +104,10 @@ function attachStock(product) {
 }
 
 // Stale-pending sweeper. Pending orders older than this are auto-cancelled.
-// Stripe sessions live 24h, but realistic checkout completion is sub-15-minute,
-// so 30 minutes is a generous safety window.
-const PENDING_TIMEOUT_SECONDS = 30 * 60;
+// If a user pays after the order is auto-cancelled, the
+// `checkout.session.completed` webhook still flips it back to completed
+// without a status check, so payments are not lost.
+const PENDING_TIMEOUT_SECONDS = 5 * 60;
 const SWEEPER_INTERVAL_MS = 5 * 60 * 1000;
 
 const sweepStmt = db.prepare(`
