@@ -400,7 +400,19 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
 // Get all products (including inactive)
 router.get('/api/shop/admin/products', requireAdmin, (req, res) => {
   const products = db.prepare('SELECT * FROM products ORDER BY created_at DESC').all();
-  res.json(products.map(p => attachStock(attachImages(p))));
+  const orderCounts = db.prepare('SELECT product_id, COUNT(*) AS cnt FROM orders GROUP BY product_id').all();
+  const subCounts = db.prepare(`
+    SELECT product_id, COUNT(DISTINCT stripe_subscription_id) AS cnt
+    FROM orders WHERE status = 'completed' AND stripe_subscription_id IS NOT NULL
+    GROUP BY product_id
+  `).all();
+  const ordMap = new Map(orderCounts.map(c => [c.product_id, c.cnt]));
+  const subMap = new Map(subCounts.map(c => [c.product_id, c.cnt]));
+  res.json(products.map(p => {
+    p.order_count = ordMap.get(p.id) || 0;
+    p.active_sub_count = subMap.get(p.id) || 0;
+    return attachStock(attachImages(p));
+  }));
 });
 
 // Get all orders (admin view with steam names + BI UIDs)
@@ -572,11 +584,48 @@ router.delete('/api/shop/admin/products/:id/permanent', requireAdmin, (req, res)
   // Check for existing orders referencing this product
   const orderCount = db.prepare('SELECT COUNT(*) as cnt FROM orders WHERE product_id = ?').get(req.params.id).cnt;
   if (orderCount > 0) {
-    return res.status(400).json({ error: `Cannot delete — ${orderCount} order(s) reference this product. Deactivate it instead.` });
+    return res.status(400).json({ error: `Cannot delete — ${orderCount} order(s) reference this product. Use Hard Delete to remove the product and its orders together.` });
   }
 
   db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
+});
+
+// Hard delete: nukes the product, its orders, and cancels any active Stripe subs
+router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res) => {
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+
+  const subRows = db.prepare(`
+    SELECT DISTINCT stripe_subscription_id FROM orders
+    WHERE product_id = ? AND status = 'completed' AND stripe_subscription_id IS NOT NULL
+  `).all(req.params.id);
+
+  let cancelledSubs = 0;
+  for (const row of subRows) {
+    try {
+      await getStripe(false).subscriptions.cancel(row.stripe_subscription_id);
+      cancelledSubs++;
+    } catch (e) {
+      try {
+        await getStripe(true).subscriptions.cancel(row.stripe_subscription_id);
+        cancelledSubs++;
+      } catch (e2) {
+        console.error(`[hard-delete] Failed to cancel sub ${row.stripe_subscription_id}: ${e2.message}`);
+      }
+    }
+  }
+
+  let deletedOrders = 0;
+  const tx = db.transaction(() => {
+    deletedOrders = db.prepare('DELETE FROM orders WHERE product_id = ?').run(req.params.id).changes;
+    db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
+  });
+  tx();
+
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+
+  res.json({ ok: true, deletedOrders, cancelledSubs });
 });
 
 // Revoke an order (admin only — does NOT issue Stripe refund)

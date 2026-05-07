@@ -424,6 +424,10 @@ function renderProducts(products) {
       ? `<div class="shop-card-img" style="background-image: url('${escHtml(p.image_url)}')"></div>`
       : '';
 
+    const hardDeleteBtn = isAdmin && (p.order_count || 0) > 0
+      ? `<button class="card-delete-btn card-hard-delete-btn" onclick="event.stopPropagation(); hardDeleteProduct(${p.id}, ${p.order_count}, ${p.active_sub_count || 0})">Hard Delete</button>`
+      : '';
+
     const adminHtml = isAdmin ? `
       <div class="shop-card-admin" style="display: flex" onclick="event.stopPropagation()">
         <button class="card-edit-btn" onclick="event.stopPropagation(); editProduct(${p.id})">Edit</button>
@@ -431,6 +435,7 @@ function renderProducts(products) {
           ${p.active ? 'Deactivate' : 'Activate'}
         </button>
         <button class="card-delete-btn" onclick="event.stopPropagation(); deleteProduct(${p.id})">Delete</button>
+        ${hardDeleteBtn}
       </div>
     ` : '';
 
@@ -839,6 +844,23 @@ async function deleteProduct(id) {
   }
 }
 
+async function hardDeleteProduct(id, orderCount, subCount) {
+  const subWarning = subCount > 0
+    ? `\n\nThis will also CANCEL ${subCount} active Stripe subscription(s) — affected users stop being billed immediately.`
+    : '';
+  const typed = prompt(
+    `HARD DELETE\n\nThis permanently deletes the product AND ${orderCount} order(s) referencing it. This cannot be undone.${subWarning}\n\nType DELETE to confirm:`
+  );
+  if (typed !== 'DELETE') return;
+  try {
+    const result = await api(`/api/shop/admin/products/${id}/hard`, { method: 'DELETE' });
+    alert(`Hard delete complete. Removed ${result.deletedOrders} order(s); cancelled ${result.cancelledSubs} subscription(s).`);
+    loadProducts();
+  } catch (e) {
+    alert(e.message || 'Hard delete failed');
+  }
+}
+
 async function toggleProduct(id, active) {
   try {
     if (active) {
@@ -992,5 +1014,6 @@ window.cancelSubscription = cancelSubscription;
 window.saveBiUidFromDropdown = saveBiUidFromDropdown;
 window.openProductDetail = openProductDetail;
 window.openSigninFromCard = openSigninFromCard;
+window.hardDeleteProduct = hardDeleteProduct;
 
 init();
