@@ -86,6 +86,23 @@ function attachImages(product) {
   return product;
 }
 
+const stockUsedStmt = db.prepare(`
+  SELECT COUNT(DISTINCT steam_id) AS used
+  FROM orders
+  WHERE product_id = ? AND status IN ('pending', 'completed')
+`);
+
+function stockUsedFor(productId) {
+  return stockUsedStmt.get(productId).used;
+}
+
+function attachStock(product) {
+  if (!product) return product;
+  product.stock_used = stockUsedFor(product.id);
+  product.sold_out = product.stock_limit != null && product.stock_used >= product.stock_limit;
+  return product;
+}
+
 // ---- Middleware helpers ----
 function requireAuth(req, res, next) {
   if (!req.isAuthenticated()) return res.status(401).json({ error: 'Sign in required' });
@@ -104,10 +121,10 @@ function requireAdmin(req, res, next) {
 // Get active products
 router.get('/api/shop/products', (req, res) => {
   const products = db.prepare(`
-    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days
+    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
-  res.json(products.map(attachImages));
+  res.json(products.map(p => attachStock(attachImages(p))));
 });
 
 // Get Stripe publishable key
@@ -129,6 +146,18 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
 
   const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId);
   if (!product) return res.status(404).json({ error: 'Product not found' });
+
+  if (product.stock_limit != null) {
+    const used = stockUsedFor(product.id);
+    if (used >= product.stock_limit) {
+      const buyerInCount = db.prepare(`
+        SELECT 1 FROM orders WHERE product_id = ? AND steam_id = ? AND status IN ('pending', 'completed') LIMIT 1
+      `).get(product.id, req.user.steam_id);
+      if (!buyerInCount) {
+        return res.status(409).json({ error: 'This item is sold out.' });
+      }
+    }
+  }
 
   // Create pending order
   const order = db.prepare(`
@@ -348,7 +377,7 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
 // Get all products (including inactive)
 router.get('/api/shop/admin/products', requireAdmin, (req, res) => {
   const products = db.prepare('SELECT * FROM products ORDER BY created_at DESC').all();
-  res.json(products.map(attachImages));
+  res.json(products.map(p => attachStock(attachImages(p))));
 });
 
 // Get all orders (admin view with steam names + BI UIDs)
@@ -393,9 +422,17 @@ function normalizeImagesExtra(value) {
   return undefined;
 }
 
+function normalizeStockLimit(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '' || value === false) return null;
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -416,19 +453,20 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
   }
 
   const imagesJson = normalizeImagesExtra(imagesExtra) ?? null;
+  const stockLimitVal = normalizeStockLimit(stockLimit);
 
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
-  res.json(attachImages(product));
+  res.json(attachStock(attachImages(product)));
 });
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
@@ -459,6 +497,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
   }
 
   const imagesJson = normalizeImagesExtra(imagesExtra);
+  const stockLimitVal = normalizeStockLimit(stockLimit);
+  const stockLimitWasSent = stockLimit !== undefined;
 
   db.prepare(`
     UPDATE products SET
@@ -469,6 +509,7 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       type = COALESCE(?, type),
       interval_days = CASE WHEN ? THEN ? ELSE interval_days END,
       images_json = COALESCE(?, images_json),
+      stock_limit = CASE WHEN ? THEN ? ELSE stock_limit END,
       active = COALESCE(?, active),
       updated_at = unixepoch()
     WHERE id = ?
@@ -481,12 +522,14 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     intervalDaysWasSent ? 1 : 0,
     intervalDaysParam,
     imagesJson !== undefined ? imagesJson : null,
+    stockLimitWasSent ? 1 : 0,
+    stockLimitVal === undefined ? null : stockLimitVal,
     active !== undefined ? (active ? 1 : 0) : null,
     req.params.id
   );
 
   const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-  res.json(attachImages(updated));
+  res.json(attachStock(attachImages(updated)));
 });
 
 // Soft-delete (deactivate) product

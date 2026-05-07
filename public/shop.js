@@ -30,6 +30,9 @@ const formImage = document.getElementById('formImage');
 const formImagesExtra = document.getElementById('formImagesExtra');
 const formIntervalDays = document.getElementById('formIntervalDays');
 const formIntervalRow = document.getElementById('formIntervalRow');
+const formStockLimited = document.getElementById('formStockLimited');
+const formStockLimit = document.getElementById('formStockLimit');
+const formStockRow = document.getElementById('formStockRow');
 const formEditId = document.getElementById('formEditId');
 const formSubmitBtn = document.getElementById('formSubmitBtn');
 const formCancelBtn = document.getElementById('formCancelBtn');
@@ -53,6 +56,16 @@ function formatTypeLabel(type, intervalDays) {
   if (type === 'subscription') return 'Subscription';
   if (type === 'recurring_custom') return `Renewable · every ${intervalDays || '?'} day${intervalDays === 1 ? '' : 's'}`;
   return 'One-Time';
+}
+
+function stockBadgeHtml(p) {
+  if (p.stock_limit == null) return '';
+  const used = p.stock_used || 0;
+  const limit = p.stock_limit;
+  const remaining = Math.max(0, limit - used);
+  if (remaining === 0) return '<span class="stock-badge sold-out">Sold out</span>';
+  const cls = remaining <= Math.max(1, Math.floor(limit * 0.2)) ? 'low' : 'available';
+  return `<span class="stock-badge ${cls}">${remaining} / ${limit} left</span>`;
 }
 
 function formatDate(unix) {
@@ -422,19 +435,23 @@ function renderProducts(products) {
     ` : '';
 
     const inactiveClass = (!p.active && isAdmin) ? ' inactive' : '';
+    const soldOut = p.sold_out === true;
+    const soldOutClass = soldOut ? ' sold-out' : '';
 
     const buyBtnHtml = currentUser
-      ? `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="event.stopPropagation(); buyProduct(${p.id})">Purchase</button>`
+      ? (soldOut
+          ? `<button class="shop-buy-btn" disabled onclick="event.stopPropagation()">Sold out</button>`
+          : `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="event.stopPropagation(); buyProduct(${p.id})">Purchase</button>`)
       : `<button class="shop-buy-btn" onclick="event.stopPropagation(); openSigninFromCard()">Sign in to buy</button>`;
 
     const typeLabel = formatTypeLabel(p.type, p.interval_days);
     const typeClass = p.type === 'one_time' ? 'one_time' : 'subscription';
 
     return `
-      <div class="shop-card${inactiveClass}" data-id="${p.id}" onclick="openProductDetail(${p.id})">
+      <div class="shop-card${inactiveClass}${soldOutClass}" data-id="${p.id}" onclick="openProductDetail(${p.id})">
         ${imgHtml}
         <div class="shop-card-body">
-          <div class="shop-card-type ${typeClass}">${escHtml(typeLabel)}</div>
+          <div class="shop-card-type ${typeClass}">${escHtml(typeLabel)}${stockBadgeHtml(p)}</div>
           <h3>${escHtml(p.title)}</h3>
           <p>${escHtml(p.description || '')}</p>
           <div class="shop-card-footer">
@@ -475,17 +492,25 @@ function openProductDetail(productId) {
     if (u && u !== product.image_url) detailImages.push(u);
   }
 
-  document.getElementById('detailType').textContent = formatTypeLabel(product.type, product.interval_days);
+  const detailType = document.getElementById('detailType');
+  detailType.innerHTML = escHtml(formatTypeLabel(product.type, product.interval_days)) + stockBadgeHtml(product);
   document.getElementById('detailTitle').textContent = product.title;
   document.getElementById('detailDesc').textContent = product.description || '';
   refreshDetailPrice();
   renderDetailImage();
 
   const buyBtn = document.getElementById('detailBuy');
+  const soldOut = product.sold_out === true;
   if (currentUser) {
-    buyBtn.textContent = product.active ? 'Purchase' : 'Unavailable';
-    buyBtn.disabled = !product.active;
-    buyBtn.onclick = () => { closeDetail(); buyProduct(product.id); };
+    if (soldOut) {
+      buyBtn.textContent = 'Sold out';
+      buyBtn.disabled = true;
+      buyBtn.onclick = null;
+    } else {
+      buyBtn.textContent = product.active ? 'Purchase' : 'Unavailable';
+      buyBtn.disabled = !product.active;
+      buyBtn.onclick = () => { closeDetail(); buyProduct(product.id); };
+    }
   } else {
     buyBtn.textContent = 'Sign in to buy';
     buyBtn.disabled = false;
@@ -699,6 +724,11 @@ formType.addEventListener('change', () => {
   formIntervalRow.style.display = formType.value === 'recurring_custom' ? 'block' : 'none';
 });
 
+formStockLimited.addEventListener('change', () => {
+  formStockRow.style.display = formStockLimited.checked ? 'block' : 'none';
+  if (!formStockLimited.checked) formStockLimit.value = '';
+});
+
 productForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
@@ -719,6 +749,15 @@ productForm.addEventListener('submit', async (e) => {
     .map(s => s.trim())
     .filter(Boolean);
 
+  let stockLimit = null;
+  if (formStockLimited.checked) {
+    const n = parseInt(formStockLimit.value, 10);
+    if (!Number.isFinite(n) || n < 0) {
+      return alert('Stock limit must be a non-negative number');
+    }
+    stockLimit = n;
+  }
+
   const body = {
     title: formTitle.value.trim(),
     description: formDesc.value.trim(),
@@ -726,7 +765,8 @@ productForm.addEventListener('submit', async (e) => {
     type,
     imageUrl: formImage.value.trim() || null,
     intervalDays,
-    imagesExtra
+    imagesExtra,
+    stockLimit
   };
 
   try {
@@ -761,6 +801,10 @@ function editProduct(id) {
     formImagesExtra.value = (p.images || []).join('\n');
     formIntervalDays.value = p.interval_days || '';
     formIntervalRow.style.display = p.type === 'recurring_custom' ? 'block' : 'none';
+    const limited = p.stock_limit != null;
+    formStockLimited.checked = limited;
+    formStockLimit.value = limited ? p.stock_limit : '';
+    formStockRow.style.display = limited ? 'block' : 'none';
     formEditId.value = id;
     editingProductId = id;
     formSubmitBtn.textContent = 'Update Listing';
@@ -776,6 +820,9 @@ function clearForm() {
   formImagesExtra.value = '';
   formIntervalDays.value = '';
   formIntervalRow.style.display = 'none';
+  formStockLimited.checked = false;
+  formStockLimit.value = '';
+  formStockRow.style.display = 'none';
   formEditId.value = '';
   editingProductId = null;
   formSubmitBtn.textContent = 'Create Listing';

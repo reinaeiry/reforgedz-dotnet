@@ -4,6 +4,10 @@ const path = require('path');
 const db = new Database(path.join(__dirname, 'shop.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+// Disable SQLite's auto-rewriting of foreign-key references in dependent
+// tables when a parent table is renamed. We recreate parent tables in our
+// migrations and that auto-rewrite breaks child FKs.
+db.pragma('legacy_alter_table = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -73,6 +77,10 @@ function productsNeedsMigration() {
   return row && /CHECK\s*\(\s*type\s+IN\s*\(\s*'one_time'\s*,\s*'subscription'\s*\)\s*\)/i.test(row.sql);
 }
 
+function productHasColumn(name) {
+  return db.prepare("PRAGMA table_info(products)").all().some(c => c.name === name);
+}
+
 if (productsNeedsMigration()) {
   db.exec('PRAGMA foreign_keys = OFF');
   const migrate = db.transaction(() => {
@@ -103,6 +111,45 @@ if (productsNeedsMigration()) {
   });
   migrate();
   db.exec('PRAGMA foreign_keys = ON');
+}
+
+if (!productHasColumn('stock_limit')) {
+  db.exec("ALTER TABLE products ADD COLUMN stock_limit INTEGER");
+}
+
+// Repair: an earlier migration of `products` had SQLite's
+// auto-rewrite-of-references behavior on, which silently rewrote
+// orders.product_id's FK target to `products_old`. After that table
+// was dropped, INSERTs into orders fail with "no such table: products_old".
+// Recreate orders with the correct FK if we detect this.
+const ordersSchema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='orders'").get();
+if (ordersSchema && /products_old/i.test(ordersSchema.sql)) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  const repair = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE orders_new (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        steam_id                TEXT NOT NULL REFERENCES users(steam_id),
+        product_id              INTEGER NOT NULL REFERENCES products(id),
+        stripe_session_id       TEXT,
+        stripe_subscription_id  TEXT,
+        status                  TEXT NOT NULL DEFAULT 'pending',
+        amount_cents            INTEGER NOT NULL,
+        created_at              INTEGER NOT NULL DEFAULT (unixepoch()),
+        completed_at            INTEGER
+      )
+    `);
+    db.exec(`
+      INSERT INTO orders_new (id, steam_id, product_id, stripe_session_id, stripe_subscription_id, status, amount_cents, created_at, completed_at)
+      SELECT id, steam_id, product_id, stripe_session_id, stripe_subscription_id, status, amount_cents, created_at, completed_at
+      FROM orders
+    `);
+    db.exec('DROP TABLE orders');
+    db.exec('ALTER TABLE orders_new RENAME TO orders');
+  });
+  repair();
+  db.exec('PRAGMA foreign_keys = ON');
+  console.log('[db] Repaired orders.product_id FK reference');
 }
 
 module.exports = db;
