@@ -622,10 +622,30 @@
         <a class="nav-link" href="/">Home</a>
       </div>
       <div class="nav-auth" id="navAuth">
-        <a href="/auth/steam" class="steam-btn" id="steamLoginBtn">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.04 2 11.04c0 3.15 1.73 5.92 4.33 7.5l2.6-3.76c-.14-.04-.28-.1-.41-.17a2.5 2.5 0 1 1 3.45-.91l2.58 3.73C18.16 16.99 22 14.36 22 11.04 22 6.04 17.52 2 12 2zm4.5 9.54a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
-          Sign in with Steam
-        </a>
+        <div class="currency-pills" id="currencyPills" role="group" aria-label="Currency">
+          <button type="button" class="currency-pill active" data-cur="USD">$ USD</button>
+          <button type="button" class="currency-pill" data-cur="GBP">£ GBP</button>
+          <button type="button" class="currency-pill" data-cur="EUR">€ EUR</button>
+        </div>
+        <div class="signin-wrap" id="signinWrap">
+          <button type="button" class="signin-btn" id="signinBtn">
+            Sign in <span class="chevron"></span>
+          </button>
+          <div class="signin-menu" id="signinMenu">
+            <a href="/auth/steam" class="signin-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.04 2 11.04c0 3.15 1.73 5.92 4.33 7.5l2.6-3.76c-.14-.04-.28-.1-.41-.17a2.5 2.5 0 1 1 3.45-.91l2.58 3.73C18.16 16.99 22 14.36 22 11.04 22 6.04 17.52 2 12 2zm4.5 9.54a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
+              Steam
+            </a>
+            <button type="button" class="signin-item" data-platform="xbox">
+              <span class="platform-mark xbox-mark">X</span>
+              Xbox
+            </button>
+            <button type="button" class="signin-item" data-platform="psn">
+              <span class="platform-mark psn-mark">PS</span>
+              PlayStation
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </nav>
@@ -666,6 +686,7 @@
             <select id="formType">
               <option value="one_time">One-Time Purchase</option>
               <option value="subscription">Monthly Subscription</option>
+              <option value="recurring_custom">Renewable (Custom)</option>
             </select>
           </div>
           <div class="admin-field full">
@@ -676,9 +697,17 @@
             <label>Price (USD)</label>
             <input type="number" id="formPrice" step="0.01" min="0.50" placeholder="9.99" required>
           </div>
+          <div class="admin-field" id="formIntervalRow" style="display:none">
+            <label>Renews every (days)</label>
+            <input type="number" id="formIntervalDays" min="1" max="365" placeholder="7">
+          </div>
           <div class="admin-field">
-            <label>Image URL (optional)</label>
+            <label>Cover Image URL (optional)</label>
             <input type="text" id="formImage" placeholder="https://...">
+          </div>
+          <div class="admin-field full">
+            <label>Extra Image URLs (one per line, optional)</label>
+            <textarea id="formImagesExtra" placeholder="https://..."></textarea>
           </div>
           <input type="hidden" id="formEditId" value="">
           <div class="admin-actions">
@@ -742,6 +771,48 @@
         <button class="biuid-cancel" id="biuidCancel">Cancel</button>
         <button class="biuid-skip" id="biuidSkip">Skip for now</button>
         <button class="biuid-submit" id="biuidSubmit">Save & Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Console Sign-in Modal -->
+  <div class="console-overlay" id="consoleOverlay">
+    <div class="console-modal">
+      <h3 id="consoleModalTitle">Sign in with Xbox</h3>
+      <p>Enter your <span id="consolePlatformLabel">Xbox</span> gamertag. We'll match it against BattleMetrics to find your in-game identity.</p>
+      <input type="text" class="console-input" id="consoleGamertagInput" placeholder="Gamertag" spellcheck="false" autocomplete="off">
+      <div class="console-result" id="consoleResult" style="display:none"></div>
+      <div class="console-error" id="consoleError"></div>
+      <div class="console-actions">
+        <button class="console-cancel" id="consoleCancel">Cancel</button>
+        <button class="console-lookup" id="consoleLookup">Look up</button>
+        <button class="console-confirm" id="consoleConfirm" style="display:none">Confirm &amp; Sign in</button>
+      </div>
+      <p class="console-warn">You can only set your console identity once per browser. If you make a mistake, open a ticket in our Discord.</p>
+    </div>
+  </div>
+
+  <!-- Item Detail Modal -->
+  <div class="detail-overlay" id="detailOverlay">
+    <div class="detail-modal">
+      <button class="detail-close" id="detailClose" aria-label="Close">&times;</button>
+      <div class="detail-images" id="detailImages">
+        <div class="detail-img-frame">
+          <img class="detail-img" id="detailImg" alt="">
+          <button type="button" class="detail-nav prev" id="detailPrev" aria-label="Previous">&#8249;</button>
+          <button type="button" class="detail-nav next" id="detailNext" aria-label="Next">&#8250;</button>
+        </div>
+        <div class="detail-dots" id="detailDots"></div>
+      </div>
+      <div class="detail-body">
+        <div class="detail-type" id="detailType"></div>
+        <h2 id="detailTitle"></h2>
+        <p id="detailDesc"></p>
+        <div class="detail-footer">
+          <span class="detail-price" id="detailPrice"></span>
+          <button class="shop-buy-btn" id="detailBuy">Purchase</button>
+        </div>
+        <p class="detail-note" id="detailCurrencyNote"></p>
       </div>
     </div>
   </div>
@@ -1014,6 +1085,434 @@
 
     .cancel-modal-confirm:hover { color: #f87171; border-color: rgba(248,113,113,0.4); }
     .cancel-modal-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ---- Currency pills ---- */
+    .currency-pills {
+      display: inline-flex;
+      gap: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px;
+    }
+
+    .currency-pill {
+      padding: 5px 10px;
+      background: none;
+      border: none;
+      color: var(--text-ghost);
+      font-family: var(--body);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+
+    .currency-pill:hover { color: var(--text); }
+    .currency-pill.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    /* ---- Sign-in dropdown ---- */
+    .signin-wrap { position: relative; }
+
+    .signin-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-family: var(--body);
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .signin-btn:hover { background: var(--accent-hover); }
+
+    .signin-btn .chevron {
+      width: 8px;
+      height: 8px;
+      border-right: 1.5px solid #fff;
+      border-bottom: 1.5px solid #fff;
+      transform: rotate(45deg);
+      margin-top: -3px;
+      transition: transform 0.2s;
+    }
+
+    .signin-wrap.open .signin-btn .chevron { transform: rotate(-135deg); margin-top: 3px; }
+
+    .signin-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      width: 200px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      z-index: 200;
+      animation: dropIn 0.15s ease;
+    }
+
+    .signin-wrap.open .signin-menu { display: block; }
+
+    .signin-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 10px 14px;
+      background: none;
+      border: none;
+      color: var(--text);
+      font-family: var(--body);
+      font-size: 0.85rem;
+      font-weight: 500;
+      text-align: left;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+
+    .signin-item:hover { background: rgba(255,255,255,0.04); }
+
+    .platform-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      font-family: var(--display);
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: #fff;
+    }
+
+    .xbox-mark { background: #107c10; }
+    .psn-mark { background: #003791; font-size: 0.55rem; }
+
+    /* ---- Console sign-in modal ---- */
+    .console-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+
+    .console-overlay.open { display: flex; }
+
+    .console-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 480px;
+      width: 90%;
+      animation: dropIn 0.15s ease;
+    }
+
+    .console-modal h3 {
+      font-family: var(--display);
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    .console-modal p {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+      margin-bottom: 14px;
+    }
+
+    .console-input {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--body);
+      font-size: 0.9rem;
+      transition: border-color 0.2s;
+    }
+
+    .console-input:focus { outline: none; border-color: rgba(204,31,31,0.4); }
+
+    .console-result {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: rgba(74, 222, 128, 0.08);
+      border: 1px solid rgba(74, 222, 128, 0.2);
+      border-radius: 6px;
+      font-size: 0.82rem;
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .console-result strong { color: #4ade80; }
+
+    .console-result code {
+      font-family: monospace;
+      font-size: 0.75rem;
+      background: rgba(0,0,0,0.3);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--text-dim);
+    }
+
+    .console-error {
+      font-size: 0.78rem;
+      color: #f87171;
+      margin-top: 8px;
+      min-height: 1.2em;
+      line-height: 1.5;
+    }
+
+    .console-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 18px;
+    }
+
+    .console-cancel {
+      padding: 9px 18px;
+      background: none;
+      color: var(--text-ghost);
+      font-size: 0.82rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .console-cancel:hover { color: var(--text); border-color: var(--border-hover); }
+
+    .console-lookup, .console-confirm {
+      padding: 9px 22px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.82rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .console-lookup:hover, .console-confirm:hover { background: var(--accent-hover); }
+    .console-lookup:disabled, .console-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .console-warn {
+      font-size: 0.72rem;
+      color: var(--text-ghost);
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+      line-height: 1.6;
+    }
+
+    /* ---- Detail (expanded item) modal ---- */
+    .detail-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.78);
+      z-index: 600;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(6px);
+      padding: 24px;
+      overflow-y: auto;
+    }
+
+    .detail-overlay.open { display: flex; }
+
+    .detail-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      max-width: 720px;
+      width: 100%;
+      position: relative;
+      overflow: hidden;
+      animation: dropIn 0.18s ease;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .detail-close {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 36px;
+      height: 36px;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 50%;
+      color: #fff;
+      font-size: 1.4rem;
+      line-height: 1;
+      cursor: pointer;
+      z-index: 5;
+      transition: background 0.15s;
+    }
+
+    .detail-close:hover { background: rgba(0,0,0,0.7); }
+
+    .detail-img-frame {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: var(--bg-black);
+      overflow: hidden;
+    }
+
+    .detail-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .detail-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 40px;
+      height: 40px;
+      background: rgba(0,0,0,0.5);
+      border: none;
+      border-radius: 50%;
+      color: #fff;
+      font-size: 1.5rem;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .detail-nav:hover { background: rgba(0,0,0,0.8); }
+    .detail-nav.prev { left: 12px; }
+    .detail-nav.next { right: 12px; }
+    .detail-nav[hidden] { display: none; }
+
+    .detail-dots {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px;
+      background: rgba(0,0,0,0.4);
+    }
+
+    .detail-dots:empty { display: none; }
+
+    .detail-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.25);
+      border: none;
+      cursor: pointer;
+      transition: background 0.15s;
+      padding: 0;
+    }
+
+    .detail-dot.active { background: var(--accent); }
+
+    .detail-body {
+      padding: 28px 32px 30px;
+    }
+
+    .detail-type {
+      font-family: var(--display);
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .detail-body h2 {
+      font-family: var(--display);
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    .detail-body p {
+      font-size: 0.92rem;
+      color: var(--text-dim);
+      line-height: 1.75;
+      margin-bottom: 22px;
+      white-space: pre-wrap;
+    }
+
+    .detail-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+    }
+
+    .detail-price {
+      font-family: var(--display);
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.5px;
+    }
+
+    .detail-price .per {
+      font-size: 0.75rem;
+      color: var(--text-ghost);
+      font-weight: 400;
+      letter-spacing: 0;
+    }
+
+    .detail-note {
+      font-size: 0.7rem;
+      color: var(--text-ghost);
+      margin-top: 10px;
+      margin-bottom: 0;
+      text-align: right;
+    }
+
+    .shop-card {
+      cursor: pointer;
+    }
+
+    @media (max-width: 768px) {
+      .currency-pills { display: none; }
+      .signin-menu { right: -8px; }
+      .detail-body { padding: 20px 22px 24px; }
+      .detail-body h2 { font-size: 1.2rem; }
+      .detail-footer { flex-direction: column; align-items: stretch; gap: 12px; }
+      .detail-price { text-align: center; }
+    }
   </style>
 
   <script src="/shop.js"></script>

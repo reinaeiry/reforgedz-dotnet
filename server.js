@@ -2,11 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const session = require('express-session');
 const SQLiteStore = require('connect-sqlite3')(session);
 const passport = require('passport');
 const SteamStrategy = require('passport-steam').Strategy;
 const db = require('./db');
+const { lookupPlayerByGamertag } = require('./battlemetrics');
+const fx = require('./fx');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -82,8 +85,126 @@ app.get('/api/auth/me', (req, res) => {
     persona: req.user.persona,
     avatar_url: req.user.avatar_url,
     role: req.user.role,
-    bi_uid: req.user.bi_uid || null
+    bi_uid: req.user.bi_uid || null,
+    platform: req.user.platform || 'steam',
+    gamertag: req.user.gamertag || null
   });
+});
+
+// ---- Console sign-in (Xbox / PlayStation, no real OAuth) ----
+const CONSOLE_COOKIE = 'rz_console_locked';
+const CONSOLE_COOKIE_MAX_AGE = 365 * 24 * 60 * 60 * 1000;
+
+function signConsoleCookie(payload) {
+  const secret = process.env.SESSION_SECRET || 'dev-secret-change-me';
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', secret).update(encoded).digest('base64url');
+  return `${encoded}.${sig}`;
+}
+
+function verifyConsoleCookie(req) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  let raw = null;
+  for (const part of header.split(';')) {
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf('=');
+    if (eq < 0) continue;
+    if (trimmed.slice(0, eq) === CONSOLE_COOKIE) { raw = decodeURIComponent(trimmed.slice(eq + 1)); break; }
+  }
+  if (!raw) return null;
+  const dot = raw.lastIndexOf('.');
+  if (dot < 0) return null;
+  const encoded = raw.slice(0, dot);
+  const sig = raw.slice(dot + 1);
+  const secret = process.env.SESSION_SECRET || 'dev-secret-change-me';
+  const expected = crypto.createHmac('sha256', secret).update(encoded).digest('base64url');
+  let sigBuf, expBuf;
+  try { sigBuf = Buffer.from(sig, 'base64url'); expBuf = Buffer.from(expected, 'base64url'); }
+  catch { return null; }
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
+  try { return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); }
+  catch { return null; }
+}
+
+function setConsoleCookie(res, payload) {
+  res.cookie(CONSOLE_COOKIE, signConsoleCookie(payload), {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: CONSOLE_COOKIE_MAX_AGE,
+    path: '/'
+  });
+}
+
+const VALID_PLATFORMS = new Set(['xbox', 'psn']);
+
+app.post('/api/auth/console/lookup', async (req, res) => {
+  const { platform, gamertag } = req.body || {};
+  if (!VALID_PLATFORMS.has(platform)) return res.status(400).json({ error: 'Invalid platform' });
+  if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
+
+  const result = await lookupPlayerByGamertag(gamertag.trim(), platform);
+  if (!result) return res.status(404).json({ error: 'No matching player found on BattleMetrics. Make sure you have played on a tracked server with this gamertag.' });
+  res.json({ bmPlayerId: result.bmPlayerId, biUid: result.biUid, displayName: result.displayName, platform });
+});
+
+app.post('/api/auth/console/confirm', async (req, res) => {
+  const { platform, gamertag } = req.body || {};
+  if (!VALID_PLATFORMS.has(platform)) return res.status(400).json({ error: 'Invalid platform' });
+  if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
+
+  const lookup = await lookupPlayerByGamertag(gamertag.trim(), platform);
+  if (!lookup) return res.status(404).json({ error: 'Could not verify that gamertag against BattleMetrics.' });
+
+  const lockCookie = verifyConsoleCookie(req);
+  if (lockCookie && (lockCookie.platform !== platform || lockCookie.bmPlayerId !== lookup.bmPlayerId)) {
+    return res.status(409).json({
+      error: `Your console identity is already linked to ${lockCookie.gamertag} (${lockCookie.platform}). To change it, open a ticket in our Discord.`
+    });
+  }
+
+  const synthId = 'console:' + lookup.bmPlayerId;
+
+  let existing = db.prepare('SELECT * FROM users WHERE bm_player_id = ?').get(lookup.bmPlayerId);
+  if (existing && existing.platform !== platform) {
+    return res.status(409).json({
+      error: `That BattleMetrics player is already registered on a different platform. Open a ticket in our Discord to fix this.`
+    });
+  }
+
+  if (!existing) {
+    try {
+      db.prepare(`
+        INSERT INTO users (steam_id, persona, avatar_url, bi_uid, role, platform, gamertag, bm_player_id)
+        VALUES (?, ?, NULL, ?, 'user', ?, ?, ?)
+      `).run(synthId, lookup.displayName || gamertag.trim(), lookup.biUid || null, platform, gamertag.trim(), lookup.bmPlayerId);
+    } catch (e) {
+      if (String(e.message).includes('UNIQUE')) {
+        return res.status(409).json({ error: 'That console identity is already in use. Open a ticket in our Discord.' });
+      }
+      throw e;
+    }
+    existing = db.prepare('SELECT * FROM users WHERE bm_player_id = ?').get(lookup.bmPlayerId);
+  } else if (lookup.biUid && !existing.bi_uid) {
+    db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(lookup.biUid, existing.steam_id);
+    existing.bi_uid = lookup.biUid;
+  }
+
+  req.login(existing, (err) => {
+    if (err) {
+      console.error('Console login error:', err.message);
+      return res.status(500).json({ error: 'Session creation failed' });
+    }
+    setConsoleCookie(res, { platform, gamertag: existing.gamertag, bmPlayerId: existing.bm_player_id, ts: Date.now() });
+    res.json({ ok: true, persona: existing.persona, gamertag: existing.gamertag, platform: existing.platform, bi_uid: existing.bi_uid || null });
+  });
+});
+
+// ---- FX rates ----
+app.get('/api/shop/fx', async (req, res) => {
+  const data = await fx.getRates();
+  res.json(data);
 });
 
 // ---- Shop API routes ----

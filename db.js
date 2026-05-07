@@ -42,11 +42,67 @@ db.exec(`
   );
 `);
 
-// Migration: add bi_uid column if missing
-try {
-  db.prepare("SELECT bi_uid FROM users LIMIT 1").get();
-} catch (e) {
+function userHasColumn(name) {
+  return db.prepare("PRAGMA table_info(users)").all().some(c => c.name === name);
+}
+
+if (!userHasColumn('bi_uid')) {
   db.exec("ALTER TABLE users ADD COLUMN bi_uid TEXT");
+}
+if (!userHasColumn('platform')) {
+  db.exec("ALTER TABLE users ADD COLUMN platform TEXT NOT NULL DEFAULT 'steam'");
+}
+if (!userHasColumn('gamertag')) {
+  db.exec("ALTER TABLE users ADD COLUMN gamertag TEXT");
+}
+if (!userHasColumn('bm_player_id')) {
+  db.exec("ALTER TABLE users ADD COLUMN bm_player_id TEXT");
+}
+
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_bm_player_id
+  ON users(bm_player_id) WHERE bm_player_id IS NOT NULL
+`);
+
+function productsNeedsMigration() {
+  const cols = db.prepare("PRAGMA table_info(products)").all();
+  const hasIntervalDays = cols.some(c => c.name === 'interval_days');
+  const hasImagesJson = cols.some(c => c.name === 'images_json');
+  if (!hasIntervalDays || !hasImagesJson) return true;
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='products'").get();
+  return row && /CHECK\s*\(\s*type\s+IN\s*\(\s*'one_time'\s*,\s*'subscription'\s*\)\s*\)/i.test(row.sql);
+}
+
+if (productsNeedsMigration()) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  const migrate = db.transaction(() => {
+    db.exec('ALTER TABLE products RENAME TO products_old');
+    db.exec(`
+      CREATE TABLE products (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        title           TEXT NOT NULL,
+        description     TEXT NOT NULL DEFAULT '',
+        price_cents     INTEGER NOT NULL,
+        currency        TEXT NOT NULL DEFAULT 'usd',
+        type            TEXT NOT NULL,
+        stripe_price_id TEXT,
+        image_url       TEXT,
+        images_json     TEXT,
+        interval_days   INTEGER,
+        active          INTEGER NOT NULL DEFAULT 1,
+        created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at      INTEGER NOT NULL DEFAULT (unixepoch())
+      )
+    `);
+    db.exec(`
+      INSERT INTO products (id, title, description, price_cents, currency, type, stripe_price_id, image_url, active, created_at, updated_at)
+      SELECT id, title, description, price_cents, currency, type, stripe_price_id, image_url, active, created_at, updated_at
+      FROM products_old
+    `);
+    db.exec('DROP TABLE products_old');
+  });
+  migrate();
+  db.exec('PRAGMA foreign_keys = ON');
 }
 
 module.exports = db;

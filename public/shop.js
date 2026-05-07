@@ -1,10 +1,19 @@
 // ---- State ----
 let currentUser = null;
+let currentProducts = [];
+let userOrders = [];
 let isTestMode = false;
 let editingProductId = null;
 let dropdownOpen = false;
+let signinOpen = false;
 
-// ---- DOM refs ----
+let fxRates = { USD: 1 };
+let currentCurrency = (localStorage.getItem('rz_currency') || 'USD').toUpperCase();
+if (!['USD', 'GBP', 'EUR'].includes(currentCurrency)) currentCurrency = 'USD';
+const CURRENCY_SYMBOLS = { USD: '$', GBP: '£', EUR: '€' };
+const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
+
+// ---- DOM refs (static elements only — re-queried as needed for dynamic ones) ----
 const navAuth = document.getElementById('navAuth');
 const testBanner = document.getElementById('testBanner');
 const testModeToggle = document.getElementById('testModeToggle');
@@ -18,16 +27,32 @@ const formType = document.getElementById('formType');
 const formDesc = document.getElementById('formDesc');
 const formPrice = document.getElementById('formPrice');
 const formImage = document.getElementById('formImage');
+const formImagesExtra = document.getElementById('formImagesExtra');
+const formIntervalDays = document.getElementById('formIntervalDays');
+const formIntervalRow = document.getElementById('formIntervalRow');
 const formEditId = document.getElementById('formEditId');
 const formSubmitBtn = document.getElementById('formSubmitBtn');
 const formCancelBtn = document.getElementById('formCancelBtn');
 
 // ---- Helpers ----
-function formatPrice(cents, currency, type) {
-  const amount = (cents / 100).toFixed(2);
-  const symbol = currency === 'usd' ? '$' : currency.toUpperCase() + ' ';
-  const suffix = type === 'subscription' ? '<span class="per">/mo</span>' : '';
+function formatPrice(cents, _currency, type, intervalDays) {
+  const baseUSD = (cents || 0) / 100;
+  const cur = currentCurrency;
+  const rate = fxRates[cur] || (cur === 'USD' ? 1 : null);
+  const amount = rate ? (baseUSD * rate).toFixed(2) : baseUSD.toFixed(2);
+  const symbol = CURRENCY_SYMBOLS[rate ? cur : 'USD'] || '$';
+  let suffix = '';
+  if (type === 'subscription') suffix = '<span class="per">/mo</span>';
+  else if (type === 'recurring_custom' && intervalDays) {
+    suffix = `<span class="per">/${intervalDays}d</span>`;
+  }
   return symbol + amount + suffix;
+}
+
+function formatTypeLabel(type, intervalDays) {
+  if (type === 'subscription') return 'Subscription';
+  if (type === 'recurring_custom') return `Renewable · every ${intervalDays || '?'} day${intervalDays === 1 ? '' : 's'}`;
+  return 'One-Time';
 }
 
 function formatDate(unix) {
@@ -38,7 +63,7 @@ function formatDate(unix) {
 
 function escHtml(s) {
   const d = document.createElement('div');
-  d.textContent = s;
+  d.textContent = s == null ? '' : String(s);
   return d.innerHTML;
 }
 
@@ -55,6 +80,62 @@ async function api(url, opts = {}) {
   return res.json();
 }
 
+// ---- FX ----
+async function loadFx() {
+  try {
+    const data = await api('/api/shop/fx');
+    if (data && data.rates) fxRates = data.rates;
+  } catch (e) {
+    fxRates = { USD: 1 };
+  }
+}
+
+// ---- Currency picker ----
+function bindCurrencyPills() {
+  document.querySelectorAll('.currency-pill').forEach(pill => {
+    pill.classList.toggle('active', pill.dataset.cur === currentCurrency);
+    pill.addEventListener('click', () => {
+      currentCurrency = pill.dataset.cur;
+      localStorage.setItem('rz_currency', currentCurrency);
+      document.querySelectorAll('.currency-pill').forEach(p => p.classList.toggle('active', p === pill));
+      renderProducts(currentProducts);
+      const dropdownOrders = document.getElementById('dropdownOrders');
+      if (dropdownOrders) renderOrders(userOrders, dropdownOrders);
+      if (detailProduct) refreshDetailPrice();
+    });
+  });
+}
+
+// ---- Sign-in dropdown ----
+function bindSigninDropdown() {
+  const wrap = document.getElementById('signinWrap');
+  const btn = document.getElementById('signinBtn');
+  if (!wrap || !btn) return;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    signinOpen = !signinOpen;
+    wrap.classList.toggle('open', signinOpen);
+  });
+  wrap.querySelectorAll('[data-platform]').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      signinOpen = false;
+      wrap.classList.remove('open');
+      openConsoleModal(item.dataset.platform);
+    });
+  });
+}
+
+document.addEventListener('click', (e) => {
+  if (signinOpen) {
+    const wrap = document.getElementById('signinWrap');
+    if (wrap && !wrap.contains(e.target)) {
+      signinOpen = false;
+      wrap.classList.remove('open');
+    }
+  }
+});
+
 // ---- Auth ----
 async function loadUser() {
   try {
@@ -66,19 +147,52 @@ async function loadUser() {
 }
 
 function renderAuth() {
+  const currencyHtml = `
+    <div class="currency-pills" id="currencyPills" role="group" aria-label="Currency">
+      <button type="button" class="currency-pill" data-cur="USD">$ USD</button>
+      <button type="button" class="currency-pill" data-cur="GBP">£ GBP</button>
+      <button type="button" class="currency-pill" data-cur="EUR">€ EUR</button>
+    </div>
+  `;
+
   if (currentUser) {
+    const platform = currentUser.platform || 'steam';
+    const platformLabel = PLATFORM_LABELS[platform] || 'Steam';
+    const isSteam = platform === 'steam';
+    const displayName = isSteam ? currentUser.persona : (currentUser.gamertag || currentUser.persona);
+
+    const avatarHtml = isSteam && currentUser.avatar_url
+      ? `<img src="${escHtml(currentUser.avatar_url)}" alt="" class="nav-avatar" onerror="this.style.display='none'">`
+      : `<span class="platform-mark ${platform}-mark" style="width:32px;height:32px;border-radius:6px;font-size:0.7rem">${platform === 'xbox' ? 'X' : platform === 'psn' ? 'PS' : '?'}</span>`;
+
+    const headerImgHtml = isSteam && currentUser.avatar_url
+      ? `<img src="${escHtml(currentUser.avatar_url)}" alt="" onerror="this.style.display='none'">`
+      : `<span class="platform-mark ${platform}-mark" style="width:40px;height:40px;border-radius:8px;font-size:0.78rem">${platform === 'xbox' ? 'X' : platform === 'psn' ? 'PS' : '?'}</span>`;
+
+    const biuidEditableHtml = isSteam ? `
+      <div class="dropdown-biuid-row">
+        <input type="text" id="dropdownBiUidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${escHtml(currentUser.bi_uid || '')}" spellcheck="false" autocomplete="off">
+        <button onclick="saveBiUidFromDropdown()">Save</button>
+      </div>
+    ` : `
+      <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px">Auto-linked from BattleMetrics. Open a Discord ticket if this looks wrong.</div>
+    `;
+
     navAuth.innerHTML = `
+      ${currencyHtml}
       <button class="account-toggle" id="accountToggle">
-        <img src="${currentUser.avatar_url || ''}" alt="" class="nav-avatar" onerror="this.style.display='none'">
-        <span class="persona">${escHtml(currentUser.persona)}</span>
+        ${avatarHtml}
+        <span class="persona">${escHtml(displayName)}</span>
         <span class="chevron"></span>
       </button>
       <div class="account-dropdown" id="accountDropdown">
         <div class="dropdown-header">
-          <img src="${currentUser.avatar_url || ''}" alt="" onerror="this.style.display='none'">
+          ${headerImgHtml}
           <div class="dropdown-header-info">
-            <div class="dropdown-header-name">${escHtml(currentUser.persona)}</div>
-            <div class="dropdown-header-role ${currentUser.role === 'admin' ? 'admin' : ''}">${currentUser.role === 'admin' ? 'Admin' : 'Member'}</div>
+            <div class="dropdown-header-name">${escHtml(displayName)}</div>
+            <div class="dropdown-header-role ${currentUser.role === 'admin' ? 'admin' : ''}">
+              ${currentUser.role === 'admin' ? 'Admin' : platformLabel}
+            </div>
           </div>
         </div>
         <div class="dropdown-biuid">
@@ -87,10 +201,7 @@ function renderAuth() {
             ? `<div class="dropdown-biuid-value">${escHtml(currentUser.bi_uid)}</div>`
             : `<div class="dropdown-biuid-value empty">Not set</div>`
           }
-          <div class="dropdown-biuid-row">
-            <input type="text" id="dropdownBiUidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${currentUser.bi_uid || ''}" spellcheck="false" autocomplete="off">
-            <button onclick="saveBiUidFromDropdown()">Save</button>
-          </div>
+          ${biuidEditableHtml}
         </div>
         <div class="dropdown-section-label">Purchase History</div>
         <div class="dropdown-orders" id="dropdownOrders">
@@ -102,7 +213,6 @@ function renderAuth() {
       </div>
     `;
 
-    // Bind dropdown toggle
     const toggle = document.getElementById('accountToggle');
     const dropdown = document.getElementById('accountDropdown');
     toggle.addEventListener('click', (e) => {
@@ -112,26 +222,48 @@ function renderAuth() {
       dropdown.classList.toggle('open', dropdownOpen);
     });
 
-    // Admin UI
     if (currentUser.role === 'admin') {
       adminPanel.style.display = 'block';
       testBanner.style.display = 'flex';
       isTestMode = sessionStorage.getItem('rz_test_mode') === '1';
       testModeToggle.checked = isTestMode;
+    } else {
+      adminPanel.style.display = 'none';
+      testBanner.style.display = 'none';
     }
 
     loadOrders();
   } else {
     navAuth.innerHTML = `
-      <a href="/auth/steam" class="steam-btn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.04 2 11.04c0 3.15 1.73 5.92 4.33 7.5l2.6-3.76c-.14-.04-.28-.1-.41-.17a2.5 2.5 0 1 1 3.45-.91l2.58 3.73C18.16 16.99 22 14.36 22 11.04 22 6.04 17.52 2 12 2zm4.5 9.54a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
-        Sign in with Steam
-      </a>
+      ${currencyHtml}
+      <div class="signin-wrap" id="signinWrap">
+        <button type="button" class="signin-btn" id="signinBtn">
+          Sign in <span class="chevron"></span>
+        </button>
+        <div class="signin-menu" id="signinMenu">
+          <a href="/auth/steam" class="signin-item">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.04 2 11.04c0 3.15 1.73 5.92 4.33 7.5l2.6-3.76c-.14-.04-.28-.1-.41-.17a2.5 2.5 0 1 1 3.45-.91l2.58 3.73C18.16 16.99 22 14.36 22 11.04 22 6.04 17.52 2 12 2zm4.5 9.54a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
+            Steam
+          </a>
+          <button type="button" class="signin-item" data-platform="xbox">
+            <span class="platform-mark xbox-mark">X</span>
+            Xbox
+          </button>
+          <button type="button" class="signin-item" data-platform="psn">
+            <span class="platform-mark psn-mark">PS</span>
+            PlayStation
+          </button>
+        </div>
+      </div>
     `;
+    bindSigninDropdown();
+    adminPanel.style.display = 'none';
+    testBanner.style.display = 'none';
   }
+
+  bindCurrencyPills();
 }
 
-// Close dropdown on outside click (but not when clicking inside dropdown)
 document.addEventListener('click', (e) => {
   if (!dropdownOpen) return;
   const dropdown = document.getElementById('accountDropdown');
@@ -148,13 +280,119 @@ testModeToggle.addEventListener('change', () => {
   sessionStorage.setItem('rz_test_mode', isTestMode ? '1' : '0');
 });
 
+// ---- Console sign-in modal ----
+const consoleState = { platform: null, gamertag: '', bmPlayerId: null, biUid: null, displayName: null };
+
+function openConsoleModal(platform) {
+  consoleState.platform = platform;
+  consoleState.gamertag = '';
+  consoleState.bmPlayerId = null;
+  consoleState.biUid = null;
+  consoleState.displayName = null;
+
+  const overlay = document.getElementById('consoleOverlay');
+  const label = platform === 'xbox' ? 'Xbox' : 'PlayStation';
+  document.getElementById('consoleModalTitle').textContent = `Sign in with ${label}`;
+  document.getElementById('consolePlatformLabel').textContent = label;
+  const input = document.getElementById('consoleGamertagInput');
+  input.value = '';
+  document.getElementById('consoleResult').style.display = 'none';
+  document.getElementById('consoleResult').innerHTML = '';
+  document.getElementById('consoleError').textContent = '';
+  document.getElementById('consoleLookup').style.display = '';
+  document.getElementById('consoleLookup').disabled = false;
+  document.getElementById('consoleLookup').textContent = 'Look up';
+  document.getElementById('consoleConfirm').style.display = 'none';
+  document.getElementById('consoleConfirm').disabled = false;
+  document.getElementById('consoleConfirm').textContent = 'Confirm & Sign in';
+  overlay.classList.add('open');
+  setTimeout(() => input.focus(), 50);
+}
+
+function closeConsoleModal() {
+  document.getElementById('consoleOverlay').classList.remove('open');
+}
+
+async function consoleLookup() {
+  const input = document.getElementById('consoleGamertagInput');
+  const errBox = document.getElementById('consoleError');
+  const resultBox = document.getElementById('consoleResult');
+  const lookupBtn = document.getElementById('consoleLookup');
+  const confirmBtn = document.getElementById('consoleConfirm');
+
+  const tag = input.value.trim();
+  if (!tag) { errBox.textContent = 'Enter a gamertag.'; return; }
+
+  errBox.textContent = '';
+  lookupBtn.disabled = true;
+  lookupBtn.textContent = 'Searching...';
+
+  try {
+    const data = await api('/api/auth/console/lookup', {
+      method: 'POST',
+      body: JSON.stringify({ platform: consoleState.platform, gamertag: tag })
+    });
+    consoleState.gamertag = tag;
+    consoleState.bmPlayerId = data.bmPlayerId;
+    consoleState.biUid = data.biUid;
+    consoleState.displayName = data.displayName;
+
+    const biLine = data.biUid
+      ? `BI UID: <code>${escHtml(data.biUid)}</code>`
+      : `BI UID: <em style="color:var(--text-ghost)">not yet linked — you'll need to play on a tracked server first</em>`;
+    resultBox.innerHTML = `Found <strong>${escHtml(data.displayName)}</strong> on BattleMetrics.<br>${biLine}`;
+    resultBox.style.display = 'block';
+    lookupBtn.style.display = 'none';
+    confirmBtn.style.display = '';
+  } catch (e) {
+    errBox.textContent = e.message || 'Lookup failed';
+  } finally {
+    lookupBtn.disabled = false;
+    lookupBtn.textContent = 'Look up';
+  }
+}
+
+async function consoleConfirm() {
+  const confirmBtn = document.getElementById('consoleConfirm');
+  const errBox = document.getElementById('consoleError');
+  errBox.textContent = '';
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Signing in...';
+  try {
+    await api('/api/auth/console/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ platform: consoleState.platform, gamertag: consoleState.gamertag })
+    });
+    closeConsoleModal();
+    await loadUser();
+    await loadProducts();
+  } catch (e) {
+    errBox.textContent = e.message || 'Sign in failed';
+  } finally {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Confirm & Sign in';
+  }
+}
+
+document.getElementById('consoleCancel').addEventListener('click', closeConsoleModal);
+document.getElementById('consoleLookup').addEventListener('click', consoleLookup);
+document.getElementById('consoleConfirm').addEventListener('click', consoleConfirm);
+document.getElementById('consoleGamertagInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (document.getElementById('consoleConfirm').style.display !== 'none') consoleConfirm();
+    else consoleLookup();
+  }
+});
+
 // ---- Products ----
 async function loadProducts() {
   try {
     const isAdmin = currentUser && currentUser.role === 'admin';
     const url = isAdmin ? '/api/shop/admin/products' : '/api/shop/products';
     const products = await api(url);
-    renderProducts(products);
+    currentProducts = Array.isArray(products) ? products : [];
+    renderProducts(currentProducts);
   } catch (e) {
     productGrid.innerHTML = '<div class="shop-empty">Failed to load products.</div>';
   }
@@ -174,31 +412,33 @@ function renderProducts(products) {
       : '';
 
     const adminHtml = isAdmin ? `
-      <div class="shop-card-admin" style="display: flex">
-        <button class="card-edit-btn" onclick="editProduct(${p.id})">Edit</button>
-        <button class="card-toggle-btn" onclick="toggleProduct(${p.id}, ${p.active ? 0 : 1})">
+      <div class="shop-card-admin" style="display: flex" onclick="event.stopPropagation()">
+        <button class="card-edit-btn" onclick="event.stopPropagation(); editProduct(${p.id})">Edit</button>
+        <button class="card-toggle-btn" onclick="event.stopPropagation(); toggleProduct(${p.id}, ${p.active ? 0 : 1})">
           ${p.active ? 'Deactivate' : 'Activate'}
         </button>
-        <button class="card-delete-btn" onclick="deleteProduct(${p.id})">Delete</button>
+        <button class="card-delete-btn" onclick="event.stopPropagation(); deleteProduct(${p.id})">Delete</button>
       </div>
     ` : '';
 
     const inactiveClass = (!p.active && isAdmin) ? ' inactive' : '';
-    const canBuy = currentUser && p.active;
 
     const buyBtnHtml = currentUser
-      ? `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="buyProduct(${p.id})">Purchase</button>`
-      : `<a href="/auth/steam" class="shop-buy-btn" style="text-decoration:none;text-align:center">Sign in to buy</a>`;
+      ? `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="event.stopPropagation(); buyProduct(${p.id})">Purchase</button>`
+      : `<button class="shop-buy-btn" onclick="event.stopPropagation(); openSigninFromCard()">Sign in to buy</button>`;
+
+    const typeLabel = formatTypeLabel(p.type, p.interval_days);
+    const typeClass = p.type === 'one_time' ? 'one_time' : 'subscription';
 
     return `
-      <div class="shop-card${inactiveClass}" data-id="${p.id}">
+      <div class="shop-card${inactiveClass}" data-id="${p.id}" onclick="openProductDetail(${p.id})">
         ${imgHtml}
         <div class="shop-card-body">
-          <div class="shop-card-type ${p.type}">${p.type === 'subscription' ? 'Subscription' : 'One-Time'}</div>
+          <div class="shop-card-type ${typeClass}">${escHtml(typeLabel)}</div>
           <h3>${escHtml(p.title)}</h3>
           <p>${escHtml(p.description || '')}</p>
           <div class="shop-card-footer">
-            <span class="shop-card-price">${formatPrice(p.price_cents, p.currency || 'usd', p.type)}</span>
+            <span class="shop-card-price">${formatPrice(p.price_cents, p.currency || 'usd', p.type, p.interval_days)}</span>
             ${buyBtnHtml}
           </div>
           ${adminHtml}
@@ -208,7 +448,127 @@ function renderProducts(products) {
   }).join('');
 }
 
-// ---- BI UID modal ----
+function openSigninFromCard() {
+  const wrap = document.getElementById('signinWrap');
+  if (wrap) {
+    signinOpen = true;
+    wrap.classList.add('open');
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else {
+    window.location.href = '/auth/steam';
+  }
+}
+
+// ---- Detail modal ----
+let detailProduct = null;
+let detailImages = [];
+let detailImageIndex = 0;
+
+function openProductDetail(productId) {
+  const product = currentProducts.find(p => p.id === productId);
+  if (!product) return;
+  detailProduct = product;
+  detailImageIndex = 0;
+  detailImages = [];
+  if (product.image_url) detailImages.push(product.image_url);
+  for (const u of (product.images || [])) {
+    if (u && u !== product.image_url) detailImages.push(u);
+  }
+
+  document.getElementById('detailType').textContent = formatTypeLabel(product.type, product.interval_days);
+  document.getElementById('detailTitle').textContent = product.title;
+  document.getElementById('detailDesc').textContent = product.description || '';
+  refreshDetailPrice();
+  renderDetailImage();
+
+  const buyBtn = document.getElementById('detailBuy');
+  if (currentUser) {
+    buyBtn.textContent = product.active ? 'Purchase' : 'Unavailable';
+    buyBtn.disabled = !product.active;
+    buyBtn.onclick = () => { closeDetail(); buyProduct(product.id); };
+  } else {
+    buyBtn.textContent = 'Sign in to buy';
+    buyBtn.disabled = false;
+    buyBtn.onclick = () => { closeDetail(); openSigninFromCard(); };
+  }
+
+  document.getElementById('detailOverlay').classList.add('open');
+}
+
+function refreshDetailPrice() {
+  if (!detailProduct) return;
+  document.getElementById('detailPrice').innerHTML = formatPrice(detailProduct.price_cents, detailProduct.currency || 'usd', detailProduct.type, detailProduct.interval_days);
+  const note = document.getElementById('detailCurrencyNote');
+  note.textContent = currentCurrency === 'USD' ? '' : 'Charged in USD; your bank handles any conversion.';
+}
+
+function renderDetailImage() {
+  const img = document.getElementById('detailImg');
+  const dots = document.getElementById('detailDots');
+  const prev = document.getElementById('detailPrev');
+  const next = document.getElementById('detailNext');
+  const frame = document.querySelector('.detail-img-frame');
+
+  if (detailImages.length === 0) {
+    img.style.display = 'none';
+    img.src = '';
+    if (frame) frame.style.display = 'none';
+    prev.hidden = true;
+    next.hidden = true;
+    dots.innerHTML = '';
+    return;
+  }
+  if (frame) frame.style.display = '';
+  img.style.display = '';
+  img.src = detailImages[detailImageIndex] || '';
+  prev.hidden = detailImages.length < 2;
+  next.hidden = detailImages.length < 2;
+
+  if (detailImages.length < 2) {
+    dots.innerHTML = '';
+  } else {
+    dots.innerHTML = detailImages.map((_, i) => `<button class="detail-dot ${i === detailImageIndex ? 'active' : ''}" data-i="${i}" aria-label="Image ${i + 1}"></button>`).join('');
+    dots.querySelectorAll('.detail-dot').forEach(d => {
+      d.addEventListener('click', (e) => {
+        e.stopPropagation();
+        detailImageIndex = parseInt(d.dataset.i, 10) || 0;
+        renderDetailImage();
+      });
+    });
+  }
+}
+
+function closeDetail() {
+  document.getElementById('detailOverlay').classList.remove('open');
+  detailProduct = null;
+  detailImages = [];
+  detailImageIndex = 0;
+}
+
+document.getElementById('detailClose').addEventListener('click', closeDetail);
+document.getElementById('detailOverlay').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('detailOverlay')) closeDetail();
+});
+document.getElementById('detailPrev').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (detailImages.length < 2) return;
+  detailImageIndex = (detailImageIndex - 1 + detailImages.length) % detailImages.length;
+  renderDetailImage();
+});
+document.getElementById('detailNext').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (detailImages.length < 2) return;
+  detailImageIndex = (detailImageIndex + 1) % detailImages.length;
+  renderDetailImage();
+});
+document.addEventListener('keydown', (e) => {
+  if (!document.getElementById('detailOverlay').classList.contains('open')) return;
+  if (e.key === 'Escape') closeDetail();
+  else if (e.key === 'ArrowLeft') document.getElementById('detailPrev').click();
+  else if (e.key === 'ArrowRight') document.getElementById('detailNext').click();
+});
+
+// ---- BI UID modal (Steam users only) ----
 let pendingProductId = null;
 
 function showBiUidModal(productId) {
@@ -230,7 +590,6 @@ function hideBiUidModal() {
 document.getElementById('biuidCancel').addEventListener('click', () => {
   const pid = pendingProductId;
   hideBiUidModal();
-  // Re-enable the buy button
   if (pid) {
     const btn = document.querySelector(`.shop-card[data-id="${pid}"] .shop-buy-btn`);
     if (btn) { btn.disabled = false; btn.textContent = 'Purchase'; }
@@ -296,17 +655,19 @@ async function saveBiUidFromDropdown() {
 }
 
 // ---- Buy flow ----
-let userOrders = [];
-
 async function buyProduct(productId) {
   if (!currentUser) return;
 
-  if (!currentUser.bi_uid) {
+  const isSteam = (currentUser.platform || 'steam') === 'steam';
+  if (isSteam && !currentUser.bi_uid) {
     showBiUidModal(productId);
     return;
   }
+  if (!isSteam && !currentUser.bi_uid) {
+    alert("We couldn't find your BI UID via BattleMetrics yet. Play one round on a tracked ReforgedZ server, then come back.");
+    return;
+  }
 
-  // Warn if already purchased this one-time item
   const alreadyOwned = userOrders.find(o => o.product_id === productId && o.status === 'completed' && o.type === 'one_time');
   if (alreadyOwned) {
     if (!confirm('You already own this item. Purchase again?')) return;
@@ -333,19 +694,39 @@ async function proceedCheckout(productId) {
   }
 }
 
-// ---- Admin: Create/Edit ----
+// ---- Admin: type-change toggles interval days field ----
+formType.addEventListener('change', () => {
+  formIntervalRow.style.display = formType.value === 'recurring_custom' ? 'block' : 'none';
+});
+
 productForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
   const price = parseFloat(formPrice.value);
   if (!price || price < 0.50) return alert('Minimum price is $0.50');
 
+  const type = formType.value;
+  let intervalDays = null;
+  if (type === 'recurring_custom') {
+    intervalDays = parseInt(formIntervalDays.value, 10);
+    if (!intervalDays || intervalDays < 1 || intervalDays > 365) {
+      return alert('Renewal interval must be between 1 and 365 days');
+    }
+  }
+
+  const imagesExtra = (formImagesExtra.value || '')
+    .split(/\r?\n/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
   const body = {
     title: formTitle.value.trim(),
     description: formDesc.value.trim(),
     priceCents: Math.round(price * 100),
-    type: formType.value,
-    imageUrl: formImage.value.trim() || null
+    type,
+    imageUrl: formImage.value.trim() || null,
+    intervalDays,
+    imagesExtra
   };
 
   try {
@@ -377,6 +758,9 @@ function editProduct(id) {
     formDesc.value = p.description || '';
     formPrice.value = (p.price_cents / 100).toFixed(2);
     formImage.value = p.image_url || '';
+    formImagesExtra.value = (p.images || []).join('\n');
+    formIntervalDays.value = p.interval_days || '';
+    formIntervalRow.style.display = p.type === 'recurring_custom' ? 'block' : 'none';
     formEditId.value = id;
     editingProductId = id;
     formSubmitBtn.textContent = 'Update Listing';
@@ -389,6 +773,9 @@ formCancelBtn.addEventListener('click', clearForm);
 
 function clearForm() {
   productForm.reset();
+  formImagesExtra.value = '';
+  formIntervalDays.value = '';
+  formIntervalRow.style.display = 'none';
   formEditId.value = '';
   editingProductId = null;
   formSubmitBtn.textContent = 'Create Listing';
@@ -424,7 +811,6 @@ async function toggleProduct(id, active) {
 // ---- Orders (dropdown) ----
 async function loadOrders() {
   if (!currentUser) return;
-
   const container = document.getElementById('dropdownOrders');
   if (!container) return;
 
@@ -445,7 +831,7 @@ function renderOrders(orders, container) {
   }
 
   container.innerHTML = visible.map(o => {
-    const isActiveSub = o.type === 'subscription' && o.status === 'completed' && o.stripe_subscription_id;
+    const isActiveSub = (o.type === 'subscription' || o.type === 'recurring_custom') && o.status === 'completed' && o.stripe_subscription_id;
     const cancelBtn = isActiveSub
       ? `<button class="cancel-sub-btn" onclick="cancelSubscription(${o.id}, event)">Cancel</button>`
       : '';
@@ -524,8 +910,6 @@ async function checkAlerts() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('success') === '1') {
     alertSuccess.style.display = 'block';
-
-    // Verify the checkout session so orders don't stay pending if webhooks fail
     const sessionId = params.get('session_id');
     if (sessionId) {
       try {
@@ -533,9 +917,7 @@ async function checkAlerts() {
           method: 'POST',
           body: JSON.stringify({ sessionId })
         });
-      } catch (e) {
-        // Silent — webhook may still handle it
-      }
+      } catch (e) {}
     }
     window.history.replaceState({}, '', '/shop');
   }
@@ -547,17 +929,21 @@ async function checkAlerts() {
 
 // ---- Init ----
 async function init() {
+  bindCurrencyPills();
+  bindSigninDropdown();
+  await loadFx();
   checkAlerts();
   await loadUser();
   await loadProducts();
 }
 
-// Make functions available globally for onclick handlers
 window.buyProduct = buyProduct;
 window.editProduct = editProduct;
 window.toggleProduct = toggleProduct;
 window.deleteProduct = deleteProduct;
 window.cancelSubscription = cancelSubscription;
 window.saveBiUidFromDropdown = saveBiUidFromDropdown;
+window.openProductDetail = openProductDetail;
+window.openSigninFromCard = openSigninFromCard;
 
 init();

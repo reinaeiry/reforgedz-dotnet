@@ -43,7 +43,10 @@ function sshExec(privateKey, host, port, username, command) {
 
 async function syncPurchasesToServers() {
   const rows = db.prepare(`
-    SELECT DISTINCT u.persona as name, u.bi_uid as guid, p.title as item
+    SELECT DISTINCT
+      COALESCE(u.gamertag, u.persona) AS name,
+      u.bi_uid AS guid,
+      p.title AS item
     FROM orders o
     JOIN users u ON o.steam_id = u.steam_id
     JOIN products p ON o.product_id = p.id

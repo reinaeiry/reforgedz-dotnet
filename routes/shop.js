@@ -15,15 +15,17 @@ function getStripe(testMode) {
 // ---- Discord webhook ----
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-function sendDiscordNotification({ eventType, steamName, steamId, biUid, productTitle, amountCents, currency, status }) {
+const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
+
+function sendDiscordNotification({ eventType, user, biUid, productTitle, amountCents, currency, status }) {
   if (!DISCORD_WEBHOOK_URL) return;
 
   const colors = {
-    pending: 0xfbbf24,   // yellow
-    completed: 0x4ade80, // green
-    cancelled: 0xf87171, // red
-    failed: 0xf87171,    // red
-    refunded: 0xc084fc   // purple
+    pending: 0xfbbf24,
+    completed: 0x4ade80,
+    cancelled: 0xf87171,
+    failed: 0xf87171,
+    refunded: 0xc084fc
   };
 
   const titles = {
@@ -36,11 +38,18 @@ function sendDiscordNotification({ eventType, steamName, steamId, biUid, product
   };
 
   const amount = amountCents ? `$${(amountCents / 100).toFixed(2)} ${(currency || 'usd').toUpperCase()}` : 'N/A';
+  const platform = (user && user.platform) || 'steam';
+  const platformLabel = PLATFORM_LABELS[platform] || platform;
 
-  const fields = [
-    { name: 'Player', value: steamName || 'Unknown', inline: true },
-    { name: 'Steam ID', value: steamId || 'Unknown', inline: true },
-  ];
+  const fields = [];
+  if (platform === 'steam') {
+    fields.push({ name: 'Player', value: (user && user.persona) || 'Unknown', inline: true });
+    fields.push({ name: 'Steam ID', value: (user && user.steam_id) || 'Unknown', inline: true });
+  } else {
+    fields.push({ name: 'Gamertag', value: (user && user.gamertag) || 'Unknown', inline: true });
+    fields.push({ name: 'BM Player ID', value: (user && user.bm_player_id) || 'Unknown', inline: true });
+  }
+  fields.push({ name: 'Platform', value: platformLabel, inline: true });
   fields.push({ name: 'BI UID', value: biUid || 'SET LATER', inline: false });
   fields.push(
     { name: 'Product', value: productTitle || 'Unknown', inline: false },
@@ -63,6 +72,20 @@ function sendDiscordNotification({ eventType, steamName, steamId, biUid, product
   }).catch(err => console.error('Discord webhook error:', err.message));
 }
 
+function parseImagesJson(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(s => typeof s === 'string' && s.trim()) : [];
+  } catch { return []; }
+}
+
+function attachImages(product) {
+  if (!product) return product;
+  product.images = parseImagesJson(product.images_json);
+  return product;
+}
+
 // ---- Middleware helpers ----
 function requireAuth(req, res, next) {
   if (!req.isAuthenticated()) return res.status(401).json({ error: 'Sign in required' });
@@ -81,10 +104,10 @@ function requireAdmin(req, res, next) {
 // Get active products
 router.get('/api/shop/products', (req, res) => {
   const products = db.prepare(`
-    SELECT id, title, description, price_cents, currency, type, image_url
+    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
-  res.json(products);
+  res.json(products.map(attachImages));
 });
 
 // Get Stripe publishable key
@@ -113,10 +136,22 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
   `).run(req.user.steam_id, product.id, product.price_cents);
 
   const orderId = order.lastInsertRowid;
-  const isSubscription = product.type === 'subscription';
+  const isRecurring = product.type === 'subscription' || product.type === 'recurring_custom';
+
+  let recurring = null;
+  if (product.type === 'subscription') {
+    recurring = { interval: 'month' };
+  } else if (product.type === 'recurring_custom') {
+    const days = parseInt(product.interval_days, 10);
+    if (!days || days < 1 || days > 365) {
+      db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
+      return res.status(400).json({ error: 'Product has invalid interval_days' });
+    }
+    recurring = { interval: 'day', interval_count: days };
+  }
 
   const sessionParams = {
-    mode: isSubscription ? 'subscription' : 'payment',
+    mode: isRecurring ? 'subscription' : 'payment',
     line_items: [{
       price_data: {
         currency: product.currency,
@@ -125,7 +160,7 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
           description: product.description || undefined,
         },
         unit_amount: product.price_cents,
-        ...(isSubscription ? { recurring: { interval: 'month' } } : {})
+        ...(recurring ? { recurring } : {})
       },
       quantity: 1
     }],
@@ -139,8 +174,9 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
     cancel_url: BASE_URL + '/shop?cancelled=1',
   };
 
-  // Use Stripe Price ID if available instead of price_data
-  if (product.stripe_price_id) {
+  // Stripe Price ID is only honored for one_time and subscription types
+  // (custom intervals must always go through inline price_data).
+  if (product.stripe_price_id && product.type !== 'recurring_custom') {
     sessionParams.line_items = [{
       price: product.stripe_price_id,
       quantity: 1
@@ -212,15 +248,15 @@ router.post('/api/shop/verify-session', requireAuth, (req, res) => {
         `).run(session.subscription || null, order.id);
 
         const details = db.prepare(`
-          SELECT o.*, u.persona, u.bi_uid, p.title as product_title, p.type, p.currency
+          SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
+                 p.title as product_title, p.type, p.currency
           FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
           WHERE o.id = ?
         `).get(order.id);
         if (details) {
           sendDiscordNotification({
             eventType: session.subscription ? 'subscription_started' : 'payment_completed',
-            steamName: details.persona,
-            steamId: details.steam_id,
+            user: { platform: details.platform, persona: details.persona, steam_id: details.steam_id, gamertag: details.gamertag, bm_player_id: details.bm_player_id },
             biUid: details.bi_uid,
             productTitle: details.product_title,
             amountCents: details.amount_cents,
@@ -289,8 +325,7 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
 
       sendDiscordNotification({
         eventType: 'subscription_cancelled',
-        steamName: req.user.persona,
-        steamId: req.user.steam_id,
+        user: req.user,
         biUid: req.user.bi_uid,
         productTitle: order.product_title,
         amountCents: order.amount_cents,
@@ -313,7 +348,7 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
 // Get all products (including inactive)
 router.get('/api/shop/admin/products', requireAdmin, (req, res) => {
   const products = db.prepare('SELECT * FROM products ORDER BY created_at DESC').all();
-  res.json(products);
+  res.json(products.map(attachImages));
 });
 
 // Get all orders (admin view with steam names + BI UIDs)
@@ -322,6 +357,7 @@ router.get('/api/shop/admin/orders', requireAdmin, (req, res) => {
     SELECT o.id, o.status, o.amount_cents, o.created_at, o.completed_at,
            o.stripe_session_id, o.stripe_subscription_id,
            o.steam_id, u.persona, u.avatar_url, u.bi_uid,
+           u.platform, u.gamertag, u.bm_player_id,
            p.title, p.type, p.currency
     FROM orders o
     JOIN users u ON o.steam_id = u.steam_id
@@ -342,9 +378,24 @@ router.put('/api/shop/admin/users/:steamId/bi-uid', requireAdmin, (req, res) => 
   res.json({ ok: true });
 });
 
+const VALID_PRODUCT_TYPES = ['one_time', 'subscription', 'recurring_custom'];
+
+function normalizeImagesExtra(value) {
+  if (value === undefined || value === null) return undefined;
+  if (Array.isArray(value)) {
+    const cleaned = value.map(s => String(s || '').trim()).filter(Boolean);
+    return JSON.stringify(cleaned);
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    return JSON.stringify(cleaned);
+  }
+  return undefined;
+}
+
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -352,24 +403,62 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
   if (!priceCents || typeof priceCents !== 'number' || priceCents < 1) {
     return res.status(400).json({ error: 'Price must be a positive number (in cents)' });
   }
-  if (!type || !['one_time', 'subscription'].includes(type)) {
-    return res.status(400).json({ error: 'Type must be one_time or subscription' });
+  if (!type || !VALID_PRODUCT_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'Type must be one_time, subscription, or recurring_custom' });
   }
 
+  let intervalDaysVal = null;
+  if (type === 'recurring_custom') {
+    intervalDaysVal = parseInt(intervalDays, 10);
+    if (!intervalDaysVal || intervalDaysVal < 1 || intervalDaysVal > 365) {
+      return res.status(400).json({ error: 'intervalDays must be between 1 and 365 for recurring_custom' });
+    }
+  }
+
+  const imagesJson = normalizeImagesExtra(imagesExtra) ?? null;
+
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
-  res.json(product);
+  res.json(attachImages(product));
 });
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
+
+  if (type !== undefined && !VALID_PRODUCT_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'Invalid type' });
+  }
+
+  let intervalDaysParam = null;
+  let intervalDaysWasSent = false;
+  const effectiveType = type !== undefined ? type : product.type;
+  if (intervalDays !== undefined) {
+    intervalDaysWasSent = true;
+    if (intervalDays === null || intervalDays === '') {
+      intervalDaysParam = null;
+    } else {
+      const n = parseInt(intervalDays, 10);
+      if (!n || n < 1 || n > 365) return res.status(400).json({ error: 'intervalDays must be between 1 and 365' });
+      intervalDaysParam = n;
+    }
+  }
+  if (effectiveType === 'recurring_custom') {
+    const finalIntervalDays = intervalDaysWasSent ? intervalDaysParam : product.interval_days;
+    if (!finalIntervalDays) return res.status(400).json({ error: 'intervalDays is required for recurring_custom' });
+  }
+  if (effectiveType !== 'recurring_custom' && !intervalDaysWasSent) {
+    intervalDaysWasSent = true;
+    intervalDaysParam = null;
+  }
+
+  const imagesJson = normalizeImagesExtra(imagesExtra);
 
   db.prepare(`
     UPDATE products SET
@@ -377,6 +466,9 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       description = COALESCE(?, description),
       price_cents = COALESCE(?, price_cents),
       image_url = COALESCE(?, image_url),
+      type = COALESCE(?, type),
+      interval_days = CASE WHEN ? THEN ? ELSE interval_days END,
+      images_json = COALESCE(?, images_json),
       active = COALESCE(?, active),
       updated_at = unixepoch()
     WHERE id = ?
@@ -385,12 +477,16 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     description !== undefined ? description.trim() : null,
     priceCents !== undefined ? priceCents : null,
     imageUrl !== undefined ? imageUrl : null,
+    type !== undefined ? type : null,
+    intervalDaysWasSent ? 1 : 0,
+    intervalDaysParam,
+    imagesJson !== undefined ? imagesJson : null,
     active !== undefined ? (active ? 1 : 0) : null,
     req.params.id
   );
 
   const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-  res.json(updated);
+  res.json(attachImages(updated));
 });
 
 // Soft-delete (deactivate) product
@@ -423,7 +519,8 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
   if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
 
   const order = db.prepare(`
-    SELECT o.*, u.persona, u.bi_uid, p.title as product_title, p.type, p.currency
+    SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
+           p.title as product_title, p.type, p.currency
     FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
     WHERE o.id = ? AND o.status = 'completed'
   `).get(orderId);
@@ -447,8 +544,7 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
 
   sendDiscordNotification({
     eventType: 'order_revoked',
-    steamName: order.persona,
-    steamId: order.steam_id,
+    user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
     biUid: order.bi_uid,
     productTitle: order.product_title,
     amountCents: order.amount_cents,
@@ -499,15 +595,15 @@ function webhookHandler(req, res) {
         `).run(session.id, session.subscription || null, orderId);
 
         const order = db.prepare(`
-          SELECT o.*, u.persona, u.bi_uid, p.title as product_title, p.type, p.currency
+          SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
+                 p.title as product_title, p.type, p.currency
           FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
           WHERE o.id = ?
         `).get(orderId);
         if (order) {
           sendDiscordNotification({
             eventType: session.subscription ? 'subscription_started' : 'payment_completed',
-            steamName: order.persona,
-            steamId: order.steam_id,
+            user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
             biUid: order.bi_uid,
             productTitle: order.product_title,
             amountCents: order.amount_cents,
@@ -527,15 +623,15 @@ function webhookHandler(req, res) {
         db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(orderId);
 
         const order = db.prepare(`
-          SELECT o.*, u.persona, u.bi_uid, p.title as product_title, p.currency
+          SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
+                 p.title as product_title, p.currency
           FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
           WHERE o.id = ?
         `).get(orderId);
         if (order) {
           sendDiscordNotification({
             eventType: 'payment_failed',
-            steamName: order.persona,
-            steamId: order.steam_id,
+            user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
             biUid: order.bi_uid,
             productTitle: order.product_title,
             amountCents: order.amount_cents,
@@ -558,12 +654,11 @@ function webhookHandler(req, res) {
             VALUES (?, ?, ?, 'completed', ?, unixepoch())
           `).run(existing.steam_id, existing.product_id, subId, invoice.amount_paid);
 
-          const user = db.prepare('SELECT persona, bi_uid FROM users WHERE steam_id = ?').get(existing.steam_id);
+          const user = db.prepare('SELECT persona, bi_uid, platform, gamertag, bm_player_id FROM users WHERE steam_id = ?').get(existing.steam_id);
           const product = db.prepare('SELECT title, currency FROM products WHERE id = ?').get(existing.product_id);
           sendDiscordNotification({
             eventType: 'subscription_renewed',
-            steamName: user ? user.persona : existing.steam_id,
-            steamId: existing.steam_id,
+            user: { platform: user ? user.platform : 'steam', persona: user ? user.persona : existing.steam_id, steam_id: existing.steam_id, gamertag: user ? user.gamertag : null, bm_player_id: user ? user.bm_player_id : null },
             biUid: user ? user.bi_uid : null,
             productTitle: product ? product.title : 'Unknown',
             amountCents: invoice.amount_paid,
@@ -578,7 +673,8 @@ function webhookHandler(req, res) {
     case 'customer.subscription.deleted': {
       const sub = event.data.object;
       const existing = db.prepare(`
-        SELECT o.steam_id, o.amount_cents, u.persona, u.bi_uid, p.title as product_title, p.currency
+        SELECT o.steam_id, o.amount_cents, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
+               p.title as product_title, p.currency
         FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
         WHERE o.stripe_subscription_id = ? AND o.status = 'completed' LIMIT 1
       `).get(sub.id);
@@ -590,8 +686,7 @@ function webhookHandler(req, res) {
       if (existing) {
         sendDiscordNotification({
           eventType: 'subscription_cancelled',
-          steamName: existing.persona,
-          steamId: existing.steam_id,
+          user: { platform: existing.platform, persona: existing.persona, steam_id: existing.steam_id, gamertag: existing.gamertag, bm_player_id: existing.bm_player_id },
           biUid: existing.bi_uid,
           productTitle: existing.product_title,
           amountCents: existing.amount_cents,
