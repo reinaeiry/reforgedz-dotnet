@@ -89,7 +89,7 @@ function attachImages(product) {
 const stockUsedStmt = db.prepare(`
   SELECT COUNT(DISTINCT steam_id) AS used
   FROM orders
-  WHERE product_id = ? AND status IN ('pending', 'completed')
+  WHERE product_id = ? AND status = 'completed'
 `);
 
 function stockUsedFor(productId) {
@@ -102,6 +102,28 @@ function attachStock(product) {
   product.sold_out = product.stock_limit != null && product.stock_used >= product.stock_limit;
   return product;
 }
+
+// Stale-pending sweeper. Pending orders older than this are auto-cancelled.
+// Stripe sessions live 24h, but realistic checkout completion is sub-15-minute,
+// so 30 minutes is a generous safety window.
+const PENDING_TIMEOUT_SECONDS = 30 * 60;
+const SWEEPER_INTERVAL_MS = 5 * 60 * 1000;
+
+const sweepStmt = db.prepare(`
+  UPDATE orders SET status = 'cancelled'
+  WHERE status = 'pending' AND created_at < ?
+`);
+
+function sweepStalePending() {
+  const cutoff = Math.floor(Date.now() / 1000) - PENDING_TIMEOUT_SECONDS;
+  const result = sweepStmt.run(cutoff);
+  if (result.changes > 0) {
+    console.log(`[orders] Auto-cancelled ${result.changes} stale pending order(s)`);
+  }
+}
+
+sweepStalePending();
+setInterval(sweepStalePending, SWEEPER_INTERVAL_MS);
 
 // ---- Middleware helpers ----
 function requireAuth(req, res, next) {
@@ -151,7 +173,7 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
     const used = stockUsedFor(product.id);
     if (used >= product.stock_limit) {
       const buyerInCount = db.prepare(`
-        SELECT 1 FROM orders WHERE product_id = ? AND steam_id = ? AND status IN ('pending', 'completed') LIMIT 1
+        SELECT 1 FROM orders WHERE product_id = ? AND steam_id = ? AND status = 'completed' LIMIT 1
       `).get(product.id, req.user.steam_id);
       if (!buyerInCount) {
         return res.status(409).json({ error: 'This item is sold out.' });
