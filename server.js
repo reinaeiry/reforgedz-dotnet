@@ -10,6 +10,7 @@ const SteamStrategy = require('passport-steam').Strategy;
 const db = require('./db');
 const { lookupPlayerByGamertag } = require('./battlemetrics');
 const fx = require('./fx');
+const reforgedzServers = require('./reforgedzServers');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -479,8 +480,11 @@ async function pollServerStatus() {
         bmId = await resolveBattleMetricsId(def?.attributes?.ip, def?.attributes?.port, attr.name);
         if (bmId) {
           bmIdCache.set(id, bmId);
+          reforgedzServers.rememberBmId(bmId);
           console.log(`Resolved BattleMetrics ID for ${attr.name}: ${bmId}`);
         }
+      } else {
+        reforgedzServers.rememberBmId(bmId);
       }
       if (bmId) {
         const bm = await fetchBattleMetricsPlayers(bmId);
