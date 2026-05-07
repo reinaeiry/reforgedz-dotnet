@@ -628,9 +628,35 @@ router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res
   res.json({ ok: true, deletedOrders, cancelledSubs });
 });
 
-// Revoke an order (admin only — does NOT issue Stripe refund)
+// Refund the latest charge for an order (recurring → latest invoice; one-time → checkout charge)
+async function refundLatestChargeForOrder(order, useTest) {
+  const stripe = getStripe(useTest);
+  let refundParams = null;
+
+  if (order.stripe_subscription_id) {
+    const invoices = await stripe.invoices.list({ subscription: order.stripe_subscription_id, limit: 1 });
+    const invoice = invoices.data && invoices.data[0];
+    if (!invoice) throw new Error('No invoice on subscription');
+    if (invoice.charge) refundParams = { charge: invoice.charge };
+    else if (invoice.payment_intent) refundParams = { payment_intent: invoice.payment_intent };
+    else throw new Error('Latest invoice has no charge or payment intent');
+  } else if (order.stripe_session_id) {
+    const session = await stripe.checkout.sessions.retrieve(order.stripe_session_id);
+    if (session.payment_intent) refundParams = { payment_intent: session.payment_intent };
+    else throw new Error('Checkout session has no payment intent');
+  } else {
+    throw new Error('Order has no Stripe session or subscription to refund');
+  }
+
+  const refund = await stripe.refunds.create(refundParams);
+  return refund.amount;
+}
+
+// Revoke an order (admin only). With { refund: true } also issues a Stripe refund:
+//   - Recurring: refunds only the latest invoice
+//   - One-time:  refunds the original charge
 router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
-  const { orderId } = req.body;
+  const { orderId, refund } = req.body;
   if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
 
   const order = db.prepare(`
@@ -642,7 +668,21 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
 
   if (!order) return res.status(404).json({ error: 'Completed order not found' });
 
-  // If subscription, cancel it immediately in Stripe
+  let refundedCents = 0;
+  if (refund) {
+    try {
+      refundedCents = await refundLatestChargeForOrder(order, false);
+    } catch (e) {
+      const msg = String(e && e.message || '');
+      if (/no such|resource_missing/i.test(msg)) {
+        return res.status(400).json({ error: 'This order is not a live Stripe charge — refunds only work on live orders.' });
+      }
+      console.error('Refund failed:', msg);
+      return res.status(502).json({ error: 'Refund failed: ' + msg });
+    }
+  }
+
+  // Cancel any active subscription
   if (order.stripe_subscription_id) {
     try {
       await getStripe(false).subscriptions.cancel(order.stripe_subscription_id);
@@ -662,14 +702,14 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
     user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
     biUid: order.bi_uid,
     productTitle: order.product_title,
-    amountCents: order.amount_cents,
+    amountCents: refundedCents || order.amount_cents,
     currency: order.currency,
     status: 'refunded'
   });
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
 
-  res.json({ ok: true });
+  res.json({ ok: true, refundedCents });
 });
 
 // ============================================================

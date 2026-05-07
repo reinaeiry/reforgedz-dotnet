@@ -247,6 +247,38 @@
     .revoke-btn:hover { background: rgba(192,132,252,0.08); border-color: rgba(192,132,252,0.4); }
     .revoke-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+    .revoke-wrap { position: relative; display: inline-block; }
+    .revoke-menu {
+      display: none;
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      min-width: 200px;
+      z-index: 50;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      overflow: hidden;
+    }
+    .revoke-menu.open { display: block; }
+    .revoke-menu button {
+      display: block;
+      width: 100%;
+      padding: 9px 12px;
+      text-align: left;
+      background: none;
+      border: none;
+      color: var(--text);
+      font-size: 0.78rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .revoke-menu button:hover { background: rgba(255,255,255,0.04); }
+    .revoke-menu button.with-refund { color: #f87171; border-top: 1px solid var(--border); }
+    .revoke-menu button.with-refund:hover { background: rgba(248,113,113,0.08); }
+
     .type-badge {
       font-size: 0.65rem;
       font-weight: 600;
@@ -487,7 +519,15 @@
           <td><span class="amount-cell">${formatPrice(o.amount_cents, o.currency || 'usd')}</span></td>
           <td><span class="status-badge ${o.status}">${o.status}</span></td>
           <td>${formatDate(o.created_at)}</td>
-          <td>${o.status === 'completed' ? `<button class="revoke-btn" onclick="revokeOrder(${o.id})">Revoke</button>` : ''}</td>
+          <td>${o.status === 'completed' ? `
+            <div class="revoke-wrap">
+              <button class="revoke-btn" onclick="toggleRevokeMenu(event, ${o.id})">Revoke ▾</button>
+              <div class="revoke-menu" id="revokeMenu_${o.id}">
+                <button onclick="revokeOrder(${o.id}, false)">Without Refund</button>
+                <button class="with-refund" onclick="revokeOrder(${o.id}, true)">With Refund</button>
+              </div>
+            </div>
+          ` : ''}</td>
         </tr>
       `).join('');
     }
@@ -529,22 +569,49 @@
       }
     }
 
-    async function revokeOrder(orderId) {
-      if (!confirm('Revoke this order? This will remove the player\'s access.')) return;
+    function toggleRevokeMenu(event, orderId) {
+      event.stopPropagation();
+      const menu = document.getElementById('revokeMenu_' + orderId);
+      const wasOpen = menu.classList.contains('open');
+      document.querySelectorAll('.revoke-menu.open').forEach(m => m.classList.remove('open'));
+      if (!wasOpen) menu.classList.add('open');
+    }
+
+    document.addEventListener('click', () => {
+      document.querySelectorAll('.revoke-menu.open').forEach(m => m.classList.remove('open'));
+    });
+
+    async function revokeOrder(orderId, refund) {
+      const order = allOrders.find(o => o.id === orderId);
+      const isRecurring = order && (order.type === 'subscription' || order.type === 'recurring_custom');
+      const refundDetail = refund
+        ? (isRecurring
+            ? '\n\nThis will refund only the LAST INVOICE (not the full subscription history).'
+            : '\n\nThis will refund the full purchase amount.')
+        : '\n\nNo money will be returned. Future billing stops.';
+      if (!confirm(`Revoke this order?${refundDetail}`)) return;
+
+      document.querySelectorAll('.revoke-menu.open').forEach(m => m.classList.remove('open'));
+
       try {
         const res = await fetch('/api/shop/admin/revoke', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId })
+          body: JSON.stringify({ orderId, refund: !!refund })
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || 'Failed to revoke');
         }
+        const data = await res.json().catch(() => ({}));
         allOrders.forEach(o => { if (o.id === orderId) o.status = 'refunded'; });
         renderStats();
         renderOrders();
-        alert('Item Revoked, contact Nattii to issue refund via Stripe');
+        if (refund && data.refundedCents) {
+          alert(`Revoked. Refunded $${(data.refundedCents / 100).toFixed(2)} via Stripe.`);
+        } else {
+          alert('Revoked. No refund issued.');
+        }
       } catch (e) {
         alert(e.message || 'Failed to revoke order');
       }
