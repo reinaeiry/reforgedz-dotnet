@@ -871,7 +871,7 @@ async function loadOrders() {
 }
 
 function renderOrders(orders, container) {
-  const visible = (orders || []).filter(o => o.status !== 'refunded');
+  const visible = orders || [];
   if (visible.length === 0) {
     container.innerHTML = '<div class="dropdown-empty">No purchases yet.</div>';
     return;
