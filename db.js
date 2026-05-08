@@ -116,6 +116,9 @@ if (productsNeedsMigration()) {
 if (!productHasColumn('stock_limit')) {
   db.exec("ALTER TABLE products ADD COLUMN stock_limit INTEGER");
 }
+if (!productHasColumn('server_specific')) {
+  db.exec("ALTER TABLE products ADD COLUMN server_specific INTEGER NOT NULL DEFAULT 0");
+}
 
 // Repair: an earlier migration of `products` had SQLite's
 // auto-rewrite-of-references behavior on, which silently rewrote
@@ -150,6 +153,14 @@ if (ordersSchema && /products_old/i.test(ordersSchema.sql)) {
   repair();
   db.exec('PRAGMA foreign_keys = ON');
   console.log('[db] Repaired orders.product_id FK reference');
+}
+
+function orderHasColumn(name) {
+  return db.prepare("PRAGMA table_info(orders)").all().some(c => c.name === name);
+}
+
+if (!orderHasColumn('server_id')) {
+  db.exec("ALTER TABLE orders ADD COLUMN server_id TEXT");
 }
 
 module.exports = db;

@@ -725,8 +725,16 @@
             </label>
           </div>
           <div class="admin-field" id="formStockRow" style="display:none">
-            <label>Max active buyers / subscribers</label>
+            <label id="formStockLimitLabel">Max active buyers / subscribers</label>
             <input type="number" id="formStockLimit" min="0" placeholder="50">
+          </div>
+          <div class="admin-field full">
+            <label class="stock-toggle">
+              <input type="checkbox" id="formServerSpecific"> Specific Server Purchase
+            </label>
+            <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
+              Buyers pick one of EU1/EU2/NA1/NA2 at checkout. Their entitlement only syncs to that server. Stock limit (above) becomes per-server when this is on.
+            </div>
           </div>
           <input type="hidden" id="formEditId" value="">
           <div class="admin-actions">
@@ -827,6 +835,10 @@
         <div class="detail-type" id="detailType"></div>
         <h2 id="detailTitle"></h2>
         <p id="detailDesc"></p>
+        <div class="detail-server-picker" id="detailServerPicker" style="display:none">
+          <div class="detail-server-label">Choose your server</div>
+          <div class="detail-server-grid" id="detailServerGrid"></div>
+        </div>
         <div class="detail-footer">
           <span class="detail-price" id="detailPrice"></span>
           <button class="shop-buy-btn" id="detailBuy">Purchase</button>
@@ -1522,6 +1534,81 @@
 
     .shop-card {
       cursor: pointer;
+    }
+
+    .detail-server-picker {
+      margin-bottom: 22px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+    }
+
+    .detail-server-label {
+      font-family: var(--display);
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-ghost);
+      margin-bottom: 10px;
+    }
+
+    .detail-server-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    @media (min-width: 480px) {
+      .detail-server-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    .detail-server-btn {
+      padding: 12px 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--body);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, transform 0.1s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .detail-server-btn:hover:not(:disabled) {
+      border-color: rgba(204, 31, 31, 0.4);
+      background: var(--surface);
+    }
+
+    .detail-server-btn.selected {
+      border-color: var(--accent);
+      background: rgba(204, 31, 31, 0.12);
+    }
+
+    .detail-server-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .detail-server-btn .server-id {
+      font-family: var(--display);
+      font-size: 0.95rem;
+      letter-spacing: 1px;
+      color: #fff;
+    }
+
+    .detail-server-btn .server-stock {
+      font-size: 0.7rem;
+      color: var(--text-ghost);
+      font-weight: 400;
+    }
+
+    .detail-server-btn:disabled .server-stock {
+      color: #f87171;
     }
 
     .stock-toggle {

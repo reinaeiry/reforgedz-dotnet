@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { syncPurchasesToServers } = require('../sync');
+const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 
 // ---- Stripe setup ----
 const Stripe = require('stripe');
@@ -17,7 +18,7 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
 const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
 
-function sendDiscordNotification({ eventType, user, biUid, productTitle, amountCents, currency, status }) {
+function sendDiscordNotification({ eventType, user, biUid, productTitle, amountCents, currency, status, serverId }) {
   if (!DISCORD_WEBHOOK_URL) return;
 
   const colors = {
@@ -51,8 +52,11 @@ function sendDiscordNotification({ eventType, user, biUid, productTitle, amountC
   }
   fields.push({ name: 'Platform', value: platformLabel, inline: true });
   fields.push({ name: 'BI UID', value: biUid || 'SET LATER', inline: false });
+  fields.push({ name: 'Product', value: productTitle || 'Unknown', inline: false });
+  if (serverId) {
+    fields.push({ name: 'Server', value: SERVER_LABELS[serverId] || String(serverId).toUpperCase(), inline: true });
+  }
   fields.push(
-    { name: 'Product', value: productTitle || 'Unknown', inline: false },
     { name: 'Amount', value: amount, inline: true },
     { name: 'Status', value: status || 'unknown', inline: true }
   );
@@ -92,14 +96,35 @@ const stockUsedStmt = db.prepare(`
   WHERE product_id = ? AND status = 'completed'
 `);
 
+const perServerStockUsedStmt = db.prepare(`
+  SELECT server_id, COUNT(DISTINCT steam_id) AS used
+  FROM orders
+  WHERE product_id = ? AND status = 'completed' AND server_id IS NOT NULL
+  GROUP BY server_id
+`);
+
 function stockUsedFor(productId) {
   return stockUsedStmt.get(productId).used;
 }
 
+function perServerStockUsed(productId) {
+  const out = Object.fromEntries(SERVER_IDS.map(id => [id, 0]));
+  for (const row of perServerStockUsedStmt.all(productId)) {
+    if (row.server_id in out) out[row.server_id] = row.used;
+  }
+  return out;
+}
+
 function attachStock(product) {
   if (!product) return product;
-  product.stock_used = stockUsedFor(product.id);
-  product.sold_out = product.stock_limit != null && product.stock_used >= product.stock_limit;
+  if (product.server_specific) {
+    product.per_server_used = perServerStockUsed(product.id);
+    product.stock_used = Object.values(product.per_server_used).reduce((a, b) => a + b, 0);
+    product.sold_out = false;
+  } else {
+    product.stock_used = stockUsedFor(product.id);
+    product.sold_out = product.stock_limit != null && product.stock_used >= product.stock_limit;
+  }
   return product;
 }
 
@@ -144,7 +169,7 @@ function requireAdmin(req, res, next) {
 // Get active products
 router.get('/api/shop/products', (req, res) => {
   const products = db.prepare(`
-    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, active
+    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, server_specific, active
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
   res.json(products.map(p => attachStock(attachImages(p))));
@@ -160,7 +185,7 @@ router.get('/api/shop/config', (req, res) => {
 
 // Create checkout session
 router.post('/api/shop/checkout', requireAuth, (req, res) => {
-  const { productId, testMode } = req.body;
+  const { productId, testMode, serverId } = req.body;
   if (!productId) return res.status(400).json({ error: 'Missing productId' });
 
   // Only admins can use test mode
@@ -170,7 +195,24 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
   const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
-  if (product.stock_limit != null) {
+  let orderServerId = null;
+  if (product.server_specific) {
+    if (!isValidServerId(serverId)) {
+      return res.status(400).json({ error: 'Pick a server for this purchase.' });
+    }
+    orderServerId = serverId;
+    if (product.stock_limit != null) {
+      const used = perServerStockUsed(product.id)[serverId] || 0;
+      if (used >= product.stock_limit) {
+        const buyerOnServer = db.prepare(`
+          SELECT 1 FROM orders WHERE product_id = ? AND server_id = ? AND steam_id = ? AND status = 'completed' LIMIT 1
+        `).get(product.id, serverId, req.user.steam_id);
+        if (!buyerOnServer) {
+          return res.status(409).json({ error: `Sold out on ${SERVER_LABELS[serverId] || serverId.toUpperCase()}.` });
+        }
+      }
+    }
+  } else if (product.stock_limit != null) {
     const used = stockUsedFor(product.id);
     if (used >= product.stock_limit) {
       const buyerInCount = db.prepare(`
@@ -184,8 +226,8 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
 
   // Create pending order
   const order = db.prepare(`
-    INSERT INTO orders (steam_id, product_id, status, amount_cents) VALUES (?, ?, 'pending', ?)
-  `).run(req.user.steam_id, product.id, product.price_cents);
+    INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents) VALUES (?, ?, ?, 'pending', ?)
+  `).run(req.user.steam_id, product.id, orderServerId, product.price_cents);
 
   const orderId = order.lastInsertRowid;
   const isRecurring = product.type === 'subscription' || product.type === 'recurring_custom';
@@ -249,7 +291,7 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
 router.get('/api/shop/orders', requireAuth, (req, res) => {
   const orders = db.prepare(`
     SELECT o.id, o.product_id, o.status, o.amount_cents, o.created_at, o.completed_at,
-           o.stripe_subscription_id, p.title, p.type, p.currency
+           o.stripe_subscription_id, o.server_id, p.title, p.type, p.currency, p.server_specific
     FROM orders o JOIN products p ON o.product_id = p.id
     WHERE o.steam_id = ? ORDER BY o.created_at DESC
   `).all(req.user.steam_id);
@@ -313,7 +355,8 @@ router.post('/api/shop/verify-session', requireAuth, (req, res) => {
             productTitle: details.product_title,
             amountCents: details.amount_cents,
             currency: details.currency,
-            status: 'completed'
+            status: 'completed',
+            serverId: details.server_id
           });
         }
 
@@ -382,7 +425,8 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
         productTitle: order.product_title,
         amountCents: order.amount_cents,
         currency: order.currency,
-        status: 'cancelled'
+        status: 'cancelled',
+        serverId: order.server_id
       });
 
       res.json({ ok: true });
@@ -467,7 +511,7 @@ function normalizeStockLimit(value) {
 
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, serverSpecific } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -489,11 +533,12 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
   const imagesJson = normalizeImagesExtra(imagesExtra) ?? null;
   const stockLimitVal = normalizeStockLimit(stockLimit);
+  const serverSpecificVal = serverSpecific ? 1 : 0;
 
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, server_specific)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, serverSpecificVal);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
   res.json(attachStock(attachImages(product)));
@@ -501,7 +546,7 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, serverSpecific } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
@@ -534,6 +579,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
   const imagesJson = normalizeImagesExtra(imagesExtra);
   const stockLimitVal = normalizeStockLimit(stockLimit);
   const stockLimitWasSent = stockLimit !== undefined;
+  const serverSpecificWasSent = serverSpecific !== undefined;
+  const serverSpecificVal = serverSpecific ? 1 : 0;
 
   db.prepare(`
     UPDATE products SET
@@ -545,6 +592,7 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       interval_days = CASE WHEN ? THEN ? ELSE interval_days END,
       images_json = COALESCE(?, images_json),
       stock_limit = CASE WHEN ? THEN ? ELSE stock_limit END,
+      server_specific = CASE WHEN ? THEN ? ELSE server_specific END,
       active = COALESCE(?, active),
       updated_at = unixepoch()
     WHERE id = ?
@@ -559,6 +607,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     imagesJson !== undefined ? imagesJson : null,
     stockLimitWasSent ? 1 : 0,
     stockLimitVal === undefined ? null : stockLimitVal,
+    serverSpecificWasSent ? 1 : 0,
+    serverSpecificVal,
     active !== undefined ? (active ? 1 : 0) : null,
     req.params.id
   );
@@ -704,7 +754,8 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
     productTitle: order.product_title,
     amountCents: refundedCents || order.amount_cents,
     currency: order.currency,
-    status: 'refunded'
+    status: 'refunded',
+    serverId: order.server_id
   });
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
@@ -763,7 +814,8 @@ function webhookHandler(req, res) {
             productTitle: order.product_title,
             amountCents: order.amount_cents,
             currency: order.currency,
-            status: 'completed'
+            status: 'completed',
+            serverId: order.server_id
           });
         }
         syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
@@ -791,7 +843,8 @@ function webhookHandler(req, res) {
             productTitle: order.product_title,
             amountCents: order.amount_cents,
             currency: order.currency,
-            status: 'failed'
+            status: 'failed',
+            serverId: order.server_id
           });
         }
       }
@@ -805,9 +858,9 @@ function webhookHandler(req, res) {
         const existing = db.prepare('SELECT * FROM orders WHERE stripe_subscription_id = ? AND status = ?').get(subId, 'completed');
         if (existing) {
           db.prepare(`
-            INSERT INTO orders (steam_id, product_id, stripe_subscription_id, status, amount_cents, completed_at)
-            VALUES (?, ?, ?, 'completed', ?, unixepoch())
-          `).run(existing.steam_id, existing.product_id, subId, invoice.amount_paid);
+            INSERT INTO orders (steam_id, product_id, server_id, stripe_subscription_id, status, amount_cents, completed_at)
+            VALUES (?, ?, ?, ?, 'completed', ?, unixepoch())
+          `).run(existing.steam_id, existing.product_id, existing.server_id, subId, invoice.amount_paid);
 
           const user = db.prepare('SELECT persona, bi_uid, platform, gamertag, bm_player_id FROM users WHERE steam_id = ?').get(existing.steam_id);
           const product = db.prepare('SELECT title, currency FROM products WHERE id = ?').get(existing.product_id);
@@ -818,7 +871,8 @@ function webhookHandler(req, res) {
             productTitle: product ? product.title : 'Unknown',
             amountCents: invoice.amount_paid,
             currency: product ? product.currency : 'usd',
-            status: 'completed'
+            status: 'completed',
+            serverId: existing.server_id
           });
         }
       }
@@ -828,7 +882,7 @@ function webhookHandler(req, res) {
     case 'customer.subscription.deleted': {
       const sub = event.data.object;
       const existing = db.prepare(`
-        SELECT o.steam_id, o.amount_cents, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
+        SELECT o.steam_id, o.amount_cents, o.server_id, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
                p.title as product_title, p.currency
         FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
         WHERE o.stripe_subscription_id = ? AND o.status = 'completed' LIMIT 1
@@ -846,7 +900,8 @@ function webhookHandler(req, res) {
           productTitle: existing.product_title,
           amountCents: existing.amount_cents,
           currency: existing.currency,
-          status: 'cancelled'
+          status: 'cancelled',
+          serverId: existing.server_id
         });
       }
       syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));

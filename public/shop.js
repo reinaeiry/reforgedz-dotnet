@@ -12,6 +12,8 @@ let currentCurrency = (localStorage.getItem('rz_currency') || 'USD').toUpperCase
 if (!['USD', 'GBP', 'EUR'].includes(currentCurrency)) currentCurrency = 'USD';
 const CURRENCY_SYMBOLS = { USD: '$', GBP: '£', EUR: '€' };
 const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
+const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2'];
+const SERVER_LABELS = { eu1: 'EU1', eu2: 'EU2', na1: 'NA1', na2: 'NA2' };
 
 // ---- DOM refs (static elements only — re-queried as needed for dynamic ones) ----
 const navAuth = document.getElementById('navAuth');
@@ -33,6 +35,8 @@ const formIntervalRow = document.getElementById('formIntervalRow');
 const formStockLimited = document.getElementById('formStockLimited');
 const formStockLimit = document.getElementById('formStockLimit');
 const formStockRow = document.getElementById('formStockRow');
+const formStockLimitLabel = document.getElementById('formStockLimitLabel');
+const formServerSpecific = document.getElementById('formServerSpecific');
 const formEditId = document.getElementById('formEditId');
 const formSubmitBtn = document.getElementById('formSubmitBtn');
 const formCancelBtn = document.getElementById('formCancelBtn');
@@ -61,11 +65,11 @@ function formatTypeLabel(type, intervalDays) {
 function stockBadgeHtml(p) {
   if (p.stock_limit == null) return '';
   const used = p.stock_used || 0;
-  const limit = p.stock_limit;
-  const remaining = Math.max(0, limit - used);
+  const totalCap = p.server_specific ? p.stock_limit * SERVER_IDS.length : p.stock_limit;
+  const remaining = Math.max(0, totalCap - used);
   if (remaining === 0) return '<span class="stock-badge sold-out">Sold out</span>';
-  const cls = remaining <= Math.max(1, Math.floor(limit * 0.2)) ? 'low' : 'available';
-  return `<span class="stock-badge ${cls}">${remaining} / ${limit} left</span>`;
+  const cls = remaining <= Math.max(1, Math.floor(totalCap * 0.2)) ? 'low' : 'available';
+  return `<span class="stock-badge ${cls}">${remaining} / ${totalCap} left</span>`;
 }
 
 function formatDate(unix) {
@@ -443,10 +447,11 @@ function renderProducts(products) {
     const soldOut = p.sold_out === true;
     const soldOutClass = soldOut ? ' sold-out' : '';
 
+    const buyLabel = p.server_specific ? 'Select Server' : 'Purchase';
     const buyBtnHtml = currentUser
       ? (soldOut
           ? `<button class="shop-buy-btn" disabled onclick="event.stopPropagation()">Sold out</button>`
-          : `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="event.stopPropagation(); buyProduct(${p.id})">Purchase</button>`)
+          : `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="event.stopPropagation(); buyProduct(${p.id})">${buyLabel}</button>`)
       : `<button class="shop-buy-btn" onclick="event.stopPropagation(); openSigninFromCard()">Sign in to buy</button>`;
 
     const typeLabel = formatTypeLabel(p.type, p.interval_days);
@@ -485,6 +490,83 @@ function openSigninFromCard() {
 let detailProduct = null;
 let detailImages = [];
 let detailImageIndex = 0;
+let selectedServerId = null;
+
+function renderServerPicker(product) {
+  const wrap = document.getElementById('detailServerPicker');
+  const grid = document.getElementById('detailServerGrid');
+  if (!product.server_specific) {
+    wrap.style.display = 'none';
+    grid.innerHTML = '';
+    return;
+  }
+  wrap.style.display = '';
+  const used = product.per_server_used || {};
+  const limit = product.stock_limit;
+  grid.innerHTML = SERVER_IDS.map(id => {
+    const u = used[id] || 0;
+    const stock = (limit != null) ? `${Math.max(0, limit - u)} / ${limit}` : 'Unlimited';
+    const isFull = limit != null && u >= limit;
+    const selected = id === selectedServerId ? ' selected' : '';
+    return `
+      <button type="button" class="detail-server-btn${selected}" data-server-id="${id}" ${isFull ? 'disabled' : ''}>
+        <span class="server-id">${SERVER_LABELS[id]}</span>
+        <span class="server-stock">${isFull ? 'Sold out' : stock}</span>
+      </button>
+    `;
+  }).join('');
+  grid.querySelectorAll('.detail-server-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (btn.disabled) return;
+      selectedServerId = btn.dataset.serverId;
+      renderServerPicker(detailProduct);
+      updateDetailBuyButton();
+    });
+  });
+}
+
+function updateDetailBuyButton() {
+  const buyBtn = document.getElementById('detailBuy');
+  const product = detailProduct;
+  if (!product) return;
+  if (!currentUser) {
+    buyBtn.textContent = 'Sign in to buy';
+    buyBtn.disabled = false;
+    buyBtn.onclick = () => { closeDetail(); openSigninFromCard(); };
+    return;
+  }
+  if (product.server_specific) {
+    if (!selectedServerId) {
+      buyBtn.textContent = 'Pick a server';
+      buyBtn.disabled = true;
+      buyBtn.onclick = null;
+      return;
+    }
+    const used = (product.per_server_used || {})[selectedServerId] || 0;
+    if (product.stock_limit != null && used >= product.stock_limit) {
+      buyBtn.textContent = `Sold out on ${SERVER_LABELS[selectedServerId]}`;
+      buyBtn.disabled = true;
+      buyBtn.onclick = null;
+      return;
+    }
+    buyBtn.textContent = product.active ? `Purchase for ${SERVER_LABELS[selectedServerId]}` : 'Unavailable';
+    buyBtn.disabled = !product.active;
+    buyBtn.onclick = () => { const sid = selectedServerId; closeDetail(); buyProduct(product.id, sid); };
+    return;
+  }
+  // Non-server-specific
+  const soldOut = product.sold_out === true;
+  if (soldOut) {
+    buyBtn.textContent = 'Sold out';
+    buyBtn.disabled = true;
+    buyBtn.onclick = null;
+  } else {
+    buyBtn.textContent = product.active ? 'Purchase' : 'Unavailable';
+    buyBtn.disabled = !product.active;
+    buyBtn.onclick = () => { closeDetail(); buyProduct(product.id); };
+  }
+}
 
 function openProductDetail(productId) {
   const product = currentProducts.find(p => p.id === productId);
@@ -492,6 +574,7 @@ function openProductDetail(productId) {
   detailProduct = product;
   detailImageIndex = 0;
   detailImages = [];
+  selectedServerId = null;
   if (product.image_url) detailImages.push(product.image_url);
   for (const u of (product.images || [])) {
     if (u && u !== product.image_url) detailImages.push(u);
@@ -503,24 +586,8 @@ function openProductDetail(productId) {
   document.getElementById('detailDesc').textContent = product.description || '';
   refreshDetailPrice();
   renderDetailImage();
-
-  const buyBtn = document.getElementById('detailBuy');
-  const soldOut = product.sold_out === true;
-  if (currentUser) {
-    if (soldOut) {
-      buyBtn.textContent = 'Sold out';
-      buyBtn.disabled = true;
-      buyBtn.onclick = null;
-    } else {
-      buyBtn.textContent = product.active ? 'Purchase' : 'Unavailable';
-      buyBtn.disabled = !product.active;
-      buyBtn.onclick = () => { closeDetail(); buyProduct(product.id); };
-    }
-  } else {
-    buyBtn.textContent = 'Sign in to buy';
-    buyBtn.disabled = false;
-    buyBtn.onclick = () => { closeDetail(); openSigninFromCard(); };
-  }
+  renderServerPicker(product);
+  updateDetailBuyButton();
 
   document.getElementById('detailOverlay').classList.add('open');
 }
@@ -600,9 +667,11 @@ document.addEventListener('keydown', (e) => {
 
 // ---- BI UID modal (Steam users only) ----
 let pendingProductId = null;
+let pendingServerId = null;
 
-function showBiUidModal(productId) {
+function showBiUidModal(productId, serverId) {
   pendingProductId = productId;
+  pendingServerId = serverId || null;
   const overlay = document.getElementById('biuidOverlay');
   const input = document.getElementById('biuidInput');
   const error = document.getElementById('biuidError');
@@ -615,6 +684,7 @@ function showBiUidModal(productId) {
 function hideBiUidModal() {
   document.getElementById('biuidOverlay').classList.remove('open');
   pendingProductId = null;
+  pendingServerId = null;
 }
 
 document.getElementById('biuidCancel').addEventListener('click', () => {
@@ -628,8 +698,9 @@ document.getElementById('biuidCancel').addEventListener('click', () => {
 
 document.getElementById('biuidSkip').addEventListener('click', () => {
   const pid = pendingProductId;
+  const sid = pendingServerId;
   hideBiUidModal();
-  if (pid) proceedCheckout(pid);
+  if (pid) proceedCheckout(pid, sid);
 });
 
 document.getElementById('biuidSubmit').addEventListener('click', async () => {
@@ -654,9 +725,10 @@ document.getElementById('biuidSubmit').addEventListener('click', async () => {
     });
     currentUser.bi_uid = raw;
     const pid = pendingProductId;
+    const sid = pendingServerId;
     hideBiUidModal();
     renderAuth();
-    if (pid) proceedCheckout(pid);
+    if (pid) proceedCheckout(pid, sid);
   } catch (e) {
     error.textContent = e.message || 'Failed to save BI UID';
   } finally {
@@ -685,12 +757,20 @@ async function saveBiUidFromDropdown() {
 }
 
 // ---- Buy flow ----
-async function buyProduct(productId) {
+async function buyProduct(productId, serverId) {
   if (!currentUser) return;
+
+  const product = currentProducts.find(p => p.id === productId);
+  if (product && product.server_specific && !serverId) {
+    // Server-specific products require a server pick; route the buyer through
+    // the detail modal where the picker lives.
+    openProductDetail(productId);
+    return;
+  }
 
   const isSteam = (currentUser.platform || 'steam') === 'steam';
   if (isSteam && !currentUser.bi_uid) {
-    showBiUidModal(productId);
+    showBiUidModal(productId, serverId);
     return;
   }
   if (!isSteam && !currentUser.bi_uid) {
@@ -698,22 +778,27 @@ async function buyProduct(productId) {
     return;
   }
 
-  const alreadyOwned = userOrders.find(o => o.product_id === productId && o.status === 'completed' && o.type === 'one_time');
+  const alreadyOwned = userOrders.find(o =>
+    o.product_id === productId
+    && o.status === 'completed'
+    && o.type === 'one_time'
+    && (!serverId || o.server_id === serverId)
+  );
   if (alreadyOwned) {
     if (!confirm('You already own this item. Purchase again?')) return;
   }
 
-  proceedCheckout(productId);
+  proceedCheckout(productId, serverId);
 }
 
-async function proceedCheckout(productId) {
+async function proceedCheckout(productId, serverId) {
   const btn = document.querySelector(`.shop-card[data-id="${productId}"] .shop-buy-btn`);
   if (btn) { btn.disabled = true; btn.textContent = 'Redirecting...'; }
 
   try {
     const data = await api('/api/shop/checkout', {
       method: 'POST',
-      body: JSON.stringify({ productId, testMode: isTestMode })
+      body: JSON.stringify({ productId, testMode: isTestMode, serverId: serverId || null })
     });
     if (data.url) {
       window.location.href = data.url;
@@ -733,6 +818,15 @@ formStockLimited.addEventListener('change', () => {
   formStockRow.style.display = formStockLimited.checked ? 'block' : 'none';
   if (!formStockLimited.checked) formStockLimit.value = '';
 });
+
+function refreshStockLabel() {
+  formStockLimitLabel.textContent = formServerSpecific.checked
+    ? 'Max active buyers per server'
+    : 'Max active buyers / subscribers';
+}
+
+formServerSpecific.addEventListener('change', refreshStockLabel);
+refreshStockLabel();
 
 productForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -771,7 +865,8 @@ productForm.addEventListener('submit', async (e) => {
     imageUrl: formImage.value.trim() || null,
     intervalDays,
     imagesExtra,
-    stockLimit
+    stockLimit,
+    serverSpecific: formServerSpecific.checked
   };
 
   try {
@@ -810,6 +905,8 @@ function editProduct(id) {
     formStockLimited.checked = limited;
     formStockLimit.value = limited ? p.stock_limit : '';
     formStockRow.style.display = limited ? 'block' : 'none';
+    formServerSpecific.checked = !!p.server_specific;
+    refreshStockLabel();
     formEditId.value = id;
     editingProductId = id;
     formSubmitBtn.textContent = 'Update Listing';
@@ -828,6 +925,8 @@ function clearForm() {
   formStockLimited.checked = false;
   formStockLimit.value = '';
   formStockRow.style.display = 'none';
+  formServerSpecific.checked = false;
+  refreshStockLabel();
   formEditId.value = '';
   editingProductId = null;
   formSubmitBtn.textContent = 'Create Listing';
@@ -904,11 +1003,12 @@ function renderOrders(orders, container) {
     const cancelBtn = isActiveSub
       ? `<button class="cancel-sub-btn" onclick="cancelSubscription(${o.id}, event)">Cancel</button>`
       : '';
+    const serverTag = o.server_id ? ` <span style="color:var(--text-ghost);font-weight:500"> · ${escHtml(SERVER_LABELS[o.server_id] || o.server_id)}</span>` : '';
 
     return `
       <div class="dropdown-order">
         <div class="dropdown-order-info">
-          <div class="dropdown-order-title">${escHtml(o.title)}</div>
+          <div class="dropdown-order-title">${escHtml(o.title)}${serverTag}</div>
           <div class="dropdown-order-meta">
             <span class="status-dot ${o.status}"></span>
             ${o.status} &middot; ${formatDate(o.created_at)} &middot; ${formatPrice(o.amount_cents, o.currency || 'usd', o.type)}
