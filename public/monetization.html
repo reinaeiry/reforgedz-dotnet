@@ -185,8 +185,94 @@
       font-weight: 500;
     }
 
+    /* ---- Zero Gameplay Impact panel ---- */
+    .zero-impact {
+      background: linear-gradient(180deg, rgba(204,31,31,0.06) 0%, rgba(204,31,31,0.02) 100%);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 48px 44px;
+      margin-bottom: 56px;
+      max-width: 1100px;
+    }
+
+    .zero-impact-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .zero-impact-header h2 {
+      font-family: var(--display);
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: var(--accent);
+      margin: 0 0 12px;
+    }
+
+    .zero-impact-header p {
+      font-size: 0.95rem;
+      color: var(--text-dim);
+      max-width: 640px;
+      margin: 0 auto;
+      line-height: 1.7;
+    }
+
+    .zero-impact-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+
+    .zero-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 18px 20px;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text);
+      line-height: 1.4;
+    }
+
+    .zero-item .x {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      font-family: var(--display);
+      font-size: 1.4rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .zero-impact-footer {
+      text-align: center;
+      font-size: 0.85rem;
+      font-style: italic;
+      color: var(--text-dim);
+      line-height: 1.75;
+      max-width: 720px;
+      margin: 0 auto;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+
     @media (max-width: 960px) {
       .info-cards { grid-template-columns: 1fr; }
+      .zero-impact-grid { grid-template-columns: repeat(2, 1fr); }
+      .zero-impact { padding: 36px 28px; }
+    }
+
+    @media (max-width: 600px) {
+      .zero-impact-grid { grid-template-columns: 1fr; }
+      .zero-impact-header h2 { font-size: 1.5rem; }
     }
 
     @media (max-width: 768px) {
@@ -234,6 +320,28 @@
           <p>Everything here follows Bohemia Interactive's official monetization guidelines for Arma Reforger servers. Their rules take priority over ours if there's ever a conflict.</p>
         </div>
       </div>
+
+      <!-- Zero Gameplay Impact -->
+      <section class="zero-impact" aria-labelledby="zeroImpactTitle">
+        <div class="zero-impact-header">
+          <h2 id="zeroImpactTitle">Zero Gameplay Impact</h2>
+          <p>We will never sell anything that affects gameplay in any way. This includes:</p>
+        </div>
+        <div class="zero-impact-grid">
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> Weapons, Attachments, or Ammo</div>
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> Enhanced or Better Vehicles</div>
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> Armor or Protective Gear</div>
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> Ghillie Suits or Camo Advantages</div>
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> Extra Supplies or Inventory Items</div>
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> XP Boosts or Faster Progression</div>
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> Loot Crates or Random Rewards</div>
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> Map, Region, or Server Exclusivity</div>
+          <div class="zero-item"><span class="x" aria-hidden="true">&times;</span> Any Gameplay-Affecting Content</div>
+        </div>
+        <p class="zero-impact-footer">
+          All players have access to identical gameplay content. All cosmetics maintain standard visibility and provide zero concealment or tactical benefits. Non-paying players are never restricted from accessing gameplay content.
+        </p>
+      </section>
 
       <!-- Policy sections -->
       <div class="policy-body">
@@ -291,8 +399,8 @@
 
       <div class="policy-footer">
         <div class="policy-dates">
-          <div>Effective Date: <span>Pending Approval</span></div>
-          <div>Last Updated: <span>March 11, 2026</span></div>
+          <div>Effective Date: <span>May 11, 2026</span></div>
+          <div>Last Updated: <span>May 11, 2026</span></div>
         </div>
       </div>
 
