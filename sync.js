@@ -58,6 +58,17 @@ function buildPerServerPurchaseBuckets() {
     WHERE o.status = 'completed' AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
   `).all();
 
+  // Manual priority-queue grants need to land in purchases.json too — otherwise
+  // the game-side mod (which reads purchases.json) won't know about them.
+  // Use the canonical title of an active priority-queue-granting product so it
+  // matches whatever the mod expects; fall back to the literal "Priority Queue".
+  const pqProduct = db.prepare(`
+    SELECT title FROM products WHERE grants_priority_queue = 1 AND active = 1 ORDER BY created_at DESC LIMIT 1
+  `).get();
+  const pqItemTitle = (pqProduct && pqProduct.title) || 'Priority Queue';
+
+  const manualGrants = db.prepare(`SELECT guid, server_id, display_name FROM priority_queue_grants`).all();
+
   const buckets = Object.fromEntries(SERVER_IDS.map(id => [id, []]));
 
   for (const r of rows) {
@@ -69,7 +80,18 @@ function buildPerServerPurchaseBuckets() {
     }
   }
 
-  // Dedupe per bucket on (guid|item)
+  for (const g of manualGrants) {
+    if (!g.guid || !buckets[g.server_id]) continue;
+    buckets[g.server_id].push({
+      name: g.display_name || '',
+      guid: g.guid,
+      item: pqItemTitle
+    });
+  }
+
+  // Dedupe per bucket on (guid|item) — keeps the first occurrence, so a
+  // purchase entry's `name` (which comes from the user's persona/gamertag)
+  // wins over a manual grant's display_name if both exist for the same guid.
   for (const id of SERVER_IDS) {
     const seen = new Set();
     buckets[id] = buckets[id].filter(e => {
