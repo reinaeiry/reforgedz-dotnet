@@ -736,6 +736,14 @@
               Buyers pick one of EU1/EU2/NA1/NA2 at checkout. Their entitlement only syncs to that server. Stock limit (above) becomes per-server when this is on.
             </div>
           </div>
+          <div class="admin-field full">
+            <label class="stock-toggle">
+              <input type="checkbox" id="formGrantsPriorityQueue"> Grants Priority Queue
+            </label>
+            <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
+              Buyers' GUIDs get added to the server's game.admins list, giving them priority queue (reserved slot). Combine with Specific Server Purchase to limit which servers it applies to.
+            </div>
+          </div>
           <input type="hidden" id="formEditId" value="">
           <div class="admin-actions">
             <button type="submit" class="admin-submit" id="formSubmitBtn">Create Listing</button>

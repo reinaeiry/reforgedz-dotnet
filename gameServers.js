@@ -1,6 +1,19 @@
 const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2'];
 const SERVER_LABELS = { eu1: 'EU1', eu2: 'EU2', na1: 'NA1', na2: 'NA2' };
 
+// Given the shop's purchases.json path (which sits deep inside the
+// pterodactyl volume), strip back to the volume root and append the
+// game server's config.json. Example:
+//   /var/lib/pterodactyl/volumes/<uuid>/profile/profile/eiry/reforgedz-dotnet-shop
+// becomes
+//   /var/lib/pterodactyl/volumes/<uuid>/config.json
+function configPathFromShopPath(shopPath) {
+  if (!shopPath) return null;
+  const i = shopPath.indexOf('/profile/');
+  if (i < 0) return null;
+  return shopPath.substring(0, i) + '/config.json';
+}
+
 function listServers() {
   const eu = (process.env.GAME_SERVER_EU_PATHS || '').split(',').map(s => s.trim()).filter(Boolean);
   const na = (process.env.GAME_SERVER_NA_PATHS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -17,7 +30,10 @@ function listServers() {
     { id: 'na1', region: 'na', host: naHost, port: naPort, user: naUser, path: na[0] || null },
     { id: 'na2', region: 'na', host: naHost, port: naPort, user: naUser, path: na[1] || null },
   ];
-  return all.filter(s => s.host && s.path);
+  return all.filter(s => s.host && s.path).map(s => ({
+    ...s,
+    configPath: configPathFromShopPath(s.path)
+  }));
 }
 
 function getServer(id) {

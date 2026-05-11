@@ -37,6 +37,7 @@ const formStockLimit = document.getElementById('formStockLimit');
 const formStockRow = document.getElementById('formStockRow');
 const formStockLimitLabel = document.getElementById('formStockLimitLabel');
 const formServerSpecific = document.getElementById('formServerSpecific');
+const formGrantsPriorityQueue = document.getElementById('formGrantsPriorityQueue');
 const formEditId = document.getElementById('formEditId');
 const formSubmitBtn = document.getElementById('formSubmitBtn');
 const formCancelBtn = document.getElementById('formCancelBtn');
@@ -866,7 +867,8 @@ productForm.addEventListener('submit', async (e) => {
     intervalDays,
     imagesExtra,
     stockLimit,
-    serverSpecific: formServerSpecific.checked
+    serverSpecific: formServerSpecific.checked,
+    grantsPriorityQueue: formGrantsPriorityQueue.checked
   };
 
   try {
@@ -906,6 +908,7 @@ function editProduct(id) {
     formStockLimit.value = limited ? p.stock_limit : '';
     formStockRow.style.display = limited ? 'block' : 'none';
     formServerSpecific.checked = !!p.server_specific;
+    formGrantsPriorityQueue.checked = !!p.grants_priority_queue;
     refreshStockLabel();
     formEditId.value = id;
     editingProductId = id;
@@ -926,6 +929,7 @@ function clearForm() {
   formStockLimit.value = '';
   formStockRow.style.display = 'none';
   formServerSpecific.checked = false;
+  formGrantsPriorityQueue.checked = false;
   refreshStockLabel();
   formEditId.value = '';
   editingProductId = null;

@@ -119,6 +119,34 @@ if (!productHasColumn('stock_limit')) {
 if (!productHasColumn('server_specific')) {
   db.exec("ALTER TABLE products ADD COLUMN server_specific INTEGER NOT NULL DEFAULT 0");
 }
+if (!productHasColumn('grants_priority_queue')) {
+  db.exec("ALTER TABLE products ADD COLUMN grants_priority_queue INTEGER NOT NULL DEFAULT 0");
+}
+
+// Manual priority-queue grants (admin-page driven, no Stripe payment).
+// (guid, server_id) is unique. server_id is one of eu1/eu2/na1/na2.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS priority_queue_grants (
+    guid          TEXT NOT NULL,
+    server_id     TEXT NOT NULL,
+    display_name  TEXT,
+    granted_by    TEXT,
+    granted_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (guid, server_id)
+  )
+`);
+
+// Tracks the set of GUIDs the shop last wrote into each server's
+// config.json game.admins array. Used so the shop only ever
+// adds/removes its OWN contributed GUIDs — real GMs added via the
+// admin page are never touched.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS config_admin_sync_state (
+    server_id              TEXT PRIMARY KEY,
+    previously_owned_json  TEXT NOT NULL DEFAULT '[]',
+    updated_at             INTEGER NOT NULL DEFAULT (unixepoch())
+  )
+`);
 
 // Repair: an earlier migration of `products` had SQLite's
 // auto-rewrite-of-references behavior on, which silently rewrote

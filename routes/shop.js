@@ -158,8 +158,11 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!req.isAuthenticated() || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-  next();
+  if (req.isAuthenticated() && req.user.role === 'admin') return next();
+  // Shared-secret fallback used by the reforgedz admin page backend.
+  const apiKey = req.headers['x-shop-admin-key'];
+  if (apiKey && process.env.SHOP_ADMIN_API_KEY && apiKey === process.env.SHOP_ADMIN_API_KEY) return next();
+  return res.status(403).json({ error: 'Admin access required' });
 }
 
 // ============================================================
@@ -169,7 +172,7 @@ function requireAdmin(req, res, next) {
 // Get active products
 router.get('/api/shop/products', (req, res) => {
   const products = db.prepare(`
-    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, server_specific, active
+    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, server_specific, grants_priority_queue, active
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
   res.json(products.map(p => attachStock(attachImages(p))));
@@ -511,7 +514,7 @@ function normalizeStockLimit(value) {
 
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, serverSpecific } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -534,11 +537,12 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
   const imagesJson = normalizeImagesExtra(imagesExtra) ?? null;
   const stockLimitVal = normalizeStockLimit(stockLimit);
   const serverSpecificVal = serverSpecific ? 1 : 0;
+  const grantsPqVal = grantsPriorityQueue ? 1 : 0;
 
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, server_specific)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, serverSpecificVal);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, server_specific, grants_priority_queue)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, serverSpecificVal, grantsPqVal);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
   res.json(attachStock(attachImages(product)));
@@ -546,7 +550,7 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, serverSpecific } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
@@ -581,6 +585,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
   const stockLimitWasSent = stockLimit !== undefined;
   const serverSpecificWasSent = serverSpecific !== undefined;
   const serverSpecificVal = serverSpecific ? 1 : 0;
+  const grantsPqWasSent = grantsPriorityQueue !== undefined;
+  const grantsPqVal = grantsPriorityQueue ? 1 : 0;
 
   db.prepare(`
     UPDATE products SET
@@ -593,6 +599,7 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       images_json = COALESCE(?, images_json),
       stock_limit = CASE WHEN ? THEN ? ELSE stock_limit END,
       server_specific = CASE WHEN ? THEN ? ELSE server_specific END,
+      grants_priority_queue = CASE WHEN ? THEN ? ELSE grants_priority_queue END,
       active = COALESCE(?, active),
       updated_at = unixepoch()
     WHERE id = ?
@@ -609,6 +616,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     stockLimitVal === undefined ? null : stockLimitVal,
     serverSpecificWasSent ? 1 : 0,
     serverSpecificVal,
+    grantsPqWasSent ? 1 : 0,
+    grantsPqVal,
     active !== undefined ? (active ? 1 : 0) : null,
     req.params.id
   );
@@ -761,6 +770,155 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
 
   res.json({ ok: true, refundedCents });
+});
+
+// ============================================================
+//  Priority Queue management (used by reforgedz admin page)
+// ============================================================
+
+function buildPriorityQueueList() {
+  const orderRows = db.prepare(`
+    SELECT
+      u.bi_uid AS guid,
+      COALESCE(u.gamertag, u.persona) AS display_name,
+      p.server_specific,
+      o.server_id
+    FROM orders o
+    JOIN users u ON o.steam_id = u.steam_id
+    JOIN products p ON o.product_id = p.id
+    WHERE o.status = 'completed'
+      AND p.grants_priority_queue = 1
+      AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
+  `).all();
+
+  const manualRows = db.prepare(`SELECT guid, server_id, display_name FROM priority_queue_grants`).all();
+
+  const byGuid = new Map();
+  const blank = () => Object.fromEntries(SERVER_IDS.map(id => [id, false]));
+  const blankSrc = () => Object.fromEntries(SERVER_IDS.map(id => [id, null]));
+
+  function ensureEntry(guid, displayName) {
+    let e = byGuid.get(guid);
+    if (!e) {
+      e = { guid, displayName: displayName || '', presence: blank(), sources: blankSrc() };
+      byGuid.set(guid, e);
+    } else if (!e.displayName && displayName) {
+      e.displayName = displayName;
+    }
+    return e;
+  }
+
+  function mark(entry, serverId, source) {
+    if (!SERVER_IDS.includes(serverId)) return;
+    entry.presence[serverId] = true;
+    const cur = entry.sources[serverId];
+    entry.sources[serverId] = cur && cur !== source ? 'both' : source;
+  }
+
+  for (const r of orderRows) {
+    const e = ensureEntry(r.guid, r.display_name);
+    if (!r.server_specific) {
+      for (const id of SERVER_IDS) mark(e, id, 'purchase');
+    } else if (r.server_id) {
+      mark(e, r.server_id, 'purchase');
+    }
+  }
+
+  for (const r of manualRows) {
+    const e = ensureEntry(r.guid, r.display_name);
+    if (r.server_id) mark(e, r.server_id, 'manual');
+  }
+
+  return Array.from(byGuid.values()).sort((a, b) =>
+    (a.displayName || '').toLowerCase().localeCompare((b.displayName || '').toLowerCase())
+  );
+}
+
+function priorityQueueServers() {
+  return SERVER_IDS.map(id => ({ id, label: SERVER_LABELS[id] || id.toUpperCase() }));
+}
+
+const BI_UID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function cleanGuid(s) {
+  if (typeof s !== 'string') return null;
+  const cleaned = s.trim().toLowerCase();
+  return BI_UID_RE.test(cleaned) ? cleaned : null;
+}
+
+// List all priority-queue holders with their per-server presence
+router.get('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
+  res.json({
+    servers: priorityQueueServers(),
+    entries: buildPriorityQueueList()
+  });
+});
+
+// Manual add: create or rename a manual grant for a guid (without setting any server yet)
+router.post('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
+  const { guid: rawGuid, displayName, serverId } = req.body || {};
+  const guid = cleanGuid(rawGuid);
+  if (!guid) return res.status(400).json({ error: 'Invalid GUID format' });
+  const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
+
+  if (serverId !== undefined && serverId !== null && !SERVER_IDS.includes(serverId)) {
+    return res.status(400).json({ error: 'Invalid server ID' });
+  }
+
+  if (serverId) {
+    db.prepare(`
+      INSERT INTO priority_queue_grants (guid, server_id, display_name, granted_by, granted_at)
+      VALUES (?, ?, ?, ?, unixepoch())
+      ON CONFLICT(guid, server_id) DO UPDATE SET
+        display_name = COALESCE(excluded.display_name, display_name)
+    `).run(guid, serverId, name, req.user && req.user.steam_id ? req.user.steam_id : 'api');
+  } else if (name) {
+    // No serverId given but a name was — propagate the name to any existing rows for this guid
+    db.prepare(`UPDATE priority_queue_grants SET display_name = ? WHERE guid = ? AND (display_name IS NULL OR display_name = '')`).run(name, guid);
+  }
+
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+
+  const entries = buildPriorityQueueList();
+  const entry = entries.find(e => e.guid === guid) || { guid, displayName: name || '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])) };
+  res.json({ ok: true, entry });
+});
+
+// Toggle priority queue on/off for a given (guid, serverId).
+// Only affects manual grants. Purchase-derived presence is untouched.
+router.post('/api/shop/admin/priority-queue/toggle', requireAdmin, (req, res) => {
+  const { guid: rawGuid, serverId, present, displayName } = req.body || {};
+  const guid = cleanGuid(rawGuid);
+  if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
+  if (!SERVER_IDS.includes(serverId)) return res.status(400).json({ error: 'Invalid server ID' });
+
+  if (present) {
+    const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
+    db.prepare(`
+      INSERT INTO priority_queue_grants (guid, server_id, display_name, granted_by, granted_at)
+      VALUES (?, ?, ?, ?, unixepoch())
+      ON CONFLICT(guid, server_id) DO UPDATE SET
+        display_name = COALESCE(excluded.display_name, display_name)
+    `).run(guid, serverId, name, req.user && req.user.steam_id ? req.user.steam_id : 'api');
+  } else {
+    db.prepare('DELETE FROM priority_queue_grants WHERE guid = ? AND server_id = ?').run(guid, serverId);
+  }
+
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+
+  // Return refreshed entry (or stub if no presence remains)
+  const entries = buildPriorityQueueList();
+  const entry = entries.find(e => e.guid === guid) || { guid, displayName: '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])) };
+  res.json({ ok: true, entry });
+});
+
+// Remove all manual grants for a guid (purchase-driven presence is unaffected)
+router.delete('/api/shop/admin/priority-queue/:guid', requireAdmin, (req, res) => {
+  const guid = cleanGuid(req.params.guid);
+  if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
+  const result = db.prepare('DELETE FROM priority_queue_grants WHERE guid = ?').run(guid);
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+  res.json({ ok: true, removed: result.changes });
 });
 
 // ============================================================
