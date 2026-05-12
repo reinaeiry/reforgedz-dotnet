@@ -217,5 +217,23 @@ function orderHasColumn(name) {
 if (!orderHasColumn('server_id')) {
   db.exec("ALTER TABLE orders ADD COLUMN server_id TEXT");
 }
+if (!orderHasColumn('test_mode')) {
+  db.exec("ALTER TABLE orders ADD COLUMN test_mode INTEGER NOT NULL DEFAULT 0");
+}
+
+function expenseHasColumn(name) {
+  return db.prepare("PRAGMA table_info(monthly_expenses)").all().some(c => c.name === name);
+}
+if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='monthly_expenses'").get()) {
+  if (!expenseHasColumn('kind')) {
+    db.exec("ALTER TABLE monthly_expenses ADD COLUMN kind TEXT NOT NULL DEFAULT 'monthly'");
+  }
+  if (!expenseHasColumn('incurred_at')) {
+    db.exec("ALTER TABLE monthly_expenses ADD COLUMN incurred_at INTEGER");
+  }
+  if (!expenseHasColumn('tax_cents')) {
+    db.exec("ALTER TABLE monthly_expenses ADD COLUMN tax_cents INTEGER NOT NULL DEFAULT 0");
+  }
+}
 
 module.exports = db;

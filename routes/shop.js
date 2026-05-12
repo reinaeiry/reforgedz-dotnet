@@ -250,8 +250,8 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
 
   // Create pending order
   const order = db.prepare(`
-    INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents) VALUES (?, ?, ?, 'pending', ?)
-  `).run(req.user.steam_id, product.id, orderServerId, amountCents);
+    INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode) VALUES (?, ?, ?, 'pending', ?, ?)
+  `).run(req.user.steam_id, product.id, orderServerId, amountCents, useTest ? 1 : 0);
 
   const orderId = order.lastInsertRowid;
   const isRecurring = product.type === 'subscription' || product.type === 'recurring_custom';
@@ -490,7 +490,7 @@ router.get('/api/shop/admin/products', requireAdmin, (req, res) => {
 // Get all orders (admin view with steam names + BI UIDs)
 router.get('/api/shop/admin/orders', requireAdmin, (req, res) => {
   const orders = db.prepare(`
-    SELECT o.id, o.status, o.amount_cents, o.created_at, o.completed_at,
+    SELECT o.id, o.status, o.amount_cents, o.created_at, o.completed_at, o.test_mode,
            o.stripe_session_id, o.stripe_subscription_id,
            o.steam_id, u.persona, u.avatar_url, u.bi_uid,
            u.platform, u.gamertag, u.bm_player_id,
@@ -1072,11 +1072,13 @@ function startOfYearUnix() {
   return Math.floor(new Date(d.getFullYear(), 0, 1).getTime() / 1000);
 }
 
+// All revenue queries filter out orders we've marked as test_mode so historical
+// sandbox runs don't pollute the rollups. New orders are tagged at checkout.
 function revenueSummary() {
-  const lifetime = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed'`).get();
-  const refunded = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'refunded'`).get();
-  const thisMonth = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND completed_at >= ?`).get(startOfMonthUnix());
-  const thisYear = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND completed_at >= ?`).get(startOfYearUnix());
+  const lifetime = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND test_mode = 0`).get();
+  const refunded = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'refunded' AND test_mode = 0`).get();
+  const thisMonth = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND test_mode = 0 AND completed_at >= ?`).get(startOfMonthUnix());
+  const thisYear = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND test_mode = 0 AND completed_at >= ?`).get(startOfYearUnix());
   return {
     lifetimeCount: lifetime.c, lifetimeCents: lifetime.cents,
     refundedCount: refunded.c, refundedCents: refunded.cents,
@@ -1094,7 +1096,7 @@ function mrrEstimate() {
     SELECT o.amount_cents, p.type, p.interval_days, o.stripe_subscription_id
     FROM orders o
     JOIN products p ON o.product_id = p.id
-    WHERE o.status = 'completed' AND o.stripe_subscription_id IS NOT NULL
+    WHERE o.status = 'completed' AND o.test_mode = 0 AND o.stripe_subscription_id IS NOT NULL
     GROUP BY o.stripe_subscription_id
     HAVING o.id = MAX(o.id)
   `).all();
@@ -1111,9 +1113,11 @@ function mrrEstimate() {
 
 function topProductsByRevenue(limit = 10) {
   return db.prepare(`
-    SELECT p.id, p.title, p.type, COUNT(o.id) AS sales, COALESCE(SUM(o.amount_cents), 0) AS cents
+    SELECT p.id, p.title, p.type,
+      COUNT(o.id) FILTER (WHERE o.status = 'completed' AND o.test_mode = 0) AS sales,
+      COALESCE(SUM(o.amount_cents) FILTER (WHERE o.status = 'completed' AND o.test_mode = 0), 0) AS cents
     FROM products p
-    LEFT JOIN orders o ON o.product_id = p.id AND o.status = 'completed'
+    LEFT JOIN orders o ON o.product_id = p.id
     GROUP BY p.id
     HAVING sales > 0
     ORDER BY cents DESC
@@ -1121,39 +1125,217 @@ function topProductsByRevenue(limit = 10) {
   `).all(limit);
 }
 
-function listExpenses() {
-  return db.prepare(`SELECT id, label, amount_cents, note, created_at, updated_at FROM monthly_expenses ORDER BY amount_cents DESC, id ASC`).all();
+function refundsByProduct(limit = 10) {
+  return db.prepare(`
+    SELECT p.id, p.title, p.type,
+      COUNT(o.id) AS refunds,
+      COALESCE(SUM(o.amount_cents), 0) AS cents
+    FROM products p
+    JOIN orders o ON o.product_id = p.id
+    WHERE o.status = 'refunded' AND o.test_mode = 0
+    GROUP BY p.id
+    HAVING refunds > 0
+    ORDER BY cents DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+function topBuyers(limit = 10) {
+  return db.prepare(`
+    SELECT
+      u.steam_id,
+      COALESCE(u.gamertag, u.persona) AS name,
+      u.platform,
+      COUNT(o.id) AS orders,
+      COALESCE(SUM(o.amount_cents), 0) AS cents
+    FROM users u
+    JOIN orders o ON o.steam_id = u.steam_id
+    WHERE o.status = 'completed' AND o.test_mode = 0
+    GROUP BY u.steam_id
+    ORDER BY cents DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+// Daily revenue series for the chart, last N days. Returns an array of
+// { day: 'YYYY-MM-DD', cents } including zero days so the chart x-axis
+// is continuous.
+function dailyRevenue(days = 90) {
+  const sinceUnix = Math.floor(Date.now() / 1000) - days * 86400;
+  const rows = db.prepare(`
+    SELECT date(completed_at, 'unixepoch') AS day, COALESCE(SUM(amount_cents), 0) AS cents
+    FROM orders
+    WHERE status = 'completed' AND test_mode = 0 AND completed_at >= ?
+    GROUP BY day
+    ORDER BY day ASC
+  `).all(sinceUnix);
+  const map = new Map(rows.map(r => [r.day, r.cents]));
+  const out = [];
+  const start = new Date();
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start);
+    d.setUTCDate(start.getUTCDate() + i);
+    const key = d.toISOString().slice(0, 10);
+    out.push({ day: key, cents: map.get(key) || 0 });
+  }
+  return out;
+}
+
+// Per-product per-month grid for the last 6 months across the top 5 products
+function perProductPerMonth(productLimit = 5, monthCount = 6) {
+  const top = db.prepare(`
+    SELECT p.id, p.title
+    FROM products p
+    JOIN orders o ON o.product_id = p.id
+    WHERE o.status = 'completed' AND o.test_mode = 0
+    GROUP BY p.id
+    ORDER BY SUM(o.amount_cents) DESC
+    LIMIT ?
+  `).all(productLimit);
+
+  const months = [];
+  const d = new Date();
+  for (let i = monthCount - 1; i >= 0; i--) {
+    const m = new Date(d.getFullYear(), d.getMonth() - i, 1);
+    const key = m.toISOString().slice(0, 7); // YYYY-MM
+    months.push(key);
+  }
+
+  const rows = db.prepare(`
+    SELECT product_id, strftime('%Y-%m', completed_at, 'unixepoch') AS m, COALESCE(SUM(amount_cents), 0) AS cents
+    FROM orders
+    WHERE status = 'completed' AND test_mode = 0 AND completed_at IS NOT NULL
+    GROUP BY product_id, m
+  `).all();
+  const lookup = new Map();
+  for (const r of rows) lookup.set(`${r.product_id}|${r.m}`, r.cents);
+
+  return {
+    months,
+    products: top.map(p => ({
+      id: p.id,
+      title: p.title,
+      cellsCents: months.map(m => lookup.get(`${p.id}|${m}`) || 0)
+    }))
+  };
+}
+
+// Estimated Stripe fees on lifetime live revenue.
+// Stripe's standard US-card pricing: 2.9% + $0.30 per successful charge.
+// Per-charge fee is fixed regardless of refunds, so we count charges (not
+// refunded amount). Approximation, not the real per-charge fee from Stripe.
+function stripeFeesEstimate() {
+  const live = db.prepare(`
+    SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents
+    FROM orders
+    WHERE status IN ('completed', 'refunded') AND test_mode = 0 AND amount_cents > 0
+  `).get();
+  const charges = live.c || 0;
+  const grossCents = live.cents || 0;
+  // 2.9% of gross plus 30c per charge
+  const percentCents = Math.round(grossCents * 0.029);
+  const fixedCents = charges * 30;
+  return { charges, grossCents, percentCents, fixedCents, totalCents: percentCents + fixedCents };
+}
+
+function listExpenses(kind) {
+  if (kind) {
+    return db.prepare(`SELECT id, label, amount_cents, tax_cents, note, kind, incurred_at, created_at, updated_at FROM monthly_expenses WHERE kind = ? ORDER BY COALESCE(incurred_at, created_at) DESC, amount_cents DESC, id ASC`).all(kind);
+  }
+  return db.prepare(`SELECT id, label, amount_cents, tax_cents, note, kind, incurred_at, created_at, updated_at FROM monthly_expenses ORDER BY kind ASC, amount_cents DESC, id ASC`).all();
+}
+
+// Last 30 Stripe payouts (real bank transfers out of the live account).
+async function stripePayouts() {
+  const liveKey = process.env.STRIPE_SECRET_KEY;
+  const useTest = !liveKey || /CHANGE_ME/.test(liveKey);
+  try {
+    const list = await getStripe(useTest).payouts.list({ limit: 30 });
+    return (list.data || []).map(p => ({
+      id: p.id,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      arrival: p.arrival_date,
+      created: p.created,
+      type: p.type,
+      method: p.method
+    }));
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+function runway(stripeUsdCents, mrrCents, monthlyBurnCents) {
+  const netMonthly = (mrrCents || 0) - (monthlyBurnCents || 0);
+  if (netMonthly >= 0) return { profitable: true, monthsRemaining: null, netMonthlyCents: netMonthly };
+  const months = stripeUsdCents > 0 ? stripeUsdCents / Math.abs(netMonthly) : 0;
+  return { profitable: false, monthsRemaining: months, netMonthlyCents: netMonthly };
 }
 
 router.get('/api/shop/admin/finances', requireAdmin, async (req, res) => {
-  const [balance] = await Promise.all([fetchStripeBalance()]);
+  const [balance, payouts] = await Promise.all([fetchStripeBalance(), stripePayouts()]);
   const revenue = revenueSummary();
   const mrr = mrrEstimate();
   const top = topProductsByRevenue(10);
-  const expenses = listExpenses();
-  const expensesCents = expenses.reduce((s, e) => s + (e.amount_cents || 0), 0);
+  const refundsByProd = refundsByProduct(10);
+  const buyers = topBuyers(10);
+  const fees = stripeFeesEstimate();
+  const chart = dailyRevenue(90);
+  const grid = perProductPerMonth(5, 6);
+  const monthlyExpenses = listExpenses('monthly');
+  const oneOffExpenses = listExpenses('one_off');
+  const monthlyTotal = monthlyExpenses.reduce((s, e) => s + (e.amount_cents || 0) + (e.tax_cents || 0), 0);
+  const oneOffTotal = oneOffExpenses.reduce((s, e) => s + (e.amount_cents || 0) + (e.tax_cents || 0), 0);
+
+  // Net position uses USD entries of available + pending minus monthly expenses
+  // (one-offs are one-time and don't recur, so they hit only this period).
+  const usdAvailable = (balance.available || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
+  const usdPending = (balance.pending || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
+  const stripeUsdCents = usdAvailable + usdPending;
+  const run = runway(stripeUsdCents, mrr.mrrCents, monthlyTotal);
+
   res.json({
     balance,
     revenue,
     mrr,
+    fees,
     topProducts: top,
-    expenses,
-    expensesTotalCents: expensesCents
+    refundsByProduct: refundsByProd,
+    topBuyers: buyers,
+    chart,
+    perProductPerMonth: grid,
+    payouts,
+    monthlyExpenses,
+    oneOffExpenses,
+    monthlyExpensesTotalCents: monthlyTotal,
+    oneOffExpensesTotalCents: oneOffTotal,
+    runway: run
   });
 });
 
+const EXPENSE_COLUMNS = `id, label, amount_cents, tax_cents, note, kind, incurred_at, created_at, updated_at`;
+
 router.post('/api/shop/admin/expenses', requireAdmin, (req, res) => {
-  const { label, amountCents, note } = req.body || {};
+  const { label, amountCents, taxCents, note, kind, incurredAt } = req.body || {};
   if (!label || typeof label !== 'string' || !label.trim()) return res.status(400).json({ error: 'Label is required' });
   const cents = parseInt(amountCents, 10);
   if (!Number.isFinite(cents) || cents < 0) return res.status(400).json({ error: 'amountCents must be a non-negative integer' });
-  const r = db.prepare(`INSERT INTO monthly_expenses (label, amount_cents, note) VALUES (?, ?, ?)`).run(label.trim(), cents, note ? String(note).trim() : null);
-  const row = db.prepare(`SELECT id, label, amount_cents, note, created_at, updated_at FROM monthly_expenses WHERE id = ?`).get(r.lastInsertRowid);
+  const tax = taxCents !== undefined && taxCents !== null && taxCents !== '' ? parseInt(taxCents, 10) : 0;
+  if (!Number.isFinite(tax) || tax < 0) return res.status(400).json({ error: 'taxCents must be a non-negative integer' });
+  const kindVal = kind === 'one_off' ? 'one_off' : 'monthly';
+  const incurred = kindVal === 'one_off' ? (parseInt(incurredAt, 10) || Math.floor(Date.now() / 1000)) : null;
+  const r = db.prepare(`
+    INSERT INTO monthly_expenses (label, amount_cents, tax_cents, note, kind, incurred_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(label.trim(), cents, tax, note ? String(note).trim() : null, kindVal, incurred);
+  const row = db.prepare(`SELECT ${EXPENSE_COLUMNS} FROM monthly_expenses WHERE id = ?`).get(r.lastInsertRowid);
   res.json({ ok: true, expense: row });
 });
 
 router.put('/api/shop/admin/expenses/:id', requireAdmin, (req, res) => {
-  const { label, amountCents, note } = req.body || {};
+  const { label, amountCents, taxCents, note, kind, incurredAt } = req.body || {};
   const existing = db.prepare(`SELECT * FROM monthly_expenses WHERE id = ?`).get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Expense not found' });
   let centsVal = null;
@@ -1162,27 +1344,54 @@ router.put('/api/shop/admin/expenses/:id', requireAdmin, (req, res) => {
     if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'amountCents must be a non-negative integer' });
     centsVal = n;
   }
+  let taxVal = null;
+  if (taxCents !== undefined) {
+    const n = taxCents === null || taxCents === '' ? 0 : parseInt(taxCents, 10);
+    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'taxCents must be a non-negative integer' });
+    taxVal = n;
+  }
+  let kindVal = null;
+  if (kind !== undefined) kindVal = kind === 'one_off' ? 'one_off' : 'monthly';
+  let incurredVal = null;
+  let incurredWasSent = incurredAt !== undefined;
+  if (incurredWasSent) incurredVal = parseInt(incurredAt, 10) || null;
   db.prepare(`
     UPDATE monthly_expenses SET
       label = COALESCE(?, label),
       amount_cents = COALESCE(?, amount_cents),
+      tax_cents = COALESCE(?, tax_cents),
       note = CASE WHEN ? THEN ? ELSE note END,
+      kind = COALESCE(?, kind),
+      incurred_at = CASE WHEN ? THEN ? ELSE incurred_at END,
       updated_at = unixepoch()
     WHERE id = ?
   `).run(
     label !== undefined ? String(label).trim() : null,
     centsVal,
+    taxVal,
     note !== undefined ? 1 : 0,
     note !== undefined ? (note ? String(note).trim() : null) : null,
+    kindVal,
+    incurredWasSent ? 1 : 0,
+    incurredVal,
     req.params.id
   );
-  const row = db.prepare(`SELECT id, label, amount_cents, note, created_at, updated_at FROM monthly_expenses WHERE id = ?`).get(req.params.id);
+  const row = db.prepare(`SELECT ${EXPENSE_COLUMNS} FROM monthly_expenses WHERE id = ?`).get(req.params.id);
   res.json({ ok: true, expense: row });
 });
 
 router.delete('/api/shop/admin/expenses/:id', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM monthly_expenses WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
+});
+
+// Admin marks/unmarks an order as test-mode so it stops polluting revenue rollups
+router.put('/api/shop/admin/orders/:id/test-mode', requireAdmin, (req, res) => {
+  const { testMode } = req.body || {};
+  const existing = db.prepare(`SELECT id, status FROM orders WHERE id = ?`).get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Order not found' });
+  db.prepare(`UPDATE orders SET test_mode = ? WHERE id = ?`).run(testMode ? 1 : 0, req.params.id);
+  res.json({ ok: true, id: existing.id, testMode: !!testMode });
 });
 
 // ============================================================
@@ -1388,9 +1597,9 @@ function webhookHandler(req, res) {
         const existing = db.prepare('SELECT * FROM orders WHERE stripe_subscription_id = ? AND status = ?').get(subId, 'completed');
         if (existing) {
           const renewal = db.prepare(`
-            INSERT INTO orders (steam_id, product_id, server_id, stripe_subscription_id, status, amount_cents, completed_at)
-            VALUES (?, ?, ?, ?, 'completed', ?, unixepoch())
-          `).run(existing.steam_id, existing.product_id, existing.server_id, subId, invoice.amount_paid);
+            INSERT INTO orders (steam_id, product_id, server_id, stripe_subscription_id, status, amount_cents, completed_at, test_mode)
+            VALUES (?, ?, ?, ?, 'completed', ?, unixepoch(), ?)
+          `).run(existing.steam_id, existing.product_id, existing.server_id, subId, invoice.amount_paid, existing.test_mode || 0);
           tryAssignDiscordRoleForOrder(renewal.lastInsertRowid);
 
           const user = db.prepare('SELECT persona, bi_uid, platform, gamertag, bm_player_id FROM users WHERE steam_id = ?').get(existing.steam_id);
