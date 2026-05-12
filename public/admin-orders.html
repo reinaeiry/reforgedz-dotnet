@@ -324,6 +324,119 @@
     @media (max-width: 768px) {
       .orders-page { padding-top: 110px; }
     }
+
+    /* ---- Tab strip ---- */
+    .tab-strip {
+      display: inline-flex;
+      gap: 4px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px;
+    }
+    .tab-btn {
+      padding: 6px 14px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-ghost);
+      background: none;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: #fff;
+      background: var(--accent);
+    }
+
+    /* ---- Finance cards ---- */
+    .finance-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .finance-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px 22px;
+      transition: border-color 0.15s;
+    }
+    .finance-card.highlight {
+      border-color: rgba(204,31,31,0.45);
+      background: linear-gradient(180deg, rgba(204,31,31,0.05), transparent);
+    }
+    .finance-card-label {
+      font-family: var(--display);
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-ghost);
+      margin-bottom: 10px;
+    }
+    .finance-card-value {
+      font-family: var(--display);
+      font-size: 1.55rem;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.5px;
+    }
+    .finance-card-value.green { color: #4ade80; }
+    .finance-card-value.yellow { color: #fbbf24; }
+    .finance-card-value.red { color: #f87171; }
+    .finance-card-sub {
+      font-size: 0.72rem;
+      color: var(--text-ghost);
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+
+    .finance-section {
+      margin-top: 36px;
+    }
+    .finance-section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .finance-section-head h2 {
+      font-family: var(--display);
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #fff;
+      margin: 0;
+    }
+    .finance-meta {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+
+    .expense-add-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .expense-add-row .search-input { flex: 1; min-width: 160px; }
+
+    .expense-edit-input {
+      width: 100%;
+      padding: 6px 10px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: var(--body);
+      font-size: 0.82rem;
+    }
   </style>
 </head>
 <body>
@@ -350,41 +463,155 @@
 
       <div id="ordersContent" style="display:none">
         <div class="orders-header">
-          <h1>All Orders</h1>
+          <h1 id="tabHeading">All Orders</h1>
           <div style="display:flex;gap:12px;align-items:center">
-            <button onclick="exportCsv()" style="padding:6px 16px;font-size:0.78rem;font-weight:600;color:var(--text-ghost);background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.color='var(--text)';this.style.borderColor='var(--border-hover)'" onmouseout="this.style.color='var(--text-ghost)';this.style.borderColor='var(--border)'">Export CSV</button>
+            <div class="tab-strip">
+              <button class="tab-btn active" data-tab="orders">Orders</button>
+              <button class="tab-btn" data-tab="finances">Finances</button>
+            </div>
+            <button id="exportCsvBtn" onclick="exportCsv()" style="padding:6px 16px;font-size:0.78rem;font-weight:600;color:var(--text-ghost);background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.color='var(--text)';this.style.borderColor='var(--border-hover)'" onmouseout="this.style.color='var(--text-ghost)';this.style.borderColor='var(--border)'">Export CSV</button>
             <a href="/shop" class="back-link">Back to Shop</a>
           </div>
         </div>
 
-        <div class="orders-stats" id="orderStats"></div>
+        <div id="ordersTab">
+          <div class="orders-stats" id="orderStats"></div>
 
-        <div class="orders-filters">
-          <button class="filter-btn active" data-filter="all">All</button>
-          <button class="filter-btn" data-filter="completed">Completed</button>
-          <button class="filter-btn" data-filter="pending">Pending</button>
-          <button class="filter-btn" data-filter="cancelled">Cancelled</button>
-          <button class="filter-btn" data-filter="refunded">Refunded</button>
-          <input type="text" class="search-input" id="searchInput" placeholder="Search player or product...">
+          <div class="orders-filters">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="completed">Completed</button>
+            <button class="filter-btn" data-filter="pending">Pending</button>
+            <button class="filter-btn" data-filter="cancelled">Cancelled</button>
+            <button class="filter-btn" data-filter="refunded">Refunded</button>
+            <input type="text" class="search-input" id="searchInput" placeholder="Search player or product...">
+          </div>
+
+          <div class="orders-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Player</th>
+                  <th>Product</th>
+                  <th>Type</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>Date</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="ordersBody">
+                <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        <div class="orders-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Player</th>
-                <th>Product</th>
-                <th>Type</th>
-                <th>Amount</th>
-                <th>Status</th>
-                <th>Date</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="ordersBody">
-              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
-            </tbody>
-          </table>
+        <div id="financesTab" style="display:none">
+          <div class="finance-grid">
+            <div class="finance-card">
+              <div class="finance-card-label">Stripe available</div>
+              <div class="finance-card-value" id="finBalAvailable">—</div>
+              <div class="finance-card-sub" id="finBalAvailableSub"></div>
+            </div>
+            <div class="finance-card">
+              <div class="finance-card-label">Stripe pending</div>
+              <div class="finance-card-value yellow" id="finBalPending">—</div>
+              <div class="finance-card-sub" id="finBalPendingSub">Will clear in ~2 business days</div>
+            </div>
+            <div class="finance-card">
+              <div class="finance-card-label">Instant available</div>
+              <div class="finance-card-value" id="finBalInstant">—</div>
+              <div class="finance-card-sub">Payout-now (1% Stripe fee applies)</div>
+            </div>
+            <div class="finance-card highlight">
+              <div class="finance-card-label">Net position</div>
+              <div class="finance-card-value" id="finNetPosition">—</div>
+              <div class="finance-card-sub" id="finNetPositionSub">Available + pending − monthly expenses</div>
+            </div>
+          </div>
+
+          <div class="finance-grid">
+            <div class="finance-card">
+              <div class="finance-card-label">Lifetime revenue</div>
+              <div class="finance-card-value green" id="finLifetime">—</div>
+              <div class="finance-card-sub" id="finLifetimeSub"></div>
+            </div>
+            <div class="finance-card">
+              <div class="finance-card-label">This year</div>
+              <div class="finance-card-value green" id="finYear">—</div>
+              <div class="finance-card-sub" id="finYearSub"></div>
+            </div>
+            <div class="finance-card">
+              <div class="finance-card-label">This month</div>
+              <div class="finance-card-value green" id="finMonth">—</div>
+              <div class="finance-card-sub" id="finMonthSub"></div>
+            </div>
+            <div class="finance-card">
+              <div class="finance-card-label">Refunded total</div>
+              <div class="finance-card-value" id="finRefunded" style="color:#c084fc">—</div>
+              <div class="finance-card-sub" id="finRefundedSub"></div>
+            </div>
+            <div class="finance-card">
+              <div class="finance-card-label">Net collected</div>
+              <div class="finance-card-value green" id="finNetCollected">—</div>
+              <div class="finance-card-sub">Lifetime minus refunds</div>
+            </div>
+            <div class="finance-card">
+              <div class="finance-card-label">MRR (active subs)</div>
+              <div class="finance-card-value green" id="finMRR">—</div>
+              <div class="finance-card-sub" id="finMRRSub"></div>
+            </div>
+          </div>
+
+          <div class="finance-section">
+            <div class="finance-section-head">
+              <h2>Monthly expenses</h2>
+              <span class="finance-meta" id="finExpensesTotal"></span>
+            </div>
+            <div class="expense-add-row">
+              <input class="search-input" id="expenseLabelInput" placeholder="Label (e.g. EU dedicated server)">
+              <input class="search-input" id="expenseAmountInput" type="number" step="0.01" min="0" placeholder="USD/month (e.g. 49.99)" style="max-width:200px">
+              <input class="search-input" id="expenseNoteInput" placeholder="Note (optional)">
+              <button class="revoke-btn" onclick="addExpense()" style="color:#4ade80;border-color:rgba(74,222,128,0.3);padding:7px 14px">+ Add</button>
+            </div>
+            <div class="orders-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>Amount / month</th>
+                    <th>Note</th>
+                    <th>Added</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="expensesBody">
+                  <tr><td colspan="5" class="empty-state">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="finance-section">
+            <div class="finance-section-head">
+              <h2>Top products by revenue</h2>
+            </div>
+            <div class="orders-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Type</th>
+                    <th>Sales</th>
+                    <th>Revenue</th>
+                  </tr>
+                </thead>
+                <tbody id="topProductsBody">
+                  <tr><td colspan="4" class="empty-state">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -426,6 +653,9 @@
       return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
 
+    let currentTab = 'orders';
+    let financesData = null;
+
     async function init() {
       try {
         const res = await fetch('/api/auth/me');
@@ -453,6 +683,184 @@
       renderStats();
       renderOrders();
       bindFilters();
+      bindTabs();
+    }
+
+    function bindTabs() {
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          currentTab = btn.dataset.tab;
+          const isOrders = currentTab === 'orders';
+          document.getElementById('ordersTab').style.display = isOrders ? '' : 'none';
+          document.getElementById('financesTab').style.display = isOrders ? 'none' : '';
+          document.getElementById('exportCsvBtn').style.display = isOrders ? '' : 'none';
+          document.getElementById('tabHeading').textContent = isOrders ? 'All Orders' : 'Finances';
+          if (!isOrders) loadFinances();
+        });
+      });
+    }
+
+    function formatCentsList(arr) {
+      if (!arr || !arr.length) return '$0.00';
+      return arr.map(e => {
+        const sign = (e.amount || 0) >= 0 ? '' : '-';
+        const abs = Math.abs(e.amount || 0);
+        const symbol = (e.currency || 'usd').toLowerCase() === 'usd' ? '$' : (e.currency.toUpperCase() + ' ');
+        return sign + symbol + (abs / 100).toFixed(2);
+      }).join(', ');
+    }
+
+    function centsToUsd(c) {
+      const sign = c < 0 ? '-' : '';
+      return sign + '$' + (Math.abs(c) / 100).toFixed(2);
+    }
+
+    async function loadFinances() {
+      document.getElementById('expensesBody').innerHTML = '<tr><td colspan="5" class="empty-state">Loading…</td></tr>';
+      document.getElementById('topProductsBody').innerHTML = '<tr><td colspan="4" class="empty-state">Loading…</td></tr>';
+      try {
+        const res = await fetch('/api/shop/admin/finances');
+        financesData = await res.json();
+      } catch (e) {
+        return;
+      }
+      renderFinances();
+    }
+
+    function renderFinances() {
+      const f = financesData;
+      if (!f) return;
+      const bal = f.balance || {};
+      const rev = f.revenue || {};
+      const mrr = f.mrr || {};
+      const expensesTotal = f.expensesTotalCents || 0;
+
+      // Treat balance for net calculation as the sum of available+pending in USD only
+      // (other currencies are rare for us; flagged as a follow-up below).
+      const usdAvailable = (bal.available || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
+      const usdPending = (bal.pending || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
+      const usdInstant = (bal.instantAvailable || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
+
+      document.getElementById('finBalAvailable').textContent = formatCentsList(bal.available);
+      document.getElementById('finBalAvailableSub').textContent = bal.mode === 'test' ? 'Test mode key (not real money)' : 'Live Stripe account';
+      document.getElementById('finBalPending').textContent = formatCentsList(bal.pending);
+      document.getElementById('finBalInstant').textContent = formatCentsList(bal.instantAvailable);
+
+      document.getElementById('finLifetime').textContent = centsToUsd(rev.lifetimeCents || 0);
+      document.getElementById('finLifetimeSub').textContent = `${rev.lifetimeCount || 0} completed order${rev.lifetimeCount === 1 ? '' : 's'}`;
+      document.getElementById('finYear').textContent = centsToUsd(rev.yearCents || 0);
+      document.getElementById('finYearSub').textContent = `${rev.yearCount || 0} this year`;
+      document.getElementById('finMonth').textContent = centsToUsd(rev.monthCents || 0);
+      document.getElementById('finMonthSub').textContent = `${rev.monthCount || 0} this month`;
+      document.getElementById('finRefunded').textContent = centsToUsd(rev.refundedCents || 0);
+      document.getElementById('finRefundedSub').textContent = `${rev.refundedCount || 0} refunded`;
+      document.getElementById('finNetCollected').textContent = centsToUsd(rev.netCents || 0);
+
+      document.getElementById('finMRR').textContent = centsToUsd(mrr.mrrCents || 0);
+      document.getElementById('finMRRSub').textContent = `${mrr.activeSubs || 0} active subscription${mrr.activeSubs === 1 ? '' : 's'} · annualized ${centsToUsd((mrr.mrrCents || 0) * 12)}`;
+
+      // Net position: USD (available + pending) − expenses
+      const netCents = usdAvailable + usdPending - expensesTotal;
+      const netEl = document.getElementById('finNetPosition');
+      netEl.textContent = centsToUsd(netCents);
+      netEl.className = 'finance-card-value ' + (netCents >= 0 ? 'green' : 'red');
+      document.getElementById('finNetPositionSub').textContent =
+        `${centsToUsd(usdAvailable + usdPending)} in Stripe USD − ${centsToUsd(expensesTotal)}/mo expenses`;
+
+      // Expenses table
+      const expenses = f.expenses || [];
+      document.getElementById('finExpensesTotal').textContent = `Total: ${centsToUsd(expensesTotal)} / month`;
+      if (expenses.length === 0) {
+        document.getElementById('expensesBody').innerHTML = '<tr><td colspan="5" class="empty-state">No expenses yet. Add your server bills, domains, dev costs etc.</td></tr>';
+      } else {
+        document.getElementById('expensesBody').innerHTML = expenses.map(e => `
+          <tr data-eid="${e.id}">
+            <td><input class="expense-edit-input" data-field="label" value="${escHtml(e.label)}"></td>
+            <td><input class="expense-edit-input" data-field="amount" type="number" step="0.01" min="0" value="${(e.amount_cents / 100).toFixed(2)}"></td>
+            <td><input class="expense-edit-input" data-field="note" value="${escHtml(e.note || '')}"></td>
+            <td>${formatDate(e.created_at)}</td>
+            <td style="white-space:nowrap">
+              <button class="revoke-btn" onclick="saveExpense(${e.id})" style="color:#4ade80;border-color:rgba(74,222,128,0.3);margin-right:4px">Save</button>
+              <button class="revoke-btn" onclick="deleteExpense(${e.id})" style="color:#f87171;border-color:rgba(248,113,113,0.3)">Delete</button>
+            </td>
+          </tr>
+        `).join('');
+      }
+
+      // Top products
+      const top = f.topProducts || [];
+      if (top.length === 0) {
+        document.getElementById('topProductsBody').innerHTML = '<tr><td colspan="4" class="empty-state">No sales yet.</td></tr>';
+      } else {
+        document.getElementById('topProductsBody').innerHTML = top.map(p => `
+          <tr>
+            <td>${escHtml(p.title)}</td>
+            <td><span class="type-badge ${p.type === 'subscription' || p.type === 'recurring_custom' ? 'subscription' : 'one_time'}">${p.type === 'one_time' ? 'One-Time' : (p.type === 'subscription' ? 'Sub (monthly)' : 'Renewable')}</span></td>
+            <td>${p.sales}</td>
+            <td><span class="amount-cell">${centsToUsd(p.cents)}</span></td>
+          </tr>
+        `).join('');
+      }
+    }
+
+    async function addExpense() {
+      const label = document.getElementById('expenseLabelInput').value.trim();
+      const amountVal = parseFloat(document.getElementById('expenseAmountInput').value);
+      const note = document.getElementById('expenseNoteInput').value.trim();
+      if (!label) return alert('Label is required');
+      if (!Number.isFinite(amountVal) || amountVal < 0) return alert('Amount must be a non-negative number');
+      try {
+        const res = await fetch('/api/shop/admin/expenses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label, amountCents: Math.round(amountVal * 100), note: note || null })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to add expense');
+        }
+        document.getElementById('expenseLabelInput').value = '';
+        document.getElementById('expenseAmountInput').value = '';
+        document.getElementById('expenseNoteInput').value = '';
+        await loadFinances();
+      } catch (e) {
+        alert(e.message || 'Failed to add expense');
+      }
+    }
+
+    async function saveExpense(id) {
+      const row = document.querySelector(`tr[data-eid="${id}"]`);
+      const label = row.querySelector('[data-field="label"]').value.trim();
+      const amount = parseFloat(row.querySelector('[data-field="amount"]').value);
+      const note = row.querySelector('[data-field="note"]').value.trim();
+      if (!label) return alert('Label is required');
+      if (!Number.isFinite(amount) || amount < 0) return alert('Amount must be a non-negative number');
+      try {
+        const res = await fetch(`/api/shop/admin/expenses/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label, amountCents: Math.round(amount * 100), note: note || null })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to save');
+        }
+        await loadFinances();
+      } catch (e) {
+        alert(e.message || 'Failed to save expense');
+      }
+    }
+
+    async function deleteExpense(id) {
+      if (!confirm('Delete this expense?')) return;
+      try {
+        await fetch(`/api/shop/admin/expenses/${id}`, { method: 'DELETE' });
+        await loadFinances();
+      } catch {
+        alert('Failed to delete');
+      }
     }
 
     function renderStats() {

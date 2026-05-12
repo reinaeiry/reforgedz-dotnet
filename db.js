@@ -138,6 +138,18 @@ if (!userHasColumn('discord_id')) {
   db.exec("ALTER TABLE users ADD COLUMN discord_id TEXT");
 }
 
+// Monthly expense buckets that the Finances tab subtracts from the Stripe balance.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS monthly_expenses (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    label       TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    note        TEXT,
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+  )
+`);
+
 // Manual priority-queue grants (admin-page driven, no Stripe payment).
 // (guid, server_id) is unique. server_id is one of eu1/eu2/na1/na2.
 db.exec(`

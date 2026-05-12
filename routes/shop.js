@@ -1041,6 +1041,151 @@ router.delete('/api/shop/admin/priority-queue/:guid', requireAdmin, (req, res) =
 });
 
 // ============================================================
+//  Finances (Stripe balance + expenses + revenue rollups)
+// ============================================================
+
+async function fetchStripeBalance() {
+  // Live first, fall back to test only if live key is missing so the admin sees
+  // a balance even on a non-prod box.
+  const liveKey = process.env.STRIPE_SECRET_KEY;
+  const useTest = !liveKey || /CHANGE_ME/.test(liveKey);
+  try {
+    const bal = await getStripe(useTest).balance.retrieve();
+    return {
+      mode: useTest ? 'test' : 'live',
+      available: bal.available || [],
+      pending: bal.pending || [],
+      instantAvailable: bal.instant_available || [],
+      connectReserved: bal.connect_reserved || []
+    };
+  } catch (e) {
+    return { mode: 'unknown', error: e.message, available: [], pending: [], instantAvailable: [], connectReserved: [] };
+  }
+}
+
+function startOfMonthUnix() {
+  const d = new Date();
+  return Math.floor(new Date(d.getFullYear(), d.getMonth(), 1).getTime() / 1000);
+}
+function startOfYearUnix() {
+  const d = new Date();
+  return Math.floor(new Date(d.getFullYear(), 0, 1).getTime() / 1000);
+}
+
+function revenueSummary() {
+  const lifetime = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed'`).get();
+  const refunded = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'refunded'`).get();
+  const thisMonth = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND completed_at >= ?`).get(startOfMonthUnix());
+  const thisYear = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND completed_at >= ?`).get(startOfYearUnix());
+  return {
+    lifetimeCount: lifetime.c, lifetimeCents: lifetime.cents,
+    refundedCount: refunded.c, refundedCents: refunded.cents,
+    netCents: lifetime.cents - refunded.cents,
+    monthCount: thisMonth.c, monthCents: thisMonth.cents,
+    yearCount: thisYear.c, yearCents: thisYear.cents
+  };
+}
+
+// Estimate Monthly Recurring Revenue from the most recent completed order
+// for each active stripe_subscription_id. Per-day intervals are normalized
+// to a 30-day month, monthly subs are taken at face value.
+function mrrEstimate() {
+  const rows = db.prepare(`
+    SELECT o.amount_cents, p.type, p.interval_days, o.stripe_subscription_id
+    FROM orders o
+    JOIN products p ON o.product_id = p.id
+    WHERE o.status = 'completed' AND o.stripe_subscription_id IS NOT NULL
+    GROUP BY o.stripe_subscription_id
+    HAVING o.id = MAX(o.id)
+  `).all();
+  let cents = 0;
+  let count = 0;
+  for (const r of rows) {
+    let monthly = 0;
+    if (r.type === 'subscription') monthly = r.amount_cents;
+    else if (r.type === 'recurring_custom' && r.interval_days) monthly = Math.round(r.amount_cents * 30 / r.interval_days);
+    if (monthly > 0) { cents += monthly; count += 1; }
+  }
+  return { activeSubs: count, mrrCents: cents };
+}
+
+function topProductsByRevenue(limit = 10) {
+  return db.prepare(`
+    SELECT p.id, p.title, p.type, COUNT(o.id) AS sales, COALESCE(SUM(o.amount_cents), 0) AS cents
+    FROM products p
+    LEFT JOIN orders o ON o.product_id = p.id AND o.status = 'completed'
+    GROUP BY p.id
+    HAVING sales > 0
+    ORDER BY cents DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+function listExpenses() {
+  return db.prepare(`SELECT id, label, amount_cents, note, created_at, updated_at FROM monthly_expenses ORDER BY amount_cents DESC, id ASC`).all();
+}
+
+router.get('/api/shop/admin/finances', requireAdmin, async (req, res) => {
+  const [balance] = await Promise.all([fetchStripeBalance()]);
+  const revenue = revenueSummary();
+  const mrr = mrrEstimate();
+  const top = topProductsByRevenue(10);
+  const expenses = listExpenses();
+  const expensesCents = expenses.reduce((s, e) => s + (e.amount_cents || 0), 0);
+  res.json({
+    balance,
+    revenue,
+    mrr,
+    topProducts: top,
+    expenses,
+    expensesTotalCents: expensesCents
+  });
+});
+
+router.post('/api/shop/admin/expenses', requireAdmin, (req, res) => {
+  const { label, amountCents, note } = req.body || {};
+  if (!label || typeof label !== 'string' || !label.trim()) return res.status(400).json({ error: 'Label is required' });
+  const cents = parseInt(amountCents, 10);
+  if (!Number.isFinite(cents) || cents < 0) return res.status(400).json({ error: 'amountCents must be a non-negative integer' });
+  const r = db.prepare(`INSERT INTO monthly_expenses (label, amount_cents, note) VALUES (?, ?, ?)`).run(label.trim(), cents, note ? String(note).trim() : null);
+  const row = db.prepare(`SELECT id, label, amount_cents, note, created_at, updated_at FROM monthly_expenses WHERE id = ?`).get(r.lastInsertRowid);
+  res.json({ ok: true, expense: row });
+});
+
+router.put('/api/shop/admin/expenses/:id', requireAdmin, (req, res) => {
+  const { label, amountCents, note } = req.body || {};
+  const existing = db.prepare(`SELECT * FROM monthly_expenses WHERE id = ?`).get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Expense not found' });
+  let centsVal = null;
+  if (amountCents !== undefined) {
+    const n = parseInt(amountCents, 10);
+    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'amountCents must be a non-negative integer' });
+    centsVal = n;
+  }
+  db.prepare(`
+    UPDATE monthly_expenses SET
+      label = COALESCE(?, label),
+      amount_cents = COALESCE(?, amount_cents),
+      note = CASE WHEN ? THEN ? ELSE note END,
+      updated_at = unixepoch()
+    WHERE id = ?
+  `).run(
+    label !== undefined ? String(label).trim() : null,
+    centsVal,
+    note !== undefined ? 1 : 0,
+    note !== undefined ? (note ? String(note).trim() : null) : null,
+    req.params.id
+  );
+  const row = db.prepare(`SELECT id, label, amount_cents, note, created_at, updated_at FROM monthly_expenses WHERE id = ?`).get(req.params.id);
+  res.json({ ok: true, expense: row });
+});
+
+router.delete('/api/shop/admin/expenses/:id', requireAdmin, (req, res) => {
+  db.prepare(`DELETE FROM monthly_expenses WHERE id = ?`).run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ============================================================
 //  Discord role management
 // ============================================================
 
