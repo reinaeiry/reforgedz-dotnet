@@ -122,6 +122,11 @@ img { display: block; max-width: 100%; }
 .nav-link:hover { color: var(--text); background: rgba(255,255,255,0.04); }
 .nav-link.active { color: #fff; }
 
+.nav-link-shop {
+  color: var(--accent);
+}
+.nav-link-shop:hover { color: var(--accent-hover); background: rgba(204, 31, 31, 0.08); }
+
 .nav-cta {
   display: inline-flex;
   align-items: center;
