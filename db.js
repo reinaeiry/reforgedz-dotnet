@@ -131,6 +131,12 @@ if (!productHasColumn('price_min_cents')) {
 if (!productHasColumn('price_max_cents')) {
   db.exec("ALTER TABLE products ADD COLUMN price_max_cents INTEGER");
 }
+if (!productHasColumn('discord_role_id')) {
+  db.exec("ALTER TABLE products ADD COLUMN discord_role_id TEXT");
+}
+if (!userHasColumn('discord_id')) {
+  db.exec("ALTER TABLE users ADD COLUMN discord_id TEXT");
+}
 
 // Manual priority-queue grants (admin-page driven, no Stripe payment).
 // (guid, server_id) is unique. server_id is one of eu1/eu2/na1/na2.

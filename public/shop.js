@@ -44,7 +44,47 @@ const formPriceMax = document.getElementById('formPriceMax');
 const formPriceMinRow = document.getElementById('formPriceMinRow');
 const formPriceMaxRow = document.getElementById('formPriceMaxRow');
 const formPriceLabel = document.getElementById('formPriceLabel');
+const formAssignDiscordRole = document.getElementById('formAssignDiscordRole');
+const formDiscordRoleId = document.getElementById('formDiscordRoleId');
+const formDiscordRoleRow = document.getElementById('formDiscordRoleRow');
 const formEditId = document.getElementById('formEditId');
+
+let discordRolesCache = null;
+async function ensureDiscordRolesLoaded() {
+  if (discordRolesCache) return discordRolesCache;
+  try {
+    const data = await api('/api/shop/admin/discord-roles');
+    discordRolesCache = data;
+  } catch (e) {
+    discordRolesCache = { roles: [], error: e.message };
+  }
+  return discordRolesCache;
+}
+
+async function populateDiscordRoleSelect(selectedId) {
+  const data = await ensureDiscordRolesLoaded();
+  const roles = (data && data.roles) || [];
+  const opts = ['<option value="">Pick a role…</option>'];
+  for (const r of roles) {
+    const sel = r.id === selectedId ? ' selected' : '';
+    opts.push(`<option value="${r.id}"${sel}>${escHtml(r.name)}</option>`);
+  }
+  formDiscordRoleId.innerHTML = opts.join('');
+  if (data && data.error) {
+    const optErr = document.createElement('option');
+    optErr.value = '';
+    optErr.textContent = `Couldn't load roles: ${data.error}`;
+    optErr.disabled = true;
+    formDiscordRoleId.appendChild(optErr);
+  }
+}
+
+function refreshDiscordRoleUi() {
+  const on = formAssignDiscordRole.checked;
+  formDiscordRoleRow.style.display = on ? 'block' : 'none';
+  if (on) populateDiscordRoleSelect(formDiscordRoleId.value || '');
+}
+formAssignDiscordRole.addEventListener('change', refreshDiscordRoleUi);
 const formSubmitBtn = document.getElementById('formSubmitBtn');
 const formCancelBtn = document.getElementById('formCancelBtn');
 
@@ -215,6 +255,23 @@ function renderAuth() {
       <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px">Auto-linked from BattleMetrics. Open a Discord ticket if this looks wrong.</div>
     `;
 
+    const discordSection = `
+      <div class="dropdown-biuid">
+        <div class="dropdown-biuid-label">Discord ID</div>
+        ${currentUser.discord_id
+          ? `<div class="dropdown-biuid-value">${escHtml(currentUser.discord_id)}</div>`
+          : `<div class="dropdown-biuid-value empty">Not linked</div>`
+        }
+        <div class="dropdown-biuid-row">
+          <input type="text" id="dropdownDiscordIdInput" placeholder="Your Discord User ID" value="${escHtml(currentUser.discord_id || '')}" spellcheck="false" autocomplete="off">
+          <button onclick="saveDiscordIdFromDropdown()">Save</button>
+        </div>
+        <div style="font-size:0.65rem;color:var(--text-ghost);margin-top:6px;line-height:1.5">
+          Enable Developer Mode in Discord, right-click your name, Copy User ID. Roles for products you've bought (or buy in future) get assigned automatically.
+        </div>
+      </div>
+    `;
+
     navAuth.innerHTML = `
       ${currencyHtml}
       <button class="account-toggle" id="accountToggle">
@@ -240,6 +297,7 @@ function renderAuth() {
           }
           ${biuidEditableHtml}
         </div>
+        ${discordSection}
         <div class="dropdown-section-label">Purchase History</div>
         <div class="dropdown-orders" id="dropdownOrders">
           <div class="dropdown-empty">Loading...</div>
@@ -861,6 +919,32 @@ async function saveBiUidFromDropdown() {
   }
 }
 
+async function saveDiscordIdFromDropdown() {
+  const input = document.getElementById('dropdownDiscordIdInput');
+  const raw = input.value.trim();
+  if (raw && !/^\d{15,25}$/.test(raw)) {
+    alert('Invalid Discord ID. Enable Developer Mode in Discord, right-click your name, Copy User ID.');
+    return;
+  }
+  try {
+    const result = await api('/api/shop/set-discord-id', {
+      method: 'POST',
+      body: JSON.stringify({ discordId: raw || null })
+    });
+    currentUser.discord_id = result.discord_id || null;
+    renderAuth();
+    if (result.rolesAssigned && result.rolesAssigned > 0) {
+      alert(`Linked. ${result.rolesAssigned} role${result.rolesAssigned === 1 ? '' : 's'} assigned in Discord.`);
+    } else if (raw) {
+      alert(`Linked Discord as ${result.displayName || 'member'}.`);
+    } else {
+      alert('Discord unlinked.');
+    }
+  } catch (e) {
+    alert(e.message || 'Failed to save Discord ID');
+  }
+}
+
 // ---- Buy flow ----
 async function buyProduct(productId, serverId, customAmountCents) {
   if (!currentUser) return;
@@ -1000,6 +1084,15 @@ productForm.addEventListener('submit', async (e) => {
     }
   }
 
+  const assignDiscordRole = formAssignDiscordRole.checked;
+  let discordRoleId = null;
+  if (assignDiscordRole) {
+    discordRoleId = formDiscordRoleId.value || null;
+    if (!discordRoleId) {
+      return alert('Pick a Discord role, or untick "Assign Discord role on purchase".');
+    }
+  }
+
   const body = {
     title: formTitle.value.trim(),
     description: formDesc.value.trim(),
@@ -1013,7 +1106,8 @@ productForm.addEventListener('submit', async (e) => {
     grantsPriorityQueue: formGrantsPriorityQueue.checked,
     customPrice,
     priceMinCents,
-    priceMaxCents
+    priceMaxCents,
+    discordRoleId
   };
 
   try {
@@ -1057,8 +1151,12 @@ function editProduct(id) {
     formCustomPrice.checked = !!p.custom_price;
     formPriceMin.value = p.price_min_cents != null ? (p.price_min_cents / 100).toFixed(2) : '';
     formPriceMax.value = p.price_max_cents != null ? (p.price_max_cents / 100).toFixed(2) : '';
+    formAssignDiscordRole.checked = !!p.discord_role_id;
+    formDiscordRoleId.innerHTML = p.discord_role_id ? `<option value="${escHtml(p.discord_role_id)}" selected>Loading…</option>` : '<option value="">Loading…</option>';
+    if (p.discord_role_id) populateDiscordRoleSelect(p.discord_role_id);
     refreshStockLabel();
     refreshCustomPriceUi();
+    refreshDiscordRoleUi();
     formEditId.value = id;
     editingProductId = id;
     formSubmitBtn.textContent = 'Update Listing';
@@ -1082,8 +1180,11 @@ function clearForm() {
   formCustomPrice.checked = false;
   formPriceMin.value = '';
   formPriceMax.value = '';
+  formAssignDiscordRole.checked = false;
+  formDiscordRoleId.innerHTML = '<option value="">Pick a role…</option>';
   refreshStockLabel();
   refreshCustomPriceUi();
+  refreshDiscordRoleUi();
   formEditId.value = '';
   editingProductId = null;
   formSubmitBtn.textContent = 'Create Listing';
@@ -1269,6 +1370,7 @@ window.toggleProduct = toggleProduct;
 window.deleteProduct = deleteProduct;
 window.cancelSubscription = cancelSubscription;
 window.saveBiUidFromDropdown = saveBiUidFromDropdown;
+window.saveDiscordIdFromDropdown = saveDiscordIdFromDropdown;
 window.openProductDetail = openProductDetail;
 window.openSigninFromCard = openSigninFromCard;
 window.hardDeleteProduct = hardDeleteProduct;

@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const { syncPurchasesToServers } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
+const discord = require('../discord');
 
 // ---- Stripe setup ----
 const Stripe = require('stripe');
@@ -172,7 +173,7 @@ function requireAdmin(req, res, next) {
 // Get active products
 router.get('/api/shop/products', (req, res) => {
   const products = db.prepare(`
-    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, active
+    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, active
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
   res.json(products.map(p => attachStock(attachImages(p))));
@@ -385,6 +386,7 @@ router.post('/api/shop/verify-session', requireAuth, (req, res) => {
         }
 
         syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+        tryAssignDiscordRoleForOrder(order.id);
         return res.json({ ok: true, status: 'completed' });
       }
       res.json({ ok: true, status: session.payment_status });
@@ -452,6 +454,8 @@ router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
         status: 'cancelled',
         serverId: order.server_id
       });
+
+      tryRemoveDiscordRoleForOrder(orderId);
 
       res.json({ ok: true });
     })
@@ -556,9 +560,16 @@ function validateCustomPricing({ customPrice, priceMinCents, priceMaxCents, type
   return { ok: true, min, max };
 }
 
+function normalizeDiscordRoleId(v) {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  const s = String(v).trim();
+  return /^\d{15,25}$/.test(s) ? s : null;
+}
+
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -586,11 +597,12 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
   const customCheck = validateCustomPricing({ customPrice, priceMinCents, priceMaxCents, type });
   if (!customCheck.ok) return res.status(400).json({ error: customCheck.error });
   const customPriceVal = customPrice ? 1 : 0;
+  const discordRoleIdVal = normalizeDiscordRoleId(discordRoleId);
 
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max, discordRoleIdVal || null);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
   res.json(attachStock(attachImages(product)));
@@ -598,7 +610,7 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
@@ -656,6 +668,9 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
   const minVal = minWasSent ? normalizeAmountCents(priceMinCents) : null;
   const maxVal = maxWasSent ? normalizeAmountCents(priceMaxCents) : null;
 
+  const discordRoleIdWasSent = discordRoleId !== undefined;
+  const discordRoleIdVal = discordRoleIdWasSent ? normalizeDiscordRoleId(discordRoleId) : null;
+
   db.prepare(`
     UPDATE products SET
       title = COALESCE(?, title),
@@ -671,6 +686,7 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       custom_price = CASE WHEN ? THEN ? ELSE custom_price END,
       price_min_cents = CASE WHEN ? THEN ? ELSE price_min_cents END,
       price_max_cents = CASE WHEN ? THEN ? ELSE price_max_cents END,
+      discord_role_id = CASE WHEN ? THEN ? ELSE discord_role_id END,
       active = COALESCE(?, active),
       updated_at = unixepoch()
     WHERE id = ?
@@ -695,6 +711,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     minVal,
     maxWasSent ? 1 : 0,
     maxVal,
+    discordRoleIdWasSent ? 1 : 0,
+    discordRoleIdVal,
     active !== undefined ? (active ? 1 : 0) : null,
     req.params.id
   );
@@ -752,12 +770,35 @@ router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res
     }
   }
 
+  // Snapshot (user, role) pairs before the rows disappear — we'll need them
+  // to remove Discord roles after deletion (the helper queries by order id,
+  // which won't exist anymore).
+  const discordToCheck = db.prepare(`
+    SELECT DISTINCT u.steam_id AS steam_id, u.discord_id AS user_id, p.discord_role_id AS role_id
+    FROM orders o JOIN products p ON o.product_id = p.id JOIN users u ON o.steam_id = u.steam_id
+    WHERE o.product_id = ? AND o.status = 'completed'
+      AND p.discord_role_id IS NOT NULL AND u.discord_id IS NOT NULL
+  `).all(req.params.id);
+
   let deletedOrders = 0;
   const tx = db.transaction(() => {
     deletedOrders = db.prepare('DELETE FROM orders WHERE product_id = ?').run(req.params.id).changes;
     db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
   });
   tx();
+
+  // After deletion, scrub Discord roles for affected users — but only if
+  // no other product still grants them the same role.
+  for (const r of discordToCheck) {
+    const stillOwed = db.prepare(`
+      SELECT 1 FROM orders o2 JOIN products p2 ON o2.product_id = p2.id
+      WHERE o2.steam_id = ? AND o2.status = 'completed' AND p2.discord_role_id = ?
+      LIMIT 1
+    `).get(r.steam_id, r.role_id);
+    if (stillOwed) continue;
+    discord.removeRole(r.user_id, r.role_id)
+      .catch(e => console.error(`[discord] hard-delete role remove ${r.user_id}/${r.role_id}:`, e.message));
+  }
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
 
@@ -845,6 +886,7 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
   });
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+  tryRemoveDiscordRoleForOrder(orderId);
 
   res.json({ ok: true, refundedCents });
 });
@@ -999,6 +1041,113 @@ router.delete('/api/shop/admin/priority-queue/:guid', requireAdmin, (req, res) =
 });
 
 // ============================================================
+//  Discord role management
+// ============================================================
+
+router.get('/api/shop/admin/discord-roles', requireAdmin, async (req, res) => {
+  try {
+    const data = await discord.fetchAssignableRoles();
+    res.json(data);
+  } catch (e) {
+    console.error('[discord] fetch roles failed:', e.message);
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// User links / updates their Discord ID. We verify they're in the guild,
+// store the ID, then back-sync any role grants they were owed from past
+// completed orders that hadn't fired (because we didn't have the ID then).
+router.post('/api/shop/set-discord-id', requireAuth, async (req, res) => {
+  const { discordId: raw } = req.body || {};
+  if (raw == null || raw === '') {
+    // Clear linkage; also strip any roles the shop had assigned (best-effort)
+    const existing = db.prepare('SELECT discord_id FROM users WHERE steam_id = ?').get(req.user.steam_id);
+    if (existing && existing.discord_id) {
+      const roles = db.prepare(`
+        SELECT DISTINCT p.discord_role_id AS role_id
+        FROM orders o JOIN products p ON o.product_id = p.id
+        WHERE o.steam_id = ? AND o.status = 'completed' AND p.discord_role_id IS NOT NULL
+      `).all(req.user.steam_id);
+      for (const r of roles) {
+        try { await discord.removeRole(existing.discord_id, r.role_id); }
+        catch (e) { console.error('[discord] remove on unlink failed:', e.message); }
+      }
+    }
+    db.prepare('UPDATE users SET discord_id = NULL WHERE steam_id = ?').run(req.user.steam_id);
+    req.user.discord_id = null;
+    return res.json({ ok: true, discord_id: null });
+  }
+
+  const cleaned = String(raw).trim();
+  if (!/^\d{15,25}$/.test(cleaned)) {
+    return res.status(400).json({ error: 'Invalid Discord ID. Use Discord Developer Mode → right-click your name → Copy User ID.' });
+  }
+
+  let member;
+  try { member = await discord.verifyMember(cleaned); }
+  catch (e) { return res.status(502).json({ error: 'Discord lookup failed: ' + e.message }); }
+  if (!member) return res.status(404).json({ error: "You're not a member of the ReforgedZ Discord. Join first, then come back." });
+
+  db.prepare('UPDATE users SET discord_id = ? WHERE steam_id = ?').run(cleaned, req.user.steam_id);
+  req.user.discord_id = cleaned;
+
+  // Back-fill any role grants this user was owed.
+  const owed = db.prepare(`
+    SELECT DISTINCT p.discord_role_id AS role_id
+    FROM orders o JOIN products p ON o.product_id = p.id
+    WHERE o.steam_id = ? AND o.status = 'completed' AND p.discord_role_id IS NOT NULL
+  `).all(req.user.steam_id);
+  let assigned = 0;
+  for (const r of owed) {
+    try { await discord.assignRole(cleaned, r.role_id); assigned++; }
+    catch (e) { console.error('[discord] back-fill assign failed:', e.message); }
+  }
+
+  res.json({ ok: true, discord_id: cleaned, displayName: member.globalName || member.username, rolesAssigned: assigned });
+});
+
+// Fire-and-forget helper used by the order lifecycle. Looks up the role
+// the product grants and the user's linked Discord ID, then assigns.
+function tryAssignDiscordRoleForOrder(orderId) {
+  try {
+    const row = db.prepare(`
+      SELECT p.discord_role_id AS role_id, u.discord_id AS user_id
+      FROM orders o JOIN products p ON o.product_id = p.id JOIN users u ON o.steam_id = u.steam_id
+      WHERE o.id = ?
+    `).get(orderId);
+    if (!row || !row.role_id || !row.user_id) return;
+    discord.assignRole(row.user_id, row.role_id)
+      .catch(e => console.error(`[discord] assign role for order ${orderId} failed:`, e.message));
+  } catch (e) {
+    console.error('[discord] assign helper failed:', e.message);
+  }
+}
+
+// Mirror of the above: remove a role only when the user has no OTHER
+// completed order still granting it (so a user with two active subscriptions
+// to role-granting products doesn't lose the role when one is revoked).
+function tryRemoveDiscordRoleForOrder(orderId) {
+  try {
+    const row = db.prepare(`
+      SELECT o.steam_id, p.discord_role_id AS role_id, u.discord_id AS user_id
+      FROM orders o JOIN products p ON o.product_id = p.id JOIN users u ON o.steam_id = u.steam_id
+      WHERE o.id = ?
+    `).get(orderId);
+    if (!row || !row.role_id || !row.user_id) return;
+    const stillOwed = db.prepare(`
+      SELECT 1 FROM orders o JOIN products p ON o.product_id = p.id
+      WHERE o.steam_id = ? AND o.id != ? AND o.status = 'completed' AND p.discord_role_id = ?
+      LIMIT 1
+    `).get(row.steam_id, orderId, row.role_id);
+    if (stillOwed) return;
+    discord.removeRole(row.user_id, row.role_id)
+      .catch(e => console.error(`[discord] remove role for order ${orderId} failed:`, e.message));
+  } catch (e) {
+    console.error('[discord] remove helper failed:', e.message);
+  }
+}
+
+// ============================================================
 //  Stripe webhook handler (exported separately for raw body)
 // ============================================================
 
@@ -1054,6 +1203,7 @@ function webhookHandler(req, res) {
           });
         }
         syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+        tryAssignDiscordRoleForOrder(orderId);
       }
       break;
     }
@@ -1092,10 +1242,11 @@ function webhookHandler(req, res) {
       if (subId) {
         const existing = db.prepare('SELECT * FROM orders WHERE stripe_subscription_id = ? AND status = ?').get(subId, 'completed');
         if (existing) {
-          db.prepare(`
+          const renewal = db.prepare(`
             INSERT INTO orders (steam_id, product_id, server_id, stripe_subscription_id, status, amount_cents, completed_at)
             VALUES (?, ?, ?, ?, 'completed', ?, unixepoch())
           `).run(existing.steam_id, existing.product_id, existing.server_id, subId, invoice.amount_paid);
+          tryAssignDiscordRoleForOrder(renewal.lastInsertRowid);
 
           const user = db.prepare('SELECT persona, bi_uid, platform, gamertag, bm_player_id FROM users WHERE steam_id = ?').get(existing.steam_id);
           const product = db.prepare('SELECT title, currency FROM products WHERE id = ?').get(existing.product_id);
@@ -1123,9 +1274,15 @@ function webhookHandler(req, res) {
         WHERE o.stripe_subscription_id = ? AND o.status = 'completed' LIMIT 1
       `).get(sub.id);
 
+      const cancelledIds = db.prepare(`
+        SELECT id FROM orders WHERE stripe_subscription_id = ? AND status = 'completed'
+      `).all(sub.id).map(r => r.id);
+
       db.prepare(`
         UPDATE orders SET status = 'cancelled' WHERE stripe_subscription_id = ? AND status = 'completed'
       `).run(sub.id);
+
+      for (const id of cancelledIds) tryRemoveDiscordRoleForOrder(id);
 
       if (existing) {
         sendDiscordNotification({

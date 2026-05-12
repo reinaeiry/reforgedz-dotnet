@@ -760,6 +760,23 @@
               Buyers' GUIDs get added to the server's game.admins list, giving them priority queue (reserved slot). Combine with Specific Server Purchase to limit which servers it applies to.
             </div>
           </div>
+          <div class="admin-field full">
+            <label class="stock-toggle">
+              <input type="checkbox" id="formAssignDiscordRole"> Assign Discord role on purchase
+            </label>
+            <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
+              The bot gives buyers the selected role on payment, and strips it on cancellation/refund/revoke. Buyer must have linked their Discord ID on their account page.
+            </div>
+          </div>
+          <div class="admin-field" id="formDiscordRoleRow" style="display:none">
+            <label>Discord role</label>
+            <select id="formDiscordRoleId">
+              <option value="">Loading…</option>
+            </select>
+            <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
+              Only shows roles below the bot's own role in the Discord hierarchy. Move the bot above any role here to make it appear.
+            </div>
+          </div>
           <input type="hidden" id="formEditId" value="">
           <div class="admin-actions">
             <button type="submit" class="admin-submit" id="formSubmitBtn">Create Listing</button>

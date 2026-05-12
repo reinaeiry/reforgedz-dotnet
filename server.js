@@ -88,7 +88,8 @@ app.get('/api/auth/me', (req, res) => {
     role: req.user.role,
     bi_uid: req.user.bi_uid || null,
     platform: req.user.platform || 'steam',
-    gamertag: req.user.gamertag || null
+    gamertag: req.user.gamertag || null,
+    discord_id: req.user.discord_id || null
   });
 });
 
