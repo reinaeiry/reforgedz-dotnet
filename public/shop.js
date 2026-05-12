@@ -38,6 +38,12 @@ const formStockRow = document.getElementById('formStockRow');
 const formStockLimitLabel = document.getElementById('formStockLimitLabel');
 const formServerSpecific = document.getElementById('formServerSpecific');
 const formGrantsPriorityQueue = document.getElementById('formGrantsPriorityQueue');
+const formCustomPrice = document.getElementById('formCustomPrice');
+const formPriceMin = document.getElementById('formPriceMin');
+const formPriceMax = document.getElementById('formPriceMax');
+const formPriceMinRow = document.getElementById('formPriceMinRow');
+const formPriceMaxRow = document.getElementById('formPriceMaxRow');
+const formPriceLabel = document.getElementById('formPriceLabel');
 const formEditId = document.getElementById('formEditId');
 const formSubmitBtn = document.getElementById('formSubmitBtn');
 const formCancelBtn = document.getElementById('formCancelBtn');
@@ -55,6 +61,19 @@ function formatPrice(cents, _currency, type, intervalDays) {
     suffix = `<span class="per">/${intervalDays}d</span>`;
   }
   return symbol + amount + suffix;
+}
+
+function formatPriceRange(p) {
+  // Used for custom-price products on cards and the detail header.
+  const min = p.price_min_cents;
+  const max = p.price_max_cents;
+  if (min != null && max != null) {
+    return `${formatPrice(min, p.currency, 'one_time')} to ${formatPrice(max, p.currency, 'one_time')}`;
+  }
+  if (min != null) {
+    return `${formatPrice(min, p.currency, 'one_time')}+`;
+  }
+  return 'Pay what you want';
 }
 
 function formatTypeLabel(type, intervalDays) {
@@ -448,7 +467,7 @@ function renderProducts(products) {
     const soldOut = p.sold_out === true;
     const soldOutClass = soldOut ? ' sold-out' : '';
 
-    const buyLabel = p.server_specific ? 'Select Server' : 'Purchase';
+    const buyLabel = p.server_specific ? 'Select Server' : (p.custom_price ? 'Choose Amount' : 'Purchase');
     const buyBtnHtml = currentUser
       ? (soldOut
           ? `<button class="shop-buy-btn" disabled onclick="event.stopPropagation()">Sold out</button>`
@@ -466,7 +485,7 @@ function renderProducts(products) {
           <h3>${escHtml(p.title)}</h3>
           <p>${escHtml(p.description || '')}</p>
           <div class="shop-card-footer">
-            <span class="shop-card-price">${formatPrice(p.price_cents, p.currency || 'usd', p.type, p.interval_days)}</span>
+            <span class="shop-card-price">${p.custom_price ? escHtml(formatPriceRange(p)) : formatPrice(p.price_cents, p.currency || 'usd', p.type, p.interval_days)}</span>
             ${buyBtnHtml}
           </div>
           ${adminHtml}
@@ -492,6 +511,7 @@ let detailProduct = null;
 let detailImages = [];
 let detailImageIndex = 0;
 let selectedServerId = null;
+let selectedCustomAmountCents = null;
 
 function renderServerPicker(product) {
   const wrap = document.getElementById('detailServerPicker');
@@ -527,6 +547,48 @@ function renderServerPicker(product) {
   });
 }
 
+function renderCustomAmountPicker(product) {
+  const wrap = document.getElementById('detailCustomAmount');
+  const input = document.getElementById('detailAmountInput');
+  const bounds = document.getElementById('detailAmountBounds');
+  if (!product.custom_price) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = '';
+  const minDollars = (product.price_min_cents != null ? product.price_min_cents : 50) / 100;
+  const maxDollars = product.price_max_cents != null ? product.price_max_cents / 100 : null;
+  input.min = minDollars.toFixed(2);
+  if (maxDollars != null) input.max = maxDollars.toFixed(2);
+  if (selectedCustomAmountCents == null) {
+    // Default to the product's suggested price if it sits inside the range,
+    // otherwise default to the min.
+    const suggestion = product.price_cents;
+    const inRange = suggestion >= (product.price_min_cents || 50) && (product.price_max_cents == null || suggestion <= product.price_max_cents);
+    selectedCustomAmountCents = inRange ? suggestion : (product.price_min_cents || 50);
+    input.value = (selectedCustomAmountCents / 100).toFixed(2);
+  }
+  bounds.textContent = maxDollars != null
+    ? `Minimum $${minDollars.toFixed(2)}, maximum $${maxDollars.toFixed(2)}`
+    : `Minimum $${minDollars.toFixed(2)}`;
+}
+
+function onCustomAmountChange() {
+  if (!detailProduct || !detailProduct.custom_price) return;
+  const v = parseFloat(document.getElementById('detailAmountInput').value);
+  selectedCustomAmountCents = Number.isFinite(v) ? Math.round(v * 100) : null;
+  updateDetailBuyButton();
+}
+
+function isCustomAmountValid(product) {
+  if (!product.custom_price) return true;
+  if (selectedCustomAmountCents == null) return false;
+  if (product.price_min_cents != null && selectedCustomAmountCents < product.price_min_cents) return false;
+  if (product.price_max_cents != null && selectedCustomAmountCents > product.price_max_cents) return false;
+  if (selectedCustomAmountCents < 50) return false;
+  return true;
+}
+
 function updateDetailBuyButton() {
   const buyBtn = document.getElementById('detailBuy');
   const product = detailProduct;
@@ -537,6 +599,19 @@ function updateDetailBuyButton() {
     buyBtn.onclick = () => { closeDetail(); openSigninFromCard(); };
     return;
   }
+
+  // Custom-price always needs a valid amount before buying, regardless of server-specific.
+  if (product.custom_price && !isCustomAmountValid(product)) {
+    const min = (product.price_min_cents || 50) / 100;
+    const max = product.price_max_cents != null ? product.price_max_cents / 100 : null;
+    buyBtn.textContent = max != null
+      ? `Pick between $${min.toFixed(2)} and $${max.toFixed(2)}`
+      : `Minimum $${min.toFixed(2)}`;
+    buyBtn.disabled = true;
+    buyBtn.onclick = null;
+    return;
+  }
+
   if (product.server_specific) {
     if (!selectedServerId) {
       buyBtn.textContent = 'Pick a server';
@@ -551,11 +626,18 @@ function updateDetailBuyButton() {
       buyBtn.onclick = null;
       return;
     }
-    buyBtn.textContent = product.active ? `Purchase for ${SERVER_LABELS[selectedServerId]}` : 'Unavailable';
+    const amountLabel = product.custom_price ? `$${(selectedCustomAmountCents / 100).toFixed(2)} for ${SERVER_LABELS[selectedServerId]}` : `Purchase for ${SERVER_LABELS[selectedServerId]}`;
+    buyBtn.textContent = product.active ? (product.custom_price ? `Pay ${amountLabel}` : amountLabel) : 'Unavailable';
     buyBtn.disabled = !product.active;
-    buyBtn.onclick = () => { const sid = selectedServerId; closeDetail(); buyProduct(product.id, sid); };
+    buyBtn.onclick = () => {
+      const sid = selectedServerId;
+      const amt = product.custom_price ? selectedCustomAmountCents : null;
+      closeDetail();
+      buyProduct(product.id, sid, amt);
+    };
     return;
   }
+
   // Non-server-specific
   const soldOut = product.sold_out === true;
   if (soldOut) {
@@ -563,11 +645,20 @@ function updateDetailBuyButton() {
     buyBtn.disabled = true;
     buyBtn.onclick = null;
   } else {
-    buyBtn.textContent = product.active ? 'Purchase' : 'Unavailable';
+    const label = product.custom_price
+      ? `Pay $${(selectedCustomAmountCents / 100).toFixed(2)}`
+      : 'Purchase';
+    buyBtn.textContent = product.active ? label : 'Unavailable';
     buyBtn.disabled = !product.active;
-    buyBtn.onclick = () => { closeDetail(); buyProduct(product.id); };
+    buyBtn.onclick = () => {
+      const amt = product.custom_price ? selectedCustomAmountCents : null;
+      closeDetail();
+      buyProduct(product.id, null, amt);
+    };
   }
 }
+
+document.getElementById('detailAmountInput').addEventListener('input', onCustomAmountChange);
 
 function openProductDetail(productId) {
   const product = currentProducts.find(p => p.id === productId);
@@ -576,6 +667,7 @@ function openProductDetail(productId) {
   detailImageIndex = 0;
   detailImages = [];
   selectedServerId = null;
+  selectedCustomAmountCents = null;
   if (product.image_url) detailImages.push(product.image_url);
   for (const u of (product.images || [])) {
     if (u && u !== product.image_url) detailImages.push(u);
@@ -585,9 +677,10 @@ function openProductDetail(productId) {
   detailType.innerHTML = escHtml(formatTypeLabel(product.type, product.interval_days)) + stockBadgeHtml(product);
   document.getElementById('detailTitle').textContent = product.title;
   document.getElementById('detailDesc').textContent = product.description || '';
+  renderServerPicker(product);
+  renderCustomAmountPicker(product);
   refreshDetailPrice();
   renderDetailImage();
-  renderServerPicker(product);
   updateDetailBuyButton();
 
   document.getElementById('detailOverlay').classList.add('open');
@@ -595,7 +688,12 @@ function openProductDetail(productId) {
 
 function refreshDetailPrice() {
   if (!detailProduct) return;
-  document.getElementById('detailPrice').innerHTML = formatPrice(detailProduct.price_cents, detailProduct.currency || 'usd', detailProduct.type, detailProduct.interval_days);
+  const priceEl = document.getElementById('detailPrice');
+  if (detailProduct.custom_price) {
+    priceEl.innerHTML = escHtml(formatPriceRange(detailProduct));
+  } else {
+    priceEl.innerHTML = formatPrice(detailProduct.price_cents, detailProduct.currency || 'usd', detailProduct.type, detailProduct.interval_days);
+  }
   const note = document.getElementById('detailCurrencyNote');
   note.textContent = currentCurrency === 'USD' ? '' : 'Charged in USD; your bank handles any conversion.';
 }
@@ -641,6 +739,7 @@ function closeDetail() {
   detailProduct = null;
   detailImages = [];
   detailImageIndex = 0;
+  selectedCustomAmountCents = null;
 }
 
 document.getElementById('detailClose').addEventListener('click', closeDetail);
@@ -669,10 +768,12 @@ document.addEventListener('keydown', (e) => {
 // ---- BI UID modal (Steam users only) ----
 let pendingProductId = null;
 let pendingServerId = null;
+let pendingCustomAmountCents = null;
 
-function showBiUidModal(productId, serverId) {
+function showBiUidModal(productId, serverId, customAmountCents) {
   pendingProductId = productId;
   pendingServerId = serverId || null;
+  pendingCustomAmountCents = customAmountCents != null ? customAmountCents : null;
   const overlay = document.getElementById('biuidOverlay');
   const input = document.getElementById('biuidInput');
   const error = document.getElementById('biuidError');
@@ -686,6 +787,7 @@ function hideBiUidModal() {
   document.getElementById('biuidOverlay').classList.remove('open');
   pendingProductId = null;
   pendingServerId = null;
+  pendingCustomAmountCents = null;
 }
 
 document.getElementById('biuidCancel').addEventListener('click', () => {
@@ -700,8 +802,9 @@ document.getElementById('biuidCancel').addEventListener('click', () => {
 document.getElementById('biuidSkip').addEventListener('click', () => {
   const pid = pendingProductId;
   const sid = pendingServerId;
+  const amt = pendingCustomAmountCents;
   hideBiUidModal();
-  if (pid) proceedCheckout(pid, sid);
+  if (pid) proceedCheckout(pid, sid, amt);
 });
 
 document.getElementById('biuidSubmit').addEventListener('click', async () => {
@@ -727,9 +830,10 @@ document.getElementById('biuidSubmit').addEventListener('click', async () => {
     currentUser.bi_uid = raw;
     const pid = pendingProductId;
     const sid = pendingServerId;
+    const amt = pendingCustomAmountCents;
     hideBiUidModal();
     renderAuth();
-    if (pid) proceedCheckout(pid, sid);
+    if (pid) proceedCheckout(pid, sid, amt);
   } catch (e) {
     error.textContent = e.message || 'Failed to save BI UID';
   } finally {
@@ -758,20 +862,22 @@ async function saveBiUidFromDropdown() {
 }
 
 // ---- Buy flow ----
-async function buyProduct(productId, serverId) {
+async function buyProduct(productId, serverId, customAmountCents) {
   if (!currentUser) return;
 
   const product = currentProducts.find(p => p.id === productId);
-  if (product && product.server_specific && !serverId) {
-    // Server-specific products require a server pick; route the buyer through
-    // the detail modal where the picker lives.
+  // Server-specific or custom-priced products need a picker → route through
+  // the detail modal whenever the caller didn't already collect the inputs.
+  const needsServer = product && product.server_specific && !serverId;
+  const needsAmount = product && product.custom_price && (customAmountCents == null);
+  if (needsServer || needsAmount) {
     openProductDetail(productId);
     return;
   }
 
   const isSteam = (currentUser.platform || 'steam') === 'steam';
   if (isSteam && !currentUser.bi_uid) {
-    showBiUidModal(productId, serverId);
+    showBiUidModal(productId, serverId, customAmountCents);
     return;
   }
   if (!isSteam && !currentUser.bi_uid) {
@@ -789,17 +895,22 @@ async function buyProduct(productId, serverId) {
     if (!confirm('You already own this item. Purchase again?')) return;
   }
 
-  proceedCheckout(productId, serverId);
+  proceedCheckout(productId, serverId, customAmountCents);
 }
 
-async function proceedCheckout(productId, serverId) {
+async function proceedCheckout(productId, serverId, customAmountCents) {
   const btn = document.querySelector(`.shop-card[data-id="${productId}"] .shop-buy-btn`);
   if (btn) { btn.disabled = true; btn.textContent = 'Redirecting...'; }
 
   try {
     const data = await api('/api/shop/checkout', {
       method: 'POST',
-      body: JSON.stringify({ productId, testMode: isTestMode, serverId: serverId || null })
+      body: JSON.stringify({
+        productId,
+        testMode: isTestMode,
+        serverId: serverId || null,
+        customAmountCents: customAmountCents != null ? customAmountCents : undefined
+      })
     });
     if (data.url) {
       window.location.href = data.url;
@@ -828,6 +939,15 @@ function refreshStockLabel() {
 
 formServerSpecific.addEventListener('change', refreshStockLabel);
 refreshStockLabel();
+
+function refreshCustomPriceUi() {
+  const on = formCustomPrice.checked;
+  formPriceMinRow.style.display = on ? 'block' : 'none';
+  formPriceMaxRow.style.display = on ? 'block' : 'none';
+  formPriceLabel.textContent = on ? 'Suggested price (USD)' : 'Price (USD)';
+}
+formCustomPrice.addEventListener('change', refreshCustomPriceUi);
+refreshCustomPriceUi();
 
 productForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -858,6 +978,28 @@ productForm.addEventListener('submit', async (e) => {
     stockLimit = n;
   }
 
+  let customPrice = formCustomPrice.checked;
+  let priceMinCents = null;
+  let priceMaxCents = null;
+  if (customPrice) {
+    if (type !== 'one_time') {
+      return alert('Pay-what-you-want is only supported for One-Time products.');
+    }
+    const minVal = parseFloat(formPriceMin.value);
+    if (!Number.isFinite(minVal) || minVal < 0.50) {
+      return alert('Minimum amount must be at least $0.50');
+    }
+    priceMinCents = Math.round(minVal * 100);
+    const maxRaw = formPriceMax.value.trim();
+    if (maxRaw !== '') {
+      const maxVal = parseFloat(maxRaw);
+      if (!Number.isFinite(maxVal) || maxVal < minVal) {
+        return alert('Maximum amount must be greater than or equal to the minimum.');
+      }
+      priceMaxCents = Math.round(maxVal * 100);
+    }
+  }
+
   const body = {
     title: formTitle.value.trim(),
     description: formDesc.value.trim(),
@@ -868,7 +1010,10 @@ productForm.addEventListener('submit', async (e) => {
     imagesExtra,
     stockLimit,
     serverSpecific: formServerSpecific.checked,
-    grantsPriorityQueue: formGrantsPriorityQueue.checked
+    grantsPriorityQueue: formGrantsPriorityQueue.checked,
+    customPrice,
+    priceMinCents,
+    priceMaxCents
   };
 
   try {
@@ -909,7 +1054,11 @@ function editProduct(id) {
     formStockRow.style.display = limited ? 'block' : 'none';
     formServerSpecific.checked = !!p.server_specific;
     formGrantsPriorityQueue.checked = !!p.grants_priority_queue;
+    formCustomPrice.checked = !!p.custom_price;
+    formPriceMin.value = p.price_min_cents != null ? (p.price_min_cents / 100).toFixed(2) : '';
+    formPriceMax.value = p.price_max_cents != null ? (p.price_max_cents / 100).toFixed(2) : '';
     refreshStockLabel();
+    refreshCustomPriceUi();
     formEditId.value = id;
     editingProductId = id;
     formSubmitBtn.textContent = 'Update Listing';
@@ -930,7 +1079,11 @@ function clearForm() {
   formStockRow.style.display = 'none';
   formServerSpecific.checked = false;
   formGrantsPriorityQueue.checked = false;
+  formCustomPrice.checked = false;
+  formPriceMin.value = '';
+  formPriceMax.value = '';
   refreshStockLabel();
+  refreshCustomPriceUi();
   formEditId.value = '';
   editingProductId = null;
   formSubmitBtn.textContent = 'Create Listing';

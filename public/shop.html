@@ -704,8 +704,24 @@
             <textarea id="formDesc" placeholder="What the buyer gets..."></textarea>
           </div>
           <div class="admin-field">
-            <label>Price (USD)</label>
+            <label id="formPriceLabel">Price (USD)</label>
             <input type="number" id="formPrice" step="0.01" min="0.50" placeholder="9.99" required>
+          </div>
+          <div class="admin-field full">
+            <label class="stock-toggle">
+              <input type="checkbox" id="formCustomPrice"> Buyer chooses amount (pay what you want)
+            </label>
+            <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
+              The price above becomes a suggested amount. Buyers can pay anything between min and max. One-time products only.
+            </div>
+          </div>
+          <div class="admin-field" id="formPriceMinRow" style="display:none">
+            <label>Min amount (USD)</label>
+            <input type="number" id="formPriceMin" step="0.01" min="0.50" placeholder="1.00">
+          </div>
+          <div class="admin-field" id="formPriceMaxRow" style="display:none">
+            <label>Max amount (USD, optional)</label>
+            <input type="number" id="formPriceMax" step="0.01" min="0.50" placeholder="100.00">
           </div>
           <div class="admin-field" id="formIntervalRow" style="display:none">
             <label>Renews every (days)</label>
@@ -846,6 +862,14 @@
         <div class="detail-server-picker" id="detailServerPicker" style="display:none">
           <div class="detail-server-label">Choose your server</div>
           <div class="detail-server-grid" id="detailServerGrid"></div>
+        </div>
+        <div class="detail-custom-amount" id="detailCustomAmount" style="display:none">
+          <div class="detail-server-label">Choose your amount</div>
+          <div class="detail-amount-row">
+            <span class="detail-amount-currency" id="detailAmountSymbol">$</span>
+            <input type="number" class="detail-amount-input" id="detailAmountInput" step="0.01" min="0.50">
+          </div>
+          <div class="detail-amount-bounds" id="detailAmountBounds"></div>
         </div>
         <div class="detail-footer">
           <span class="detail-price" id="detailPrice"></span>
@@ -1617,6 +1641,54 @@
 
     .detail-server-btn:disabled .server-stock {
       color: #f87171;
+    }
+
+    .detail-custom-amount {
+      margin-bottom: 22px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+    }
+
+    .detail-amount-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+    }
+
+    .detail-amount-currency {
+      font-family: var(--display);
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-ghost);
+    }
+
+    .detail-amount-input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      font-family: var(--body);
+      font-size: 1.15rem;
+      font-weight: 600;
+      padding: 6px 0;
+      outline: none;
+    }
+
+    .detail-amount-input::-webkit-outer-spin-button,
+    .detail-amount-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .detail-amount-bounds {
+      font-size: 0.78rem;
+      color: var(--text-ghost);
+      margin-top: 6px;
+      line-height: 1.5;
     }
 
     .stock-toggle {

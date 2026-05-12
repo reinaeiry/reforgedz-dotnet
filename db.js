@@ -122,6 +122,15 @@ if (!productHasColumn('server_specific')) {
 if (!productHasColumn('grants_priority_queue')) {
   db.exec("ALTER TABLE products ADD COLUMN grants_priority_queue INTEGER NOT NULL DEFAULT 0");
 }
+if (!productHasColumn('custom_price')) {
+  db.exec("ALTER TABLE products ADD COLUMN custom_price INTEGER NOT NULL DEFAULT 0");
+}
+if (!productHasColumn('price_min_cents')) {
+  db.exec("ALTER TABLE products ADD COLUMN price_min_cents INTEGER");
+}
+if (!productHasColumn('price_max_cents')) {
+  db.exec("ALTER TABLE products ADD COLUMN price_max_cents INTEGER");
+}
 
 // Manual priority-queue grants (admin-page driven, no Stripe payment).
 // (guid, server_id) is unique. server_id is one of eu1/eu2/na1/na2.

@@ -172,7 +172,7 @@ function requireAdmin(req, res, next) {
 // Get active products
 router.get('/api/shop/products', (req, res) => {
   const products = db.prepare(`
-    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, server_specific, grants_priority_queue, active
+    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, active
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
   res.json(products.map(p => attachStock(attachImages(p))));
@@ -188,7 +188,7 @@ router.get('/api/shop/config', (req, res) => {
 
 // Create checkout session
 router.post('/api/shop/checkout', requireAuth, (req, res) => {
-  const { productId, testMode, serverId } = req.body;
+  const { productId, testMode, serverId, customAmountCents } = req.body;
   if (!productId) return res.status(400).json({ error: 'Missing productId' });
 
   // Only admins can use test mode
@@ -227,10 +227,30 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
     }
   }
 
+  // Resolve the price for this checkout. Custom-priced products let the
+  // buyer pick any amount within [price_min_cents, price_max_cents].
+  let amountCents = product.price_cents;
+  if (product.custom_price) {
+    const requested = parseInt(customAmountCents, 10);
+    if (!Number.isFinite(requested)) {
+      return res.status(400).json({ error: 'Pick an amount to pay.' });
+    }
+    if (product.price_min_cents != null && requested < product.price_min_cents) {
+      return res.status(400).json({ error: `Minimum is $${(product.price_min_cents / 100).toFixed(2)}.` });
+    }
+    if (product.price_max_cents != null && requested > product.price_max_cents) {
+      return res.status(400).json({ error: `Maximum is $${(product.price_max_cents / 100).toFixed(2)}.` });
+    }
+    if (requested < 50) {
+      return res.status(400).json({ error: 'Minimum charge is $0.50 (Stripe).' });
+    }
+    amountCents = requested;
+  }
+
   // Create pending order
   const order = db.prepare(`
     INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents) VALUES (?, ?, ?, 'pending', ?)
-  `).run(req.user.steam_id, product.id, orderServerId, product.price_cents);
+  `).run(req.user.steam_id, product.id, orderServerId, amountCents);
 
   const orderId = order.lastInsertRowid;
   const isRecurring = product.type === 'subscription' || product.type === 'recurring_custom';
@@ -256,7 +276,7 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
           name: product.title,
           description: product.description || undefined,
         },
-        unit_amount: product.price_cents,
+        unit_amount: amountCents,
         ...(recurring ? { recurring } : {})
       },
       quantity: 1
@@ -271,9 +291,10 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
     cancel_url: BASE_URL + '/shop?cancelled=1',
   };
 
-  // Stripe Price ID is only honored for one_time and subscription types
-  // (custom intervals must always go through inline price_data).
-  if (product.stripe_price_id && product.type !== 'recurring_custom') {
+  // Stripe Price ID is only honored for one_time / subscription types AND
+  // when the buyer isn't picking their own amount (custom_price needs inline
+  // price_data with unit_amount each time).
+  if (product.stripe_price_id && product.type !== 'recurring_custom' && !product.custom_price) {
     sessionParams.line_items = [{
       price: product.stripe_price_id,
       quantity: 1
@@ -512,9 +533,32 @@ function normalizeStockLimit(value) {
   return n;
 }
 
+function normalizeAmountCents(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+function validateCustomPricing({ customPrice, priceMinCents, priceMaxCents, type }) {
+  if (!customPrice) return { ok: true, min: null, max: null };
+  if (type !== 'one_time') {
+    return { ok: false, error: 'Custom amount pricing is only supported for one-time products.' };
+  }
+  const min = normalizeAmountCents(priceMinCents);
+  const max = normalizeAmountCents(priceMaxCents);
+  if (min == null || min < 50) {
+    return { ok: false, error: 'priceMinCents must be at least 50 (Stripe minimum).' };
+  }
+  if (max != null && max < min) {
+    return { ok: false, error: 'priceMaxCents must be greater than or equal to priceMinCents.' };
+  }
+  return { ok: true, min, max };
+}
+
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -539,10 +583,14 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
   const serverSpecificVal = serverSpecific ? 1 : 0;
   const grantsPqVal = grantsPriorityQueue ? 1 : 0;
 
+  const customCheck = validateCustomPricing({ customPrice, priceMinCents, priceMaxCents, type });
+  if (!customCheck.ok) return res.status(400).json({ error: customCheck.error });
+  const customPriceVal = customPrice ? 1 : 0;
+
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, server_specific, grants_priority_queue)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, serverSpecificVal, grantsPqVal);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
   res.json(attachStock(attachImages(product)));
@@ -550,7 +598,7 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
@@ -588,6 +636,26 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
   const grantsPqWasSent = grantsPriorityQueue !== undefined;
   const grantsPqVal = grantsPriorityQueue ? 1 : 0;
 
+  // Custom pricing: validate using effective values (sent fields override current).
+  const customPriceWasSent = customPrice !== undefined;
+  const effectiveCustomPrice = customPriceWasSent ? !!customPrice : !!product.custom_price;
+  const minWasSent = priceMinCents !== undefined;
+  const maxWasSent = priceMaxCents !== undefined;
+  const effectiveMin = minWasSent ? normalizeAmountCents(priceMinCents) : product.price_min_cents;
+  const effectiveMax = maxWasSent ? normalizeAmountCents(priceMaxCents) : product.price_max_cents;
+  if (effectiveCustomPrice) {
+    const check = validateCustomPricing({
+      customPrice: true,
+      priceMinCents: effectiveMin,
+      priceMaxCents: effectiveMax,
+      type: effectiveType
+    });
+    if (!check.ok) return res.status(400).json({ error: check.error });
+  }
+  const customPriceVal = customPrice ? 1 : 0;
+  const minVal = minWasSent ? normalizeAmountCents(priceMinCents) : null;
+  const maxVal = maxWasSent ? normalizeAmountCents(priceMaxCents) : null;
+
   db.prepare(`
     UPDATE products SET
       title = COALESCE(?, title),
@@ -600,6 +668,9 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       stock_limit = CASE WHEN ? THEN ? ELSE stock_limit END,
       server_specific = CASE WHEN ? THEN ? ELSE server_specific END,
       grants_priority_queue = CASE WHEN ? THEN ? ELSE grants_priority_queue END,
+      custom_price = CASE WHEN ? THEN ? ELSE custom_price END,
+      price_min_cents = CASE WHEN ? THEN ? ELSE price_min_cents END,
+      price_max_cents = CASE WHEN ? THEN ? ELSE price_max_cents END,
       active = COALESCE(?, active),
       updated_at = unixepoch()
     WHERE id = ?
@@ -618,6 +689,12 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     serverSpecificVal,
     grantsPqWasSent ? 1 : 0,
     grantsPqVal,
+    customPriceWasSent ? 1 : 0,
+    customPriceVal,
+    minWasSent ? 1 : 0,
+    minVal,
+    maxWasSent ? 1 : 0,
+    maxVal,
     active !== undefined ? (active ? 1 : 0) : null,
     req.params.id
   );
