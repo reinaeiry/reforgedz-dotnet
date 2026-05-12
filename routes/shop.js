@@ -765,7 +765,7 @@ router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res
         await getStripe(true).subscriptions.cancel(row.stripe_subscription_id);
         cancelledSubs++;
       } catch (e2) {
-        console.error(`[hard-delete] Failed to cancel sub ${row.stripe_subscription_id}: ${e2.message}`);
+        console.error('[hard-delete] Failed to cancel sub %s: %s', row.stripe_subscription_id, e2.message);
       }
     }
   }
@@ -797,7 +797,7 @@ router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res
     `).get(r.steam_id, r.role_id);
     if (stillOwed) continue;
     discord.removeRole(r.user_id, r.role_id)
-      .catch(e => console.error(`[discord] hard-delete role remove ${r.user_id}/${r.role_id}:`, e.message));
+      .catch(e => console.error('[discord] hard-delete role remove %s/%s: %s', r.user_id, r.role_id, e.message));
   }
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
@@ -1117,7 +1117,7 @@ function tryAssignDiscordRoleForOrder(orderId) {
     `).get(orderId);
     if (!row || !row.role_id || !row.user_id) return;
     discord.assignRole(row.user_id, row.role_id)
-      .catch(e => console.error(`[discord] assign role for order ${orderId} failed:`, e.message));
+      .catch(e => console.error('[discord] assign role for order %s failed: %s', orderId, e.message));
   } catch (e) {
     console.error('[discord] assign helper failed:', e.message);
   }
@@ -1141,7 +1141,7 @@ function tryRemoveDiscordRoleForOrder(orderId) {
     `).get(row.steam_id, orderId, row.role_id);
     if (stillOwed) return;
     discord.removeRole(row.user_id, row.role_id)
-      .catch(e => console.error(`[discord] remove role for order ${orderId} failed:`, e.message));
+      .catch(e => console.error('[discord] remove role for order %s failed: %s', orderId, e.message));
   } catch (e) {
     console.error('[discord] remove helper failed:', e.message);
   }

@@ -43,9 +43,46 @@ passport.use(new SteamStrategy({
   done(null, user);
 }));
 
-// ---- Stripe webhook (must be before express.json) ----
+// Behind Pterodactyl/nginx, so the client's real IP is in X-Forwarded-For.
+// trust proxy = 1 means trust one hop of proxy; needed for rate-limit to key by real IP.
+app.set('trust proxy', 1);
+
+// ---- Stripe webhook (must be before express.json AND before rate limiters,
+// because Stripe controls its retry cadence and its IPs change). ----
 const shopRoutes = require('./routes/shop');
 app.post('/api/shop/webhook', express.raw({ type: 'application/json' }), shopRoutes.webhookHandler);
+
+// ---- Rate limiting ----
+const rateLimit = require('express-rate-limit');
+
+// Generous global ceiling to catch obvious abuse without hurting real users.
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down.' }
+});
+
+// Tighter limiter for write endpoints (POST/PUT/DELETE on /api/...).
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many write requests. Slow down.' }
+});
+
+// Stricter still for auth + checkout endpoints (cheaper to brute-force these).
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many auth attempts. Try again in a minute.' }
+});
+
+app.use(globalLimiter);
 
 // ---- Middleware ----
 app.use(express.json());
@@ -63,12 +100,46 @@ app.use(session({
 }));
 app.use(passport.initialize());
 app.use(passport.session());
+
+// ---- Tighter limiter on /api writes ----
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  return writeLimiter(req, res, next);
+});
+
+// ---- CSRF defense via Origin/Referer check on state-changing requests.
+// Skips: GETs, the Stripe webhook (different signing), and requests carrying
+// the shared admin API key (server-to-server calls from the admin page).
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  if (req.path === '/api/shop/webhook') return next();
+  const apiKey = req.headers['x-shop-admin-key'];
+  if (apiKey && process.env.SHOP_ADMIN_API_KEY && apiKey === process.env.SHOP_ADMIN_API_KEY) return next();
+
+  let allowedHost;
+  try { allowedHost = new URL(BASE_URL).host; }
+  catch { allowedHost = ''; }
+
+  const origin = req.headers.origin;
+  const referer = req.headers.referer;
+  let originHost = '';
+  try {
+    if (origin) originHost = new URL(origin).host;
+    else if (referer) originHost = new URL(referer).host;
+  } catch {}
+
+  if (!allowedHost || originHost !== allowedHost) {
+    return res.status(403).json({ error: 'Cross-origin request blocked' });
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/radio', express.static(path.join(__dirname, 'radio')));
 
 // ---- Auth routes ----
-app.get('/auth/steam', passport.authenticate('steam'));
-app.get('/auth/steam/callback',
+app.get('/auth/steam', authLimiter, passport.authenticate('steam'));
+app.get('/auth/steam/callback', authLimiter,
   passport.authenticate('steam', { failureRedirect: '/shop' }),
   (req, res) => res.redirect('/shop')
 );
@@ -141,7 +212,7 @@ function setConsoleCookie(res, payload) {
 
 const VALID_PLATFORMS = new Set(['xbox', 'psn']);
 
-app.post('/api/auth/console/lookup', async (req, res) => {
+app.post('/api/auth/console/lookup', authLimiter, async (req, res) => {
   const { platform, gamertag } = req.body || {};
   if (!VALID_PLATFORMS.has(platform)) return res.status(400).json({ error: 'Invalid platform' });
   if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
@@ -151,7 +222,7 @@ app.post('/api/auth/console/lookup', async (req, res) => {
   res.json({ bmPlayerId: result.bmPlayerId, biUid: result.biUid, displayName: result.displayName, platform });
 });
 
-app.post('/api/auth/console/confirm', async (req, res) => {
+app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
   const { platform, gamertag } = req.body || {};
   if (!VALID_PLATFORMS.has(platform)) return res.status(400).json({ error: 'Invalid platform' });
   if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
@@ -548,9 +619,13 @@ app.get('/radio', (req, res) => {
   let html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
 
   if (track) {
+    // Use the *cached* track.file (filesystem-derived, already URL-encoded
+    // segment-by-segment in loadAllTracks) rather than the raw query value,
+    // so meta-tag injection is impossible even if the query param was crafted.
+    const safeFile = track.file;
     const dur = track.duration ? `${Math.floor(track.duration / 60)}:${(track.duration % 60).toString().padStart(2, '0')}` : '';
-    const shareUrl = `https://reforgedz.net/radio?track=${encodeURIComponent(trackFile)}`;
-    const audioUrl = `https://reforgedz.net${trackFile}`;
+    const shareUrl = `https://reforgedz.net/radio?track=${encodeURIComponent(safeFile)}`;
+    const audioUrl = escHtml(`https://reforgedz.net${safeFile}`);
     const title = `${escHtml(track.title)} - ${escHtml(track.artist)}`;
     const desc = `${escHtml(track.category)}${dur ? ' \u00b7 ' + dur : ''} | Modest AI Radio on ReforgedZ.net`;
 

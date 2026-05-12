@@ -150,7 +150,11 @@ function wrapForRegion(server, innerCmd) {
   // EU servers we hit directly from the entry SSH session (which connects to EU host).
   // NA servers we reach via a nested SSH from the EU host to the NA host.
   if (server.region === 'eu') return innerCmd;
-  return `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${server.port} ${server.user}@${server.host} "${innerCmd.replace(/"/g, '\\"')}"`;
+  // Base64-encode the inner command so nothing inside it can break out of the
+  // outer SSH quoting. The remote shell decodes and pipes to bash. Single-quote
+  // wrapping is safe because base64 alphabet is [A-Za-z0-9+/=] only.
+  const innerB64 = Buffer.from(innerCmd, 'utf8').toString('base64');
+  return `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${server.port} ${server.user}@${server.host} 'echo ${innerB64} | base64 -d | bash'`;
 }
 
 async function patchServerAdmins(conn, server, desiredGuids) {
