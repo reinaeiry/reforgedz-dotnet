@@ -27,6 +27,19 @@ navLinks.forEach(link => {
   });
 });
 
+// Honor a #about / #radio / #contact hash on load (used by the other pages
+// that link back to a specific homepage tab).
+(function initFromHash() {
+  const validTabs = Array.from(sections).map(s => s.id.replace(/^tab-/, ''));
+  const raw = (location.hash || '').replace(/^#/, '');
+  if (raw && validTabs.includes(raw)) switchTab(raw);
+})();
+window.addEventListener('hashchange', () => {
+  const validTabs = Array.from(sections).map(s => s.id.replace(/^tab-/, ''));
+  const raw = (location.hash || '').replace(/^#/, '');
+  if (raw && validTabs.includes(raw)) switchTab(raw);
+});
+
 // ---- Mobile hamburger menu ----
 const hamburger = document.getElementById('navHamburger');
 const navLinksEl = document.getElementById('navLinks');

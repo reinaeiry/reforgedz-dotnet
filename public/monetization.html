@@ -289,8 +289,18 @@
       <a class="nav-brand" href="/">
         <span>REFORGED<span class="brand-z">Z</span></span>
       </a>
-      <div class="nav-links">
+      <button class="nav-hamburger" id="navHamburger" aria-label="Menu">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="nav-links" id="navLinks">
         <a class="nav-link" href="/">Home</a>
+        <a class="nav-link" href="/#about">About</a>
+        <a class="nav-link" href="/shop">Shop</a>
+        <a class="nav-link" href="https://discord.gg/reforgedz" target="_blank">Community</a>
+        <a class="nav-link" href="/#radio">Radio</a>
+        <a class="nav-link" href="/#contact">Contact</a>
+        <a class="nav-link" href="https://wiki.reforgedz.net" target="_blank">Wiki</a>
+        <a class="nav-link" href="/map">Map</a>
       </div>
       <a href="https://discord.gg/reforgedz" target="_blank" class="nav-cta">Join Discord</a>
     </div>
@@ -421,5 +431,11 @@
     </div>
   </footer>
 
+  <script>
+    document.getElementById('navHamburger')?.addEventListener('click', function () {
+      this.classList.toggle('open');
+      document.getElementById('navLinks')?.classList.toggle('open');
+    });
+  </script>
 </body>
 </html>
