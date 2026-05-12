@@ -900,6 +900,83 @@ document.getElementById('biuidSubmit').addEventListener('click', async () => {
   }
 });
 
+// ---- Discord ID modal (pre-checkout, only when product grants a role) ----
+let pendingDiscordPid = null;
+let pendingDiscordSid = null;
+let pendingDiscordAmt = null;
+
+function showDiscordIdModal(productId, serverId, customAmountCents) {
+  pendingDiscordPid = productId;
+  pendingDiscordSid = serverId || null;
+  pendingDiscordAmt = customAmountCents != null ? customAmountCents : null;
+  const overlay = document.getElementById('discordIdOverlay');
+  const input = document.getElementById('discordIdInput');
+  const error = document.getElementById('discordIdError');
+  input.value = '';
+  error.textContent = '';
+  overlay.classList.add('open');
+  setTimeout(() => input.focus(), 50);
+}
+
+function hideDiscordIdModal() {
+  document.getElementById('discordIdOverlay').classList.remove('open');
+  pendingDiscordPid = null;
+  pendingDiscordSid = null;
+  pendingDiscordAmt = null;
+}
+
+document.getElementById('discordIdCancel').addEventListener('click', () => {
+  const pid = pendingDiscordPid;
+  hideDiscordIdModal();
+  if (pid) {
+    const btn = document.querySelector(`.shop-card[data-id="${pid}"] .shop-buy-btn`);
+    if (btn) { btn.disabled = false; btn.textContent = 'Purchase'; }
+  }
+});
+
+document.getElementById('discordIdSkip').addEventListener('click', () => {
+  const pid = pendingDiscordPid;
+  const sid = pendingDiscordSid;
+  const amt = pendingDiscordAmt;
+  hideDiscordIdModal();
+  if (pid) proceedCheckout(pid, sid, amt);
+});
+
+document.getElementById('discordIdSubmit').addEventListener('click', async () => {
+  const input = document.getElementById('discordIdInput');
+  const error = document.getElementById('discordIdError');
+  const submitBtn = document.getElementById('discordIdSubmit');
+
+  const raw = input.value.trim();
+  if (!/^\d{15,25}$/.test(raw)) {
+    error.textContent = 'That doesn\'t look like a Discord User ID. Right-click your name in Discord (Developer Mode on) and Copy User ID.';
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Linking...';
+  error.textContent = '';
+
+  try {
+    const result = await api('/api/shop/set-discord-id', {
+      method: 'POST',
+      body: JSON.stringify({ discordId: raw })
+    });
+    currentUser.discord_id = result.discord_id || raw;
+    const pid = pendingDiscordPid;
+    const sid = pendingDiscordSid;
+    const amt = pendingDiscordAmt;
+    hideDiscordIdModal();
+    renderAuth();
+    if (pid) proceedCheckout(pid, sid, amt);
+  } catch (e) {
+    error.textContent = e.message || 'Failed to link Discord ID';
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Link & Continue';
+  }
+});
+
 async function saveBiUidFromDropdown() {
   const input = document.getElementById('dropdownBiUidInput');
   const raw = input.value.trim().toLowerCase();
@@ -966,6 +1043,13 @@ async function buyProduct(productId, serverId, customAmountCents) {
   }
   if (!isSteam && !currentUser.bi_uid) {
     alert("We couldn't find your BI UID via BattleMetrics yet. Play one round on a tracked ReforgedZ server, then come back.");
+    return;
+  }
+
+  // If the product grants a Discord role and the user hasn't linked their
+  // Discord yet, prompt for it (optional — they can skip).
+  if (product && product.discord_role_id && !currentUser.discord_id) {
+    showDiscordIdModal(productId, serverId, customAmountCents);
     return;
   }
 

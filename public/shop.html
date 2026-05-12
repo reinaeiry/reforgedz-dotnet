@@ -843,6 +843,29 @@
     </div>
   </div>
 
+  <!-- Discord ID Modal (prompts buyer before a role-granting purchase) -->
+  <div class="biuid-overlay" id="discordIdOverlay">
+    <div class="biuid-modal">
+      <h3>Link your Discord (optional)</h3>
+      <p>This product grants a Discord role on purchase. Drop your Discord User ID in here and the bot will hand it out automatically. You can also skip and link your Discord later from your account menu.</p>
+      <ol>
+        <li>In Discord, open <strong>User Settings → Advanced</strong> and turn on <strong>Developer Mode</strong>.</li>
+        <li>Right-click your own name anywhere, then click <strong>Copy User ID</strong>.</li>
+        <li>Paste the number below.</li>
+      </ol>
+      <p style="font-size:0.78rem;color:var(--text-ghost);margin-top:-4px">
+        Full walkthrough: <a href="https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID-" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline">Discord support article</a>.
+      </p>
+      <input type="text" class="biuid-input" id="discordIdInput" placeholder="123456789012345678" spellcheck="false" autocomplete="off" inputmode="numeric">
+      <div class="biuid-error" id="discordIdError"></div>
+      <div class="biuid-actions">
+        <button class="biuid-cancel" id="discordIdCancel">Cancel</button>
+        <button class="biuid-skip" id="discordIdSkip">Skip for now</button>
+        <button class="biuid-submit" id="discordIdSubmit">Link &amp; Continue</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Console Sign-in Modal -->
   <div class="console-overlay" id="consoleOverlay">
     <div class="console-modal">
