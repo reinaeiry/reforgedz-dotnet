@@ -873,8 +873,17 @@
     }
 
     async function loadFinances() {
-      document.getElementById('expensesBody').innerHTML = '<tr><td colspan="5" class="empty-state">Loading…</td></tr>';
-      document.getElementById('topProductsBody').innerHTML = '<tr><td colspan="4" class="empty-state">Loading…</td></tr>';
+      const setLoading = (id, cols) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = `<tr><td colspan="${cols}" class="empty-state">Loading…</td></tr>`;
+      };
+      setLoading('monthlyExpensesBody', 6);
+      setLoading('oneOffExpensesBody', 6);
+      setLoading('topProductsBody', 3);
+      setLoading('refundsByProductBody', 3);
+      setLoading('topBuyersBody', 4);
+      setLoading('payoutsBody', 5);
+      setLoading('perMonthBody', 7);
       try {
         const res = await fetch('/api/shop/admin/finances');
         financesData = await res.json();
