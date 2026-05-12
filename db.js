@@ -221,6 +221,17 @@ if (!orderHasColumn('test_mode')) {
   db.exec("ALTER TABLE orders ADD COLUMN test_mode INTEGER NOT NULL DEFAULT 0");
 }
 
+// Self-healing backfill: Stripe session IDs encode their environment in
+// the prefix (cs_test_* vs cs_live_*), so any order still flagged as live
+// with a cs_test_ session is sandbox pollution that should be hidden from
+// rollups.
+{
+  const result = db.prepare(
+    "UPDATE orders SET test_mode = 1 WHERE test_mode = 0 AND stripe_session_id LIKE 'cs_test_%'"
+  ).run();
+  if (result.changes > 0) console.log(`[db] Marked ${result.changes} legacy test-mode order(s)`);
+}
+
 function expenseHasColumn(name) {
   return db.prepare("PRAGMA table_info(monthly_expenses)").all().some(c => c.name === name);
 }
