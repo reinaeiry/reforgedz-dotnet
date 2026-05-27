@@ -1287,7 +1287,7 @@ async function deleteProduct(id) {
 
 async function hardDeleteProduct(id, orderCount, subCount) {
   const subWarning = subCount > 0
-    ? `\n\nThis will also CANCEL ${subCount} active Stripe subscription(s) — affected users stop being billed immediately.`
+    ? `\n\nNote: ${subCount} legacy subscription order(s) reference this product. Subscriptions are retired, so nothing recurring is billed — but cancel any leftover ones in the PayPal/Stripe dashboard if needed.`
     : '';
   const typed = prompt(
     `HARD DELETE\n\nThis permanently deletes the product AND ${orderCount} order(s) referencing it. This cannot be undone.${subWarning}\n\nType DELETE to confirm:`
@@ -1341,10 +1341,9 @@ function renderOrders(orders, container) {
   }
 
   container.innerHTML = visible.map(o => {
-    const isActiveSub = (o.type === 'subscription' || o.type === 'recurring_custom') && o.status === 'completed' && o.stripe_subscription_id;
-    const cancelBtn = isActiveSub
-      ? `<button class="cancel-sub-btn" onclick="cancelSubscription(${o.id}, event)">Cancel</button>`
-      : '';
+    // Subscriptions are retired — no self-serve cancel button. Legacy
+    // subscription orders still appear in history but can't be managed here.
+    const cancelBtn = '';
     const serverTag = o.server_id ? ` <span style="color:var(--text-ghost);font-weight:500"> · ${escHtml(SERVER_LABELS[o.server_id] || o.server_id)}</span>` : '';
 
     return `

@@ -570,24 +570,24 @@
           <!-- Balance + Net position + Runway -->
           <div class="finance-grid">
             <div class="finance-card">
-              <div class="finance-card-label">Stripe available</div>
+              <div class="finance-card-label">PayPal available</div>
               <div class="finance-card-value" id="finBalAvailable">—</div>
               <div class="finance-card-sub" id="finBalAvailableSub"></div>
             </div>
             <div class="finance-card">
-              <div class="finance-card-label">Stripe pending</div>
+              <div class="finance-card-label">PayPal on hold</div>
               <div class="finance-card-value yellow" id="finBalPending">—</div>
-              <div class="finance-card-sub">Clears in ~2 business days</div>
+              <div class="finance-card-sub">Reserved / pending release</div>
             </div>
             <div class="finance-card">
               <div class="finance-card-label">Instant available</div>
               <div class="finance-card-value" id="finBalInstant">—</div>
-              <div class="finance-card-sub">Payout-now (1% Stripe fee)</div>
+              <div class="finance-card-sub">Withdrawable now</div>
             </div>
             <div class="finance-card highlight">
               <div class="finance-card-label">Net position</div>
               <div class="finance-card-value" id="finNetPosition">—</div>
-              <div class="finance-card-sub" id="finNetPositionSub">Stripe USD − monthly expenses</div>
+              <div class="finance-card-sub" id="finNetPositionSub">PayPal USD − monthly expenses</div>
             </div>
             <div class="finance-card highlight">
               <div class="finance-card-label">Runway</div>
@@ -624,14 +624,14 @@
               <div class="finance-card-sub">Lifetime minus refunds</div>
             </div>
             <div class="finance-card">
-              <div class="finance-card-label">Stripe fees (est.)</div>
+              <div class="finance-card-label">PayPal fees</div>
               <div class="finance-card-value" id="finStripeFees" style="color:#fb923c">—</div>
-              <div class="finance-card-sub" id="finStripeFeesSub">2.9% + $0.30 per charge</div>
+              <div class="finance-card-sub" id="finStripeFeesSub">Actual per-order fees</div>
             </div>
             <div class="finance-card">
-              <div class="finance-card-label">After Stripe fees</div>
+              <div class="finance-card-label">After PayPal fees</div>
               <div class="finance-card-value green" id="finNetAfterFees">—</div>
-              <div class="finance-card-sub">Net collected − est. fees</div>
+              <div class="finance-card-sub">Net collected − fees</div>
             </div>
             <div class="finance-card">
               <div class="finance-card-label">MRR (active subs)</div>
@@ -764,14 +764,14 @@
             </div>
           </div>
 
-          <!-- Stripe payouts -->
+          <!-- PayPal transactions -->
           <div class="finance-section">
             <div class="finance-section-head">
-              <h2>Stripe payouts (last 30 bank transfers)</h2>
+              <h2>PayPal transactions (last 31 days)</h2>
             </div>
             <div class="orders-table">
               <table>
-                <thead><tr><th>Created</th><th>Arrives</th><th>Amount</th><th>Method</th><th>Status</th></tr></thead>
+                <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Fee</th><th>Status</th></tr></thead>
                 <tbody id="payoutsBody"><tr><td colspan="5" class="empty-state">Loading…</td></tr></tbody>
               </table>
             </div>
@@ -914,12 +914,12 @@
       const monthlyTotal = f.monthlyExpensesTotalCents || 0;
       const oneOffTotal = f.oneOffExpensesTotalCents || 0;
 
-      // USD slices of Stripe balance for net-position calculation.
+      // USD slices of PayPal balance for net-position calculation.
       const usdAvailable = (bal.available || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
       const usdPending = (bal.pending || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
 
       document.getElementById('finBalAvailable').textContent = formatCentsList(bal.available);
-      document.getElementById('finBalAvailableSub').textContent = bal.mode === 'test' ? 'Test mode key (not real money)' : 'Live Stripe account';
+      document.getElementById('finBalAvailableSub').textContent = bal.mode === 'sandbox' ? 'Sandbox (not real money)' : 'Live PayPal account';
       document.getElementById('finBalPending').textContent = formatCentsList(bal.pending);
       document.getElementById('finBalInstant').textContent = formatCentsList(bal.instantAvailable);
 
@@ -932,8 +932,12 @@
       document.getElementById('finRefunded').textContent = centsToUsd(rev.refundedCents || 0);
       document.getElementById('finRefundedSub').textContent = `${rev.refundedCount || 0} refunded`;
       document.getElementById('finNetCollected').textContent = centsToUsd(rev.netCents || 0);
-      document.getElementById('finStripeFees').textContent = '~' + centsToUsd(fees.totalCents || 0);
-      document.getElementById('finStripeFeesSub').textContent = `${fees.charges || 0} live charges, est. only`;
+      document.getElementById('finStripeFees').textContent = centsToUsd(fees.totalCents || 0);
+      // Real fees come straight from PayPal's per-capture breakdown; only
+      // legacy rows without a recorded fee use the 2.99% + $0.49 estimate.
+      document.getElementById('finStripeFeesSub').textContent = (fees.estimatedCents || 0) > 0
+        ? `${centsToUsd(fees.knownFeesCents || 0)} actual + ${centsToUsd(fees.estimatedCents || 0)} est. (legacy)`
+        : `Actual PayPal fees · ${fees.charges || 0} charges`;
       document.getElementById('finNetAfterFees').textContent = centsToUsd((rev.netCents || 0) - (fees.totalCents || 0));
 
       document.getElementById('finMRR').textContent = centsToUsd(mrr.mrrCents || 0);
@@ -945,7 +949,7 @@
       netEl.textContent = centsToUsd(netCents);
       netEl.className = 'finance-card-value ' + (netCents >= 0 ? 'green' : 'red');
       document.getElementById('finNetPositionSub').textContent =
-        `${centsToUsd(usdAvailable + usdPending)} Stripe USD − ${centsToUsd(monthlyTotal)} monthly expenses`;
+        `${centsToUsd(usdAvailable + usdPending)} PayPal USD − ${centsToUsd(monthlyTotal)} monthly expenses`;
 
       // Runway
       const r = f.runway || {};
@@ -959,7 +963,7 @@
         const text = months > 24 ? `${(months / 12).toFixed(1)} years` : `${months.toFixed(1)} months`;
         runwayEl.textContent = text;
         runwayEl.className = 'finance-card-value ' + (months < 6 ? 'red' : (months < 12 ? 'yellow' : 'green'));
-        document.getElementById('finRunwaySub').textContent = `Burning ${centsToUsd(Math.abs(r.netMonthlyCents || 0))}/mo with ${centsToUsd(usdAvailable + usdPending)} in Stripe USD`;
+        document.getElementById('finRunwaySub').textContent = `Burning ${centsToUsd(Math.abs(r.netMonthlyCents || 0))}/mo with ${centsToUsd(usdAvailable + usdPending)} in PayPal USD`;
       } else {
         runwayEl.textContent = '—';
         runwayEl.className = 'finance-card-value';
@@ -1096,21 +1100,21 @@
 
     function renderPayouts(payouts) {
       if (payouts && payouts.error) {
-        document.getElementById('payoutsBody').innerHTML = `<tr><td colspan="5" class="empty-state">Couldn't load payouts: ${escHtml(payouts.error)}</td></tr>`;
+        document.getElementById('payoutsBody').innerHTML = `<tr><td colspan="5" class="empty-state">Couldn't load transactions: ${escHtml(payouts.error)}</td></tr>`;
         return;
       }
       const arr = Array.isArray(payouts) ? payouts : [];
       if (arr.length === 0) {
-        document.getElementById('payoutsBody').innerHTML = '<tr><td colspan="5" class="empty-state">No payouts yet. Stripe hasn\'t transferred anything to your bank.</td></tr>';
+        document.getElementById('payoutsBody').innerHTML = '<tr><td colspan="5" class="empty-state">No PayPal transactions in the last 31 days.</td></tr>';
         return;
       }
       document.getElementById('payoutsBody').innerHTML = arr.map(p => `
         <tr>
           <td>${formatDate(p.created)}</td>
-          <td>${formatDate(p.arrival)}</td>
+          <td>${escHtml(p.type || 'transaction')}</td>
           <td><span class="amount-cell">${centsToUsd(p.amount)} ${(p.currency || 'usd').toUpperCase()}</span></td>
-          <td>${p.method || ''}</td>
-          <td><span class="status-badge ${p.status === 'paid' ? 'completed' : p.status === 'pending' ? 'pending' : (p.status === 'failed' || p.status === 'canceled') ? 'cancelled' : ''}">${p.status}</span></td>
+          <td>${p.feeCents ? centsToUsd(p.feeCents) : '—'}</td>
+          <td><span class="status-badge ${p.status === 'S' || p.status === 'completed' ? 'completed' : p.status === 'P' || p.status === 'pending' ? 'pending' : (p.status === 'F' || p.status === 'D') ? 'cancelled' : ''}">${escHtml(p.status || '')}</span></td>
         </tr>
       `).join('');
     }
@@ -1122,15 +1126,15 @@
       const push = (...cols) => lines.push(cols.map(c => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`).join(','));
 
       push('Section', 'Label', 'Value', 'Notes');
-      push('Balance', 'Stripe available USD', ((f.balance.available || []).filter(e => e.currency === 'usd').reduce((s, e) => s + e.amount, 0) / 100).toFixed(2), '');
-      push('Balance', 'Stripe pending USD', ((f.balance.pending || []).filter(e => e.currency === 'usd').reduce((s, e) => s + e.amount, 0) / 100).toFixed(2), '');
+      push('Balance', 'PayPal available USD', ((f.balance.available || []).filter(e => e.currency === 'usd').reduce((s, e) => s + e.amount, 0) / 100).toFixed(2), '');
+      push('Balance', 'PayPal on-hold USD', ((f.balance.pending || []).filter(e => e.currency === 'usd').reduce((s, e) => s + e.amount, 0) / 100).toFixed(2), '');
       push('Revenue', 'Lifetime', ((f.revenue.lifetimeCents || 0) / 100).toFixed(2), `${f.revenue.lifetimeCount} orders`);
       push('Revenue', 'Refunded', ((f.revenue.refundedCents || 0) / 100).toFixed(2), `${f.revenue.refundedCount} orders`);
       push('Revenue', 'Net collected', ((f.revenue.netCents || 0) / 100).toFixed(2), '');
       push('Revenue', 'This year', ((f.revenue.yearCents || 0) / 100).toFixed(2), '');
       push('Revenue', 'This month', ((f.revenue.monthCents || 0) / 100).toFixed(2), '');
       push('Revenue', 'MRR', ((f.mrr.mrrCents || 0) / 100).toFixed(2), `${f.mrr.activeSubs} active subs`);
-      push('Revenue', 'Estimated Stripe fees', ((f.fees.totalCents || 0) / 100).toFixed(2), `${f.fees.charges} charges`);
+      push('Revenue', 'PayPal fees', ((f.fees.totalCents || 0) / 100).toFixed(2), `${f.fees.charges} charges`);
       push('Monthly expenses', 'Total / month', ((f.monthlyExpensesTotalCents || 0) / 100).toFixed(2), '');
       for (const e of (f.monthlyExpenses || [])) push('Monthly expense', e.label, (e.amount_cents / 100).toFixed(2), (e.note || '') + (e.tax_cents ? ` (tax ${(e.tax_cents / 100).toFixed(2)})` : ''));
       push('One-off expenses', 'Total', ((f.oneOffExpensesTotalCents || 0) / 100).toFixed(2), '');
@@ -1420,7 +1424,7 @@
         renderStats();
         renderOrders();
         if (refund && data.refundedCents) {
-          alert(`Revoked. Refunded $${(data.refundedCents / 100).toFixed(2)} via Stripe.`);
+          alert(`Revoked. Refunded $${(data.refundedCents / 100).toFixed(2)} via PayPal.`);
         } else {
           alert('Revoked. No refund issued.');
         }
