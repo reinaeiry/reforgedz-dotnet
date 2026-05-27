@@ -3,8 +3,8 @@
 //
 // Env:
 //   SMTP_HOST / SMTP_PORT / SMTP_SECURE / SMTP_USER / SMTP_PASS
-//   INVOICE_FROM   — e.g. "ReforgedZ Billing <billing@reforgedz.net>"
-//   BASE_URL       — for links back to the shop
+//   INVOICE_FROM   e.g. "ReforgedZ Billing <billing@reforgedz.net>"
+//   BASE_URL       for links back to the shop
 
 const nodemailer = require('nodemailer');
 
@@ -44,45 +44,131 @@ async function sendInvoice({ to, orderId, captureId, productTitle, amountCents, 
   const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
   const dateStr = new Date(dateMs || Date.now()).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC';
   const invoiceNo = `RFGZ-${String(orderId).padStart(6, '0')}`;
+  const itemName = productTitle || 'Purchase';
+  const amount = money(amountCents, currency);
+  const billedTo = buyerName ? `${buyerName} (${to})` : to;
 
-  const rows = [
-    ['Invoice', invoiceNo],
-    ['Date', dateStr],
-    ['Item', productTitle || 'Purchase'],
-    serverLabel ? ['Server', serverLabel] : null,
-    ['Amount', money(amountCents, currency)],
-    captureId ? ['PayPal transaction', captureId] : null
-  ].filter(Boolean);
+  // Real-invoice layout: dark brand header band, light invoice body, a
+  // line-item table, a bold total, a PAID stamp, and a contact footer.
+  // Table-based + inline styles for email-client compatibility.
+  const lineItem = `
+    <tr>
+      <td style="padding:14px 24px;border-bottom:1px solid #ecedf0;font-size:14px;color:#1a1a1a">
+        <div style="font-weight:600">${esc(itemName)}</div>
+        ${serverLabel ? `<div style="color:#6b7280;font-size:12px;margin-top:2px">Server: ${esc(serverLabel)}</div>` : ''}
+      </td><!--li-->
+      <td style="padding:14px 24px;border-bottom:1px solid #ecedf0;font-size:14px;color:#1a1a1a;text-align:right;white-space:nowrap">${esc(amount)}</td>
+    </tr>`;
 
-  const html = `<!doctype html><html><body style="margin:0;background:#0d0f12;color:#e6e6e6;font-family:Segoe UI,Helvetica,Arial,sans-serif">
-  <div style="max-width:560px;margin:0 auto;padding:32px 24px">
-    <h1 style="font-size:20px;margin:0 0 4px;color:#fff">ReforgedZ — Payment Receipt</h1>
-    <p style="color:#9aa0a6;margin:0 0 24px;font-size:14px">Thank you${buyerName ? `, ${esc(buyerName)}` : ''}! Your payment has been received.</p>
-    <table style="width:100%;border-collapse:collapse;font-size:14px">
-      ${rows.map(([k, v]) => `<tr>
-        <td style="padding:8px 0;color:#9aa0a6;border-bottom:1px solid #23262b;width:40%">${esc(k)}</td>
-        <td style="padding:8px 0;color:#e6e6e6;border-bottom:1px solid #23262b">${esc(v)}</td>
-      </tr>`).join('')}
-    </table>
-    <p style="color:#9aa0a6;font-size:13px;margin:24px 0 0">Your purchase is being applied to the server automatically. If you set your in-game UID after purchase, it'll sync within a few minutes.</p>
-    <p style="color:#6b7177;font-size:12px;margin:24px 0 0">Questions? Reply to this email or open a ticket in our Discord.<br>ReforgedZ · <a href="${base}/shop" style="color:#4cade6">reforgedz.net/shop</a></p>
-  </div></body></html>`;
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+
+        <!-- Brand header -->
+        <tr><td style="background:#0d0f12;padding:28px 24px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="font-size:20px;font-weight:700;color:#ffffff;letter-spacing:.5px">ReforgedZ</td>
+              <td style="text-align:right">
+                <div style="font-size:18px;font-weight:600;color:#ffffff;letter-spacing:2px">RECEIPT</div>
+                <div style="font-size:12px;color:#9aa0a6;margin-top:2px">${esc(invoiceNo)}</div>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+
+        <!-- Meta -->
+        <tr><td style="padding:24px 24px 8px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#374151">
+            <tr>
+              <td style="vertical-align:top;width:50%">
+                <div style="color:#9ca3af;text-transform:uppercase;font-size:11px;letter-spacing:1px;margin-bottom:4px">Billed to</div>
+                <div style="font-weight:600;color:#1a1a1a">${esc(billedTo)}</div>
+              </td>
+              <td style="vertical-align:top;text-align:right">
+                <div style="color:#9ca3af;text-transform:uppercase;font-size:11px;letter-spacing:1px;margin-bottom:4px">Date issued</div>
+                <div style="color:#1a1a1a">${esc(dateStr)}</div>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+
+        <!-- Status -->
+        <tr><td style="padding:8px 24px 16px">
+          <span style="display:inline-block;background:#dcfce7;color:#15803d;font-size:12px;font-weight:700;letter-spacing:1px;padding:4px 12px;border-radius:999px">PAID</span>
+          <span style="color:#6b7280;font-size:12px;margin-left:8px">Payment method: PayPal</span>
+        </td></tr>
+
+        <!-- Line items -->
+        <tr><td style="padding:0 0 4px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="padding:10px 24px;background:#f9fafb;border-top:1px solid #ecedf0;border-bottom:1px solid #ecedf0;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#9ca3af">Description</td>
+              <td style="padding:10px 24px;background:#f9fafb;border-top:1px solid #ecedf0;border-bottom:1px solid #ecedf0;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#9ca3af;text-align:right">Amount</td>
+            </tr>
+            ${lineItem}
+            <tr>
+              <td style="padding:16px 24px;font-size:15px;font-weight:700;color:#1a1a1a">Total paid</td>
+              <td style="padding:16px 24px;font-size:18px;font-weight:700;color:#0d0f12;text-align:right;white-space:nowrap">${esc(amount)}</td>
+            </tr>
+          </table>
+        </td></tr>
+
+        ${captureId ? `<tr><td style="padding:0 24px 16px">
+          <div style="font-size:11px;color:#9ca3af">PayPal transaction ID: <span style="color:#6b7280">${esc(captureId)}</span></div>
+        </td></tr>` : ''}
+
+        <!-- Note -->
+        <tr><td style="padding:8px 24px 24px">
+          <div style="font-size:13px;color:#4b5563;line-height:1.5;border-top:1px solid #ecedf0;padding-top:16px">
+            Your purchase is applied to the server automatically. If you set your in-game UID after buying, it syncs within a few minutes.
+          </div>
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="background:#f9fafb;padding:20px 24px;border-top:1px solid #ecedf0">
+          <div style="font-size:12px;color:#6b7280;line-height:1.6">
+            Questions about this receipt? Email <a href="mailto:contact@reforgedz.net" style="color:#2563eb;text-decoration:none">contact@reforgedz.net</a> or open a ticket in our Discord.<br>
+            ReforgedZ &middot; <a href="${base}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+          </div>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
 
   const text = [
-    `ReforgedZ — Payment Receipt`,
-    ``,
-    ...rows.map(([k, v]) => `${k}: ${v}`),
-    ``,
-    `Your purchase is being applied to the server automatically.`,
-    `Questions? Reply to this email or open a ticket in our Discord.`,
+    'ReforgedZ - Payment Receipt',
+    '',
+    `Receipt: ${invoiceNo}`,
+    `Date issued: ${dateStr}`,
+    `Billed to: ${billedTo}`,
+    'Status: PAID (PayPal)',
+    '',
+    `Item: ${itemName}`,
+    serverLabel ? `Server: ${serverLabel}` : null,
+    `Total paid: ${amount}`,
+    captureId ? `PayPal transaction ID: ${captureId}` : null,
+    '',
+    'Your purchase is applied to the server automatically. If you set your',
+    'in-game UID after buying, it syncs within a few minutes.',
+    '',
+    'Questions about this receipt? Email contact@reforgedz.net or open a',
+    'ticket in our Discord.',
     `${base}/shop`
-  ].join('\n');
+  ].filter((l) => l !== null).join('\n');
 
   try {
     await tx.sendMail({
       from: fromAddress(),
       to,
-      subject: `ReforgedZ receipt ${invoiceNo} — ${productTitle || 'Purchase'}`,
+      replyTo: 'contact@reforgedz.net',
+      subject: `ReforgedZ receipt ${invoiceNo} - ${itemName}`,
       text,
       html
     });
