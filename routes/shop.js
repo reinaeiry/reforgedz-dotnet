@@ -5,14 +5,19 @@ const { syncPurchasesToServers } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
-// ---- Stripe setup ----
-const Stripe = require('stripe');
+// ---- PayPal setup ----
+const paypal = require('../paypal');
+const { sendInvoice } = require('../invoiceMail');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
-function getStripe(testMode) {
-  const key = testMode ? process.env.STRIPE_TEST_SECRET_KEY : process.env.STRIPE_SECRET_KEY;
-  return new Stripe(key);
-}
+// Resolved on boot by server.js calling registerPayPalWebhooks(); read at
+// verify time. { live, sandbox } webhook ids.
+const paypalWebhookIds = {
+  live: process.env.PAYPAL_WEBHOOK_ID || null,
+  sandbox: process.env.PAYPAL_TEST_WEBHOOK_ID || null
+};
+function setWebhookId(testMode, id) { paypalWebhookIds[testMode ? 'sandbox' : 'live'] = id; }
+function getWebhookId(testMode) { return paypalWebhookIds[testMode ? 'sandbox' : 'live']; }
 
 // ---- Discord webhook ----
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
@@ -179,22 +184,28 @@ router.get('/api/shop/products', (req, res) => {
   res.json(products.map(p => attachStock(attachImages(p))));
 });
 
-// Get Stripe publishable key
+// Payment provider config (PayPal). The redirect flow means the browser
+// doesn't need a client token — it just follows the approve URL we return
+// from /checkout. Kept for the frontend to know the provider + env.
 router.get('/api/shop/config', (req, res) => {
   const testMode = req.query.test === '1';
   res.json({
-    publishableKey: testMode ? process.env.STRIPE_TEST_PUBLISHABLE_KEY : process.env.STRIPE_PUBLISHABLE_KEY
+    provider: 'paypal',
+    env: testMode ? 'sandbox' : 'live',
+    configured: paypal.isConfigured(testMode)
   });
 });
 
-// Create checkout session
-router.post('/api/shop/checkout', requireAuth, (req, res) => {
+// Create a PayPal checkout order and return the approve URL to redirect to.
+router.post('/api/shop/checkout', requireAuth, async (req, res) => {
   const { productId, testMode, serverId, customAmountCents } = req.body;
   if (!productId) return res.status(400).json({ error: 'Missing productId' });
 
-  // Only admins can use test mode
+  // Only admins can use test mode (sandbox).
   const useTest = testMode && req.user.role === 'admin';
-  const stripe = getStripe(useTest);
+  if (!paypal.isConfigured(useTest)) {
+    return res.status(503).json({ error: `PayPal ${useTest ? 'sandbox' : 'live'} is not configured.` });
+  }
 
   const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId);
   if (!product) return res.status(404).json({ error: 'Product not found' });
@@ -242,74 +253,113 @@ router.post('/api/shop/checkout', requireAuth, (req, res) => {
     if (product.price_max_cents != null && requested > product.price_max_cents) {
       return res.status(400).json({ error: `Maximum is $${(product.price_max_cents / 100).toFixed(2)}.` });
     }
-    if (requested < 50) {
-      return res.status(400).json({ error: 'Minimum charge is $0.50 (Stripe).' });
+    if (requested < 100) {
+      return res.status(400).json({ error: 'Minimum charge is $1.00.' });
     }
     amountCents = requested;
   }
 
-  // Create pending order
+  // Create pending order. Subscriptions are no longer supported — every
+  // purchase is a one-time PayPal capture (the buyer re-purchases to renew).
   const order = db.prepare(`
     INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode) VALUES (?, ?, ?, 'pending', ?, ?)
   `).run(req.user.steam_id, product.id, orderServerId, amountCents, useTest ? 1 : 0);
-
   const orderId = order.lastInsertRowid;
-  const isRecurring = product.type === 'subscription' || product.type === 'recurring_custom';
 
-  let recurring = null;
-  if (product.type === 'subscription') {
-    recurring = { interval: 'month' };
-  } else if (product.type === 'recurring_custom') {
-    const days = parseInt(product.interval_days, 10);
-    if (!days || days < 1 || days > 365) {
-      db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
-      return res.status(400).json({ error: 'Product has invalid interval_days' });
-    }
-    recurring = { interval: 'day', interval_count: days };
-  }
-
-  const sessionParams = {
-    mode: isRecurring ? 'subscription' : 'payment',
-    line_items: [{
-      price_data: {
-        currency: product.currency,
-        product_data: {
-          name: product.title,
-          description: product.description || undefined,
-        },
-        unit_amount: amountCents,
-        ...(recurring ? { recurring } : {})
-      },
-      quantity: 1
-    }],
-    metadata: {
-      order_id: String(orderId),
-      steam_id: req.user.steam_id,
-      product_id: String(product.id),
-      test_mode: useTest ? '1' : '0'
-    },
-    success_url: BASE_URL + '/shop?success=1&session_id={CHECKOUT_SESSION_ID}',
-    cancel_url: BASE_URL + '/shop?cancelled=1',
-  };
-
-  // Stripe Price ID is only honored for one_time / subscription types AND
-  // when the buyer isn't picking their own amount (custom_price needs inline
-  // price_data with unit_amount each time).
-  if (product.stripe_price_id && product.type !== 'recurring_custom' && !product.custom_price) {
-    sessionParams.line_items = [{
-      price: product.stripe_price_id,
-      quantity: 1
-    }];
-  }
-
-  stripe.checkout.sessions.create(sessionParams).then(session => {
-    db.prepare('UPDATE orders SET stripe_session_id = ? WHERE id = ?').run(session.id, orderId);
-    res.json({ url: session.url });
-  }).catch(err => {
-    console.error('Stripe checkout error:', err.message);
+  try {
+    const { id: paypalOrderId, approveUrl } = await paypal.createOrder(useTest, {
+      amountCents,
+      currency: product.currency || 'USD',
+      description: product.title,
+      customId: orderId,
+      brandName: 'ReforgedZ',
+      returnUrl: `${BASE_URL}/api/shop/paypal/return?order=${orderId}`,
+      cancelUrl: `${BASE_URL}/shop?cancelled=1`
+    });
+    if (!approveUrl) throw new Error('PayPal did not return an approve URL');
+    db.prepare('UPDATE orders SET paypal_order_id = ? WHERE id = ?').run(paypalOrderId, orderId);
+    res.json({ url: approveUrl });
+  } catch (err) {
+    console.error('PayPal checkout error:', err.message);
     db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
-    res.status(500).json({ error: 'Failed to create checkout session' });
+    res.status(500).json({ error: 'Failed to create checkout' });
+  }
+});
+
+// ---- Shared fulfillment (idempotent) ----
+// Transitions a pending order → completed exactly once and runs all the
+// side effects: Discord notification, game-server sync, role grant, invoice
+// email. Safe to call from both the return handler and the webhook.
+function fulfillOrder(orderId, cap) {
+  const order = db.prepare(`
+    SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
+           p.title AS product_title, p.type, p.currency
+    FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
+    WHERE o.id = ?
+  `).get(orderId);
+  if (!order) return false;
+  if (order.status === 'completed' || order.status === 'refunded') return false; // already done
+
+  db.prepare(`
+    UPDATE orders SET status = 'completed', completed_at = unixepoch(),
+      paypal_capture_id = ?, payer_email = ?, fee_cents = ?
+    WHERE id = ? AND status = 'pending'
+  `).run(cap.captureId || null, cap.payerEmail || null, cap.feeCents ?? null, orderId);
+
+  sendDiscordNotification({
+    eventType: 'payment_completed',
+    user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
+    biUid: order.bi_uid,
+    productTitle: order.product_title,
+    amountCents: order.amount_cents,
+    currency: order.currency,
+    status: 'completed',
+    serverId: order.server_id
   });
+
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+  tryAssignDiscordRoleForOrder(orderId);
+
+  // Invoice email to the PayPal payer email (the only email we collect —
+  // Steam login doesn't provide one). Fire-and-forget.
+  const to = cap.payerEmail || null;
+  if (to) {
+    sendInvoice({
+      to,
+      orderId,
+      captureId: cap.captureId,
+      productTitle: order.product_title,
+      amountCents: order.amount_cents,
+      currency: order.currency,
+      feeCents: cap.feeCents,
+      serverLabel: order.server_id ? (SERVER_LABELS[order.server_id] || order.server_id) : null,
+      buyerName: cap.payerName || order.persona || null,
+      dateMs: Date.now()
+    }).catch(() => {});
+  }
+  return true;
+}
+
+// PayPal returns the buyer here after they approve. We capture the order,
+// fulfill it, and redirect back to the shop.
+router.get('/api/shop/paypal/return', async (req, res) => {
+  const orderId = parseInt(req.query.order, 10);
+  const order = orderId ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) : null;
+  if (!order || !order.paypal_order_id) {
+    return res.redirect(BASE_URL + '/shop?cancelled=1');
+  }
+  const useTest = !!order.test_mode;
+  try {
+    const cap = await paypal.captureOrder(useTest, order.paypal_order_id);
+    if (cap.status === 'COMPLETED') {
+      fulfillOrder(orderId, cap);
+      return res.redirect(BASE_URL + '/shop?success=1');
+    }
+    return res.redirect(BASE_URL + '/shop?cancelled=1');
+  } catch (err) {
+    console.error('PayPal capture (return) error:', err.message);
+    return res.redirect(BASE_URL + '/shop?error=1');
+  }
 });
 
 // Get current user's orders
@@ -339,130 +389,51 @@ router.post('/api/shop/set-bi-uid', requireAuth, (req, res) => {
   res.json({ ok: true, bi_uid: cleaned });
 });
 
-// Verify a checkout session (fallback when webhooks don't arrive)
-router.post('/api/shop/verify-session', requireAuth, (req, res) => {
-  const { sessionId } = req.body;
-  if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+// Verify/capture a PayPal order (fallback when the return redirect or webhook
+// didn't complete fulfillment). Frontend calls this with the order id.
+router.post('/api/shop/verify-session', requireAuth, async (req, res) => {
+  const orderId = parseInt(req.body.orderId, 10);
+  if (!orderId) return res.json({ ok: true, status: 'no_order' });
 
   const order = db.prepare(`
-    SELECT * FROM orders WHERE stripe_session_id = ? AND steam_id = ? AND status = 'pending'
-  `).get(sessionId, req.user.steam_id);
-
-  if (!order) return res.json({ ok: true, status: 'already_processed' });
-
-  // Check if this was a test mode order
-  const useTest = order.amount_cents === 0 || false;
-
-  // Try live Stripe first, then test
-  const tryVerify = (stripe) => stripe.checkout.sessions.retrieve(sessionId);
-
-  tryVerify(getStripe(false))
-    .catch(() => tryVerify(getStripe(true)))
-    .then(session => {
-      if (session.payment_status === 'paid') {
-        db.prepare(`
-          UPDATE orders SET status = 'completed', completed_at = unixepoch(),
-            stripe_subscription_id = ?
-          WHERE id = ?
-        `).run(session.subscription || null, order.id);
-
-        const details = db.prepare(`
-          SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
-                 p.title as product_title, p.type, p.currency
-          FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
-          WHERE o.id = ?
-        `).get(order.id);
-        if (details) {
-          sendDiscordNotification({
-            eventType: session.subscription ? 'subscription_started' : 'payment_completed',
-            user: { platform: details.platform, persona: details.persona, steam_id: details.steam_id, gamertag: details.gamertag, bm_player_id: details.bm_player_id },
-            biUid: details.bi_uid,
-            productTitle: details.product_title,
-            amountCents: details.amount_cents,
-            currency: details.currency,
-            status: 'completed',
-            serverId: details.server_id
-          });
-        }
-
-        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-        tryAssignDiscordRoleForOrder(order.id);
-        return res.json({ ok: true, status: 'completed' });
-      }
-      res.json({ ok: true, status: session.payment_status });
-    })
-    .catch(err => {
-      console.error('Verify session error:', err.message);
-      res.status(500).json({ error: 'Failed to verify session' });
-    });
-});
-
-// Get subscription info (period end date)
-router.get('/api/shop/subscription-info/:orderId', requireAuth, (req, res) => {
-  const order = db.prepare(`
-    SELECT o.stripe_subscription_id FROM orders o
-    WHERE o.id = ? AND o.steam_id = ? AND o.status = 'completed' AND o.stripe_subscription_id IS NOT NULL
-  `).get(req.params.orderId, req.user.steam_id);
-
-  if (!order) return res.status(404).json({ error: 'Active subscription not found' });
-
-  const stripe = getStripe(false);
-  const stripeTest = getStripe(true);
-
-  stripe.subscriptions.retrieve(order.stripe_subscription_id)
-    .catch(() => stripeTest.subscriptions.retrieve(order.stripe_subscription_id))
-    .then(sub => {
-      res.json({
-        periodEnd: sub.current_period_end,
-        cancelAtPeriodEnd: sub.cancel_at_period_end
-      });
-    })
-    .catch(err => {
-      console.error('Subscription info error:', err.message);
-      res.status(500).json({ error: 'Failed to fetch subscription info' });
-    });
-});
-
-// Cancel a subscription
-router.post('/api/shop/cancel-subscription', requireAuth, (req, res) => {
-  const { orderId } = req.body;
-  if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
-
-  const order = db.prepare(`
-    SELECT o.*, p.type, p.title as product_title, p.currency FROM orders o JOIN products p ON o.product_id = p.id
-    WHERE o.id = ? AND o.steam_id = ? AND o.status = 'completed' AND o.stripe_subscription_id IS NOT NULL
+    SELECT * FROM orders WHERE id = ? AND steam_id = ?
   `).get(orderId, req.user.steam_id);
+  if (!order) return res.json({ ok: true, status: 'not_found' });
+  if (order.status === 'completed') return res.json({ ok: true, status: 'completed' });
+  if (order.status !== 'pending' || !order.paypal_order_id) {
+    return res.json({ ok: true, status: order.status });
+  }
 
-  if (!order) return res.status(404).json({ error: 'Active subscription not found' });
+  const useTest = !!order.test_mode;
+  try {
+    // Inspect the PayPal order; capture if approved but not yet captured.
+    let cap;
+    const pp = await paypal.getOrder(useTest, order.paypal_order_id);
+    if (pp.status === 'COMPLETED') {
+      cap = paypal.normalizeCapture(pp);
+    } else if (pp.status === 'APPROVED') {
+      cap = await paypal.captureOrder(useTest, order.paypal_order_id);
+    } else {
+      return res.json({ ok: true, status: pp.status });
+    }
+    if (cap.status === 'COMPLETED') {
+      fulfillOrder(orderId, cap);
+      return res.json({ ok: true, status: 'completed' });
+    }
+    res.json({ ok: true, status: cap.status });
+  } catch (err) {
+    console.error('Verify (PayPal) error:', err.message);
+    res.status(500).json({ error: 'Failed to verify payment' });
+  }
+});
 
-  const stripe = getStripe(false);
-  const stripeTest = getStripe(true);
-
-  // Try live first, then test
-  stripe.subscriptions.update(order.stripe_subscription_id, { cancel_at_period_end: true })
-    .catch(() => stripeTest.subscriptions.update(order.stripe_subscription_id, { cancel_at_period_end: true }))
-    .then(() => {
-      db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
-
-      sendDiscordNotification({
-        eventType: 'subscription_cancelled',
-        user: req.user,
-        biUid: req.user.bi_uid,
-        productTitle: order.product_title,
-        amountCents: order.amount_cents,
-        currency: order.currency,
-        status: 'cancelled',
-        serverId: order.server_id
-      });
-
-      tryRemoveDiscordRoleForOrder(orderId);
-
-      res.json({ ok: true });
-    })
-    .catch(err => {
-      console.error('Cancel subscription error:', err.message);
-      res.status(500).json({ error: 'Failed to cancel subscription' });
-    });
+// Subscriptions are retired (PayPal swap = one-time purchases only). These
+// endpoints stay so old clients fail cleanly instead of 404-crashing.
+router.get('/api/shop/subscription-info/:orderId', requireAuth, (_req, res) => {
+  res.status(410).json({ error: 'Subscriptions are no longer offered.' });
+});
+router.post('/api/shop/cancel-subscription', requireAuth, (_req, res) => {
+  res.status(410).json({ error: 'Subscriptions are no longer offered.' });
 });
 
 // ============================================================
@@ -745,30 +716,14 @@ router.delete('/api/shop/admin/products/:id/permanent', requireAdmin, (req, res)
   res.json({ ok: true });
 });
 
-// Hard delete: nukes the product, its orders, and cancels any active Stripe subs
+// Hard delete: nukes the product and its orders. (Subscriptions are retired,
+// so there's nothing recurring to cancel — one-time PayPal captures need no
+// teardown. Legacy Stripe subs, if any remain, are handled in the dashboard.)
 router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res) => {
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
-  const subRows = db.prepare(`
-    SELECT DISTINCT stripe_subscription_id FROM orders
-    WHERE product_id = ? AND status = 'completed' AND stripe_subscription_id IS NOT NULL
-  `).all(req.params.id);
-
-  let cancelledSubs = 0;
-  for (const row of subRows) {
-    try {
-      await getStripe(false).subscriptions.cancel(row.stripe_subscription_id);
-      cancelledSubs++;
-    } catch (e) {
-      try {
-        await getStripe(true).subscriptions.cancel(row.stripe_subscription_id);
-        cancelledSubs++;
-      } catch (e2) {
-        console.error('[hard-delete] Failed to cancel sub %s: %s', row.stripe_subscription_id, e2.message);
-      }
-    }
-  }
+  const cancelledSubs = 0;
 
   // Snapshot (user, role) pairs before the rows disappear — we'll need them
   // to remove Discord roles after deletion (the helper queries by order id,
@@ -805,33 +760,26 @@ router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res
   res.json({ ok: true, deletedOrders, cancelledSubs });
 });
 
-// Refund the latest charge for an order (recurring → latest invoice; one-time → checkout charge)
-async function refundLatestChargeForOrder(order, useTest) {
-  const stripe = getStripe(useTest);
-  let refundParams = null;
-
-  if (order.stripe_subscription_id) {
-    const invoices = await stripe.invoices.list({ subscription: order.stripe_subscription_id, limit: 1 });
-    const invoice = invoices.data && invoices.data[0];
-    if (!invoice) throw new Error('No invoice on subscription');
-    if (invoice.charge) refundParams = { charge: invoice.charge };
-    else if (invoice.payment_intent) refundParams = { payment_intent: invoice.payment_intent };
-    else throw new Error('Latest invoice has no charge or payment intent');
-  } else if (order.stripe_session_id) {
-    const session = await stripe.checkout.sessions.retrieve(order.stripe_session_id);
-    if (session.payment_intent) refundParams = { payment_intent: session.payment_intent };
-    else throw new Error('Checkout session has no payment intent');
-  } else {
-    throw new Error('Order has no Stripe session or subscription to refund');
+// Refund a PayPal capture for an order. Returns the refunded amount in cents.
+async function refundCaptureForOrder(order) {
+  const useTest = !!order.test_mode;
+  let captureId = order.paypal_capture_id;
+  // Backfill the capture id from PayPal if we only stored the order id.
+  if (!captureId && order.paypal_order_id) {
+    const pp = await paypal.getOrder(useTest, order.paypal_order_id);
+    const norm = paypal.normalizeCapture(pp);
+    captureId = norm.captureId;
   }
-
-  const refund = await stripe.refunds.create(refundParams);
-  return refund.amount;
+  if (!captureId) throw new Error('Order has no PayPal capture to refund');
+  const { refundedCents } = await paypal.refundCapture(useTest, captureId, {
+    amountCents: order.amount_cents,
+    currency: order.currency || 'USD'
+  });
+  return refundedCents;
 }
 
-// Revoke an order (admin only). With { refund: true } also issues a Stripe refund:
-//   - Recurring: refunds only the latest invoice
-//   - One-time:  refunds the original charge
+// Revoke an order (admin only). With { refund: true } also issues a PayPal
+// refund of the original capture.
 router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
   const { orderId, refund } = req.body;
   if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
@@ -847,28 +795,15 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
 
   let refundedCents = 0;
   if (refund) {
+    if (!order.paypal_capture_id && !order.paypal_order_id) {
+      return res.status(400).json({ error: 'This is a legacy (Stripe) order — refund it from the PayPal/Stripe dashboard manually.' });
+    }
     try {
-      refundedCents = await refundLatestChargeForOrder(order, false);
+      refundedCents = await refundCaptureForOrder(order);
     } catch (e) {
       const msg = String(e && e.message || '');
-      if (/no such|resource_missing/i.test(msg)) {
-        return res.status(400).json({ error: 'This order is not a live Stripe charge — refunds only work on live orders.' });
-      }
       console.error('Refund failed:', msg);
       return res.status(502).json({ error: 'Refund failed: ' + msg });
-    }
-  }
-
-  // Cancel any active subscription
-  if (order.stripe_subscription_id) {
-    try {
-      await getStripe(false).subscriptions.cancel(order.stripe_subscription_id);
-    } catch (e) {
-      try {
-        await getStripe(true).subscriptions.cancel(order.stripe_subscription_id);
-      } catch (e2) {
-        console.error('Failed to cancel subscription in Stripe:', e2.message);
-      }
     }
   }
 
@@ -1044,23 +979,29 @@ router.delete('/api/shop/admin/priority-queue/:guid', requireAdmin, (req, res) =
 //  Finances (Stripe balance + expenses + revenue rollups)
 // ============================================================
 
-async function fetchStripeBalance() {
-  // Live first, fall back to test only if live key is missing so the admin sees
-  // a balance even on a non-prod box.
-  const liveKey = process.env.STRIPE_SECRET_KEY;
-  const useTest = !liveKey || /CHANGE_ME/.test(liveKey);
-  try {
-    const bal = await getStripe(useTest).balance.retrieve();
-    return {
-      mode: useTest ? 'test' : 'live',
-      available: bal.available || [],
-      pending: bal.pending || [],
-      instantAvailable: bal.instant_available || [],
-      connectReserved: bal.connect_reserved || []
-    };
-  } catch (e) {
-    return { mode: 'unknown', error: e.message, available: [], pending: [], instantAvailable: [], connectReserved: [] };
+async function fetchProviderBalance() {
+  // PayPal balance via the reporting API. Live unless only sandbox is set up.
+  const useTest = !paypal.isConfigured(false);
+  const bal = await paypal.getBalance(useTest);
+  // Normalize to the same { available, pending } shape the finances UI used
+  // for Stripe (array of { amount, currency }).
+  const available = [];
+  const pending = [];
+  for (const b of bal.balances || []) {
+    const total = b.total_balance || b.available_balance || {};
+    const avail = b.available_balance || {};
+    const withheld = b.withheld_balance || {};
+    if (avail.value != null) available.push({ amount: Math.round(parseFloat(avail.value) * 100), currency: (avail.currency_code || 'USD').toLowerCase() });
+    if (withheld.value != null && parseFloat(withheld.value) > 0) pending.push({ amount: Math.round(parseFloat(withheld.value) * 100), currency: (withheld.currency_code || 'USD').toLowerCase() });
   }
+  return {
+    mode: bal.mode,
+    error: bal.error || undefined,
+    available,
+    pending,
+    instantAvailable: [],
+    connectReserved: []
+  };
 }
 
 function startOfMonthUnix() {
@@ -1221,22 +1162,25 @@ function perProductPerMonth(productLimit = 5, monthCount = 6) {
   };
 }
 
-// Estimated Stripe fees on lifetime live revenue.
-// Stripe's standard US-card pricing: 2.9% + $0.30 per successful charge.
-// Per-charge fee is fixed regardless of refunds, so we count charges (not
-// refunded amount). Approximation, not the real per-charge fee from Stripe.
-function stripeFeesEstimate() {
+// PayPal fees. We store the actual paypal_fee per order (fee_cents) at capture
+// time, so sum those for accuracy. Orders captured before fee tracking (or
+// legacy Stripe orders) fall back to PayPal's standard 2.99% + $0.49 estimate.
+function feesEstimate() {
   const live = db.prepare(`
-    SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents
+    SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents,
+           COALESCE(SUM(CASE WHEN fee_cents IS NOT NULL THEN fee_cents ELSE 0 END), 0) knownFees,
+           COALESCE(SUM(CASE WHEN fee_cents IS NULL THEN 1 ELSE 0 END), 0) unknownCount,
+           COALESCE(SUM(CASE WHEN fee_cents IS NULL THEN amount_cents ELSE 0 END), 0) unknownCents
     FROM orders
     WHERE status IN ('completed', 'refunded') AND test_mode = 0 AND amount_cents > 0
   `).get();
   const charges = live.c || 0;
   const grossCents = live.cents || 0;
-  // 2.9% of gross plus 30c per charge
-  const percentCents = Math.round(grossCents * 0.029);
-  const fixedCents = charges * 30;
-  return { charges, grossCents, percentCents, fixedCents, totalCents: percentCents + fixedCents };
+  // Estimate the fee for orders where we don't have the real number.
+  const estPercent = Math.round((live.unknownCents || 0) * 0.0299);
+  const estFixed = (live.unknownCount || 0) * 49;
+  const totalCents = (live.knownFees || 0) + estPercent + estFixed;
+  return { charges, grossCents, knownFeesCents: live.knownFees || 0, estimatedCents: estPercent + estFixed, totalCents };
 }
 
 function listExpenses(kind) {
@@ -1246,25 +1190,22 @@ function listExpenses(kind) {
   return db.prepare(`SELECT id, label, amount_cents, tax_cents, note, kind, incurred_at, created_at, updated_at FROM monthly_expenses ORDER BY kind ASC, amount_cents DESC, id ASC`).all();
 }
 
-// Last 30 Stripe payouts (real bank transfers out of the live account).
-async function stripePayouts() {
-  const liveKey = process.env.STRIPE_SECRET_KEY;
-  const useTest = !liveKey || /CHANGE_ME/.test(liveKey);
-  try {
-    const list = await getStripe(useTest).payouts.list({ limit: 30 });
-    return (list.data || []).map(p => ({
-      id: p.id,
-      amount: p.amount,
-      currency: p.currency,
-      status: p.status,
-      arrival: p.arrival_date,
-      created: p.created,
-      type: p.type,
-      method: p.method
-    }));
-  } catch (e) {
-    return { error: e.message };
-  }
+// Recent PayPal transactions (last 31 days — the Transaction Search cap).
+// Surfaced where the Stripe payouts list used to be. PayPal doesn't model
+// bank "payouts" the same way; these are the actual money movements.
+async function recentTransactions() {
+  const useTest = !paypal.isConfigured(false);
+  const txns = await paypal.listTransactions(useTest, { days: 31 });
+  if (txns && txns.error) return { error: txns.error };
+  return (txns || []).map(t => ({
+    id: t.id,
+    amount: t.grossCents,
+    feeCents: t.feeCents,
+    currency: (t.currency || 'USD').toLowerCase(),
+    status: t.status,
+    created: t.date ? Math.floor(new Date(t.date).getTime() / 1000) : null,
+    type: t.subject || 'transaction'
+  }));
 }
 
 function runway(stripeUsdCents, mrrCents, monthlyBurnCents) {
@@ -1275,13 +1216,13 @@ function runway(stripeUsdCents, mrrCents, monthlyBurnCents) {
 }
 
 router.get('/api/shop/admin/finances', requireAdmin, async (req, res) => {
-  const [balance, payouts] = await Promise.all([fetchStripeBalance(), stripePayouts()]);
+  const [balance, payouts] = await Promise.all([fetchProviderBalance(), recentTransactions()]);
   const revenue = revenueSummary();
   const mrr = mrrEstimate();
   const top = topProductsByRevenue(10);
   const refundsByProd = refundsByProduct(10);
   const buyers = topBuyers(10);
-  const fees = stripeFeesEstimate();
+  const fees = feesEstimate();
   const chart = dailyRevenue(90);
   const grid = perProductPerMonth(5, 6);
   const monthlyExpenses = listExpenses('monthly');
@@ -1502,72 +1443,71 @@ function tryRemoveDiscordRoleForOrder(orderId) {
 }
 
 // ============================================================
-//  Stripe webhook handler (exported separately for raw body)
+//  PayPal webhook handler (exported separately for raw body)
 // ============================================================
 
-function webhookHandler(req, res) {
-  const sig = req.headers['stripe-signature'];
-
-  // Try both live and test webhook secrets
-  const secrets = [process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_TEST_WEBHOOK_SECRET].filter(Boolean);
-  let event = null;
-
-  for (const secret of secrets) {
+// Register (or reuse) our webhooks with PayPal on boot. Called from server.js.
+// Stores the resolved webhook ids so verifyWebhook can validate inbound events.
+async function registerPayPalWebhooks() {
+  const url = `${BASE_URL}/api/shop/paypal/webhook`;
+  for (const testMode of [false, true]) {
+    if (!paypal.isConfigured(testMode)) continue;
     try {
-      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-      event = stripe.webhooks.constructEvent(req.body, sig, secret);
-      break;
+      const id = await paypal.ensureWebhook(testMode, url);
+      if (id) {
+        setWebhookId(testMode, id);
+        console.log(`[paypal] webhook ready (${testMode ? 'sandbox' : 'live'}): ${id}`);
+      }
     } catch (e) {
-      continue;
+      console.error(`[paypal] webhook register failed (${testMode ? 'sandbox' : 'live'}):`, e.message);
     }
   }
+}
 
-  if (!event) {
-    console.error('Webhook signature verification failed');
+async function webhookHandler(req, res) {
+  let event;
+  try {
+    event = JSON.parse(req.body.toString('utf8'));
+  } catch {
     return res.sendStatus(400);
   }
 
-  switch (event.type) {
-    case 'checkout.session.completed': {
-      const session = event.data.object;
-      const orderId = session.metadata && session.metadata.order_id;
-      if (orderId) {
-        db.prepare(`
-          UPDATE orders SET status = 'completed', completed_at = unixepoch(),
-            stripe_session_id = ?, stripe_subscription_id = ?
-          WHERE id = ?
-        `).run(session.id, session.subscription || null, orderId);
+  // The event doesn't tell us which environment it came from, so try live
+  // first then sandbox — whichever webhook id verifies the signature wins.
+  let verified = false;
+  for (const testMode of [false, true]) {
+    const wid = getWebhookId(testMode);
+    if (!wid) continue;
+    if (await paypal.verifyWebhook(testMode, req.headers, event, wid)) { verified = true; break; }
+  }
+  if (!verified) {
+    console.error('[paypal] webhook signature verification failed:', event.event_type);
+    return res.sendStatus(400);
+  }
 
-        const order = db.prepare(`
-          SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
-                 p.title as product_title, p.type, p.currency
-          FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
-          WHERE o.id = ?
-        `).get(orderId);
-        if (order) {
-          sendDiscordNotification({
-            eventType: session.subscription ? 'subscription_started' : 'payment_completed',
-            user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
-            biUid: order.bi_uid,
-            productTitle: order.product_title,
-            amountCents: order.amount_cents,
-            currency: order.currency,
-            status: 'completed',
-            serverId: order.server_id
-          });
-        }
-        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-        tryAssignDiscordRoleForOrder(orderId);
+  const resource = event.resource || {};
+  const orderId = parseInt(resource.custom_id, 10);
+
+  switch (event.event_type) {
+    case 'PAYMENT.CAPTURE.COMPLETED': {
+      if (orderId) {
+        const breakdown = resource.seller_receivable_breakdown || {};
+        const feeCents = breakdown.paypal_fee?.value != null
+          ? Math.round(parseFloat(breakdown.paypal_fee.value) * 100) : null;
+        // fulfillOrder is idempotent — the return handler usually got here
+        // first; this is the safety net if the buyer closed the tab.
+        fulfillOrder(orderId, {
+          captureId: resource.id || null,
+          payerEmail: resource.payer?.email_address || null,
+          feeCents
+        });
       }
       break;
     }
 
-    case 'checkout.session.expired': {
-      const session = event.data.object;
-      const orderId = session.metadata && session.metadata.order_id;
+    case 'PAYMENT.CAPTURE.DENIED': {
       if (orderId) {
         db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(orderId);
-
         const order = db.prepare(`
           SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
                  p.title as product_title, p.currency
@@ -1578,79 +1518,46 @@ function webhookHandler(req, res) {
           sendDiscordNotification({
             eventType: 'payment_failed',
             user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
-            biUid: order.bi_uid,
-            productTitle: order.product_title,
-            amountCents: order.amount_cents,
-            currency: order.currency,
-            status: 'failed',
-            serverId: order.server_id
+            biUid: order.bi_uid, productTitle: order.product_title,
+            amountCents: order.amount_cents, currency: order.currency,
+            status: 'failed', serverId: order.server_id
           });
         }
       }
       break;
     }
 
-    case 'invoice.paid': {
-      const invoice = event.data.object;
-      const subId = invoice.subscription;
-      if (subId) {
-        const existing = db.prepare('SELECT * FROM orders WHERE stripe_subscription_id = ? AND status = ?').get(subId, 'completed');
-        if (existing) {
-          const renewal = db.prepare(`
-            INSERT INTO orders (steam_id, product_id, server_id, stripe_subscription_id, status, amount_cents, completed_at, test_mode)
-            VALUES (?, ?, ?, ?, 'completed', ?, unixepoch(), ?)
-          `).run(existing.steam_id, existing.product_id, existing.server_id, subId, invoice.amount_paid, existing.test_mode || 0);
-          tryAssignDiscordRoleForOrder(renewal.lastInsertRowid);
-
-          const user = db.prepare('SELECT persona, bi_uid, platform, gamertag, bm_player_id FROM users WHERE steam_id = ?').get(existing.steam_id);
-          const product = db.prepare('SELECT title, currency FROM products WHERE id = ?').get(existing.product_id);
+    case 'PAYMENT.CAPTURE.REFUNDED':
+    case 'PAYMENT.CAPTURE.REVERSED': {
+      // The refunded capture id is in resource.links / supplementary; match
+      // by our stored capture id when custom_id isn't present on refunds.
+      const capId = resource.id || null;
+      let order = orderId
+        ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId)
+        : null;
+      if (!order && capId) {
+        order = db.prepare('SELECT * FROM orders WHERE paypal_capture_id = ?').get(capId);
+      }
+      if (order && order.status === 'completed') {
+        db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(order.id);
+        tryRemoveDiscordRoleForOrder(order.id);
+        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+        const full = db.prepare(`
+          SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
+                 p.title as product_title, p.currency
+          FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
+          WHERE o.id = ?
+        `).get(order.id);
+        if (full) {
           sendDiscordNotification({
-            eventType: 'subscription_renewed',
-            user: { platform: user ? user.platform : 'steam', persona: user ? user.persona : existing.steam_id, steam_id: existing.steam_id, gamertag: user ? user.gamertag : null, bm_player_id: user ? user.bm_player_id : null },
-            biUid: user ? user.bi_uid : null,
-            productTitle: product ? product.title : 'Unknown',
-            amountCents: invoice.amount_paid,
-            currency: product ? product.currency : 'usd',
-            status: 'completed',
-            serverId: existing.server_id
+            eventType: 'order_revoked',
+            user: { platform: full.platform, persona: full.persona, steam_id: full.steam_id, gamertag: full.gamertag, bm_player_id: full.bm_player_id },
+            biUid: full.bi_uid, productTitle: full.product_title,
+            amountCents: full.amount_cents, currency: full.currency,
+            status: 'refunded', serverId: full.server_id
           });
         }
       }
-      break;
-    }
-
-    case 'customer.subscription.deleted': {
-      const sub = event.data.object;
-      const existing = db.prepare(`
-        SELECT o.steam_id, o.amount_cents, o.server_id, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
-               p.title as product_title, p.currency
-        FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
-        WHERE o.stripe_subscription_id = ? AND o.status = 'completed' LIMIT 1
-      `).get(sub.id);
-
-      const cancelledIds = db.prepare(`
-        SELECT id FROM orders WHERE stripe_subscription_id = ? AND status = 'completed'
-      `).all(sub.id).map(r => r.id);
-
-      db.prepare(`
-        UPDATE orders SET status = 'cancelled' WHERE stripe_subscription_id = ? AND status = 'completed'
-      `).run(sub.id);
-
-      for (const id of cancelledIds) tryRemoveDiscordRoleForOrder(id);
-
-      if (existing) {
-        sendDiscordNotification({
-          eventType: 'subscription_cancelled',
-          user: { platform: existing.platform, persona: existing.persona, steam_id: existing.steam_id, gamertag: existing.gamertag, bm_player_id: existing.bm_player_id },
-          biUid: existing.bi_uid,
-          productTitle: existing.product_title,
-          amountCents: existing.amount_cents,
-          currency: existing.currency,
-          status: 'cancelled',
-          serverId: existing.server_id
-        });
-      }
-      syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
       break;
     }
   }
@@ -1658,4 +1565,4 @@ function webhookHandler(req, res) {
   res.sendStatus(200);
 }
 
-module.exports = { router, webhookHandler };
+module.exports = { router, webhookHandler, registerPayPalWebhooks };

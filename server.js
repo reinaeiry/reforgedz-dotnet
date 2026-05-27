@@ -47,10 +47,16 @@ passport.use(new SteamStrategy({
 // trust proxy = 1 means trust one hop of proxy; needed for rate-limit to key by real IP.
 app.set('trust proxy', 1);
 
-// ---- Stripe webhook (must be before express.json AND before rate limiters,
-// because Stripe controls its retry cadence and its IPs change). ----
+// ---- PayPal webhook (must be before express.json AND before rate limiters,
+// because PayPal controls its retry cadence and its IPs change; signature
+// verification needs the raw body). ----
 const shopRoutes = require('./routes/shop');
-app.post('/api/shop/webhook', express.raw({ type: 'application/json' }), shopRoutes.webhookHandler);
+app.post('/api/shop/paypal/webhook', express.raw({ type: '*/*' }), shopRoutes.webhookHandler);
+// Back-compat alias so any still-registered Stripe webhook URL doesn't 404.
+app.post('/api/shop/webhook', express.raw({ type: '*/*' }), shopRoutes.webhookHandler);
+
+// Register PayPal webhooks with PayPal on boot (idempotent).
+shopRoutes.registerPayPalWebhooks().catch((e) => console.error('[paypal] webhook registration error:', e.message));
 
 // ---- Rate limiting ----
 const rateLimit = require('express-rate-limit');
@@ -108,11 +114,11 @@ app.use('/api', (req, res, next) => {
 });
 
 // ---- CSRF defense via Origin/Referer check on state-changing requests.
-// Skips: GETs, the Stripe webhook (different signing), and requests carrying
+// Skips: GETs, the PayPal webhook (different signing), and requests carrying
 // the shared admin API key (server-to-server calls from the admin page).
 app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
-  if (req.path === '/api/shop/webhook') return next();
+  if (req.path === '/api/shop/paypal/webhook' || req.path === '/api/shop/webhook') return next();
   const apiKey = req.headers['x-shop-admin-key'];
   if (apiKey && process.env.SHOP_ADMIN_API_KEY && apiKey === process.env.SHOP_ADMIN_API_KEY) return next();
 

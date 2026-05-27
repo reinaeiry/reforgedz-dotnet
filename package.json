@@ -13,9 +13,9 @@
     "express": "^4.18.2",
     "express-rate-limit": "^8.5.1",
     "express-session": "^1.19.0",
+    "nodemailer": "^6.9.16",
     "passport": "^0.7.0",
     "passport-steam": "^1.0.18",
-    "ssh2": "^1.17.0",
-    "stripe": "^20.4.1"
+    "ssh2": "^1.17.0"
   }
 }

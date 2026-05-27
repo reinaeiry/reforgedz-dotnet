@@ -1421,12 +1421,15 @@ async function checkAlerts() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('success') === '1') {
     alertSuccess.style.display = 'block';
-    const sessionId = params.get('session_id');
-    if (sessionId) {
+    // PayPal captures + fulfills server-side on the return redirect; this is
+    // just a safety re-verify in case the buyer landed here via the webhook
+    // path before the capture completed.
+    const orderId = params.get('order');
+    if (orderId) {
       try {
         await api('/api/shop/verify-session', {
           method: 'POST',
-          body: JSON.stringify({ sessionId })
+          body: JSON.stringify({ orderId })
         });
       } catch (e) {}
     }
@@ -1434,6 +1437,13 @@ async function checkAlerts() {
   }
   if (params.get('cancelled') === '1') {
     alertCancelled.style.display = 'block';
+    window.history.replaceState({}, '', '/shop');
+  }
+  if (params.get('error') === '1') {
+    if (typeof alertCancelled !== 'undefined' && alertCancelled) {
+      alertCancelled.textContent = 'Payment could not be completed. You were not charged.';
+      alertCancelled.style.display = 'block';
+    }
     window.history.replaceState({}, '', '/shop');
   }
 }

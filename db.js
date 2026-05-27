@@ -220,6 +220,20 @@ if (!orderHasColumn('server_id')) {
 if (!orderHasColumn('test_mode')) {
   db.exec("ALTER TABLE orders ADD COLUMN test_mode INTEGER NOT NULL DEFAULT 0");
 }
+// PayPal columns (provider swap from Stripe). The old stripe_* columns stay
+// for historical orders; new orders populate the paypal_* ones.
+if (!orderHasColumn('paypal_order_id')) {
+  db.exec("ALTER TABLE orders ADD COLUMN paypal_order_id TEXT");
+}
+if (!orderHasColumn('paypal_capture_id')) {
+  db.exec("ALTER TABLE orders ADD COLUMN paypal_capture_id TEXT");
+}
+if (!orderHasColumn('payer_email')) {
+  db.exec("ALTER TABLE orders ADD COLUMN payer_email TEXT");
+}
+if (!orderHasColumn('fee_cents')) {
+  db.exec("ALTER TABLE orders ADD COLUMN fee_cents INTEGER");
+}
 
 // Self-healing backfill: Stripe session IDs encode their environment in
 // the prefix (cs_test_* vs cs_live_*), so any order still flagged as live
