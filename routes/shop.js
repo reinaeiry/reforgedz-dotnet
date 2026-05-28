@@ -407,6 +407,15 @@ router.get('/api/shop/paypal/return', async (req, res) => {
   if (!order || !order.paypal_order_id) {
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   }
+  // Only capture pending orders — re-capturing a stale-cancelled order would
+  // bill the buyer without granting entitlement (fulfillOrder's UPDATE is
+  // gated by status='pending'). Completed orders just bounce to success.
+  if (order.status === 'completed') {
+    return res.redirect(BASE_URL + '/shop?success=1');
+  }
+  if (order.status !== 'pending') {
+    return res.redirect(BASE_URL + '/shop?cancelled=1');
+  }
   const useTest = !!order.test_mode;
   try {
     const cap = await paypal.captureOrder(useTest, order.paypal_order_id);
@@ -432,6 +441,14 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
   const orderId = parseInt(req.query.order, 10);
   const order = orderId ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) : null;
   if (!order || !order.paypal_subscription_id) {
+    return res.redirect(BASE_URL + '/shop?cancelled=1');
+  }
+  // Already-fulfilled order: just bounce to success. Anything not pending is
+  // treated as terminal — don't re-touch it.
+  if (order.status === 'completed') {
+    return res.redirect(BASE_URL + '/shop?success=1');
+  }
+  if (order.status !== 'pending') {
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   }
   const useTest = !!order.test_mode;
