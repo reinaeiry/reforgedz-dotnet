@@ -7,7 +7,7 @@ const discord = require('../discord');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
-const { sendInvoice } = require('../invoiceMail');
+const { sendInvoice, sendSubscriptionInvite } = require('../invoiceMail');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 // Resolved on boot by server.js calling registerPayPalWebhooks(); read at
@@ -1602,6 +1602,94 @@ function tryRemoveDiscordRoleForOrder(orderId) {
     console.error('[discord] remove helper failed:', e.message);
   }
 }
+
+// ============================================================
+//  Subscription migration — invite existing one-time buyers
+//  of recurring-typed products to switch onto auto-renew.
+// ============================================================
+
+// Builds the list of buyers eligible to migrate to a real subscription:
+// completed orders on type='subscription' products in the last `windowDays`,
+// payer_email present, no existing paypal_subscription_id, deduped to the
+// most-recent order per (steam_id, product_id).
+function findSubscriptionMigrationCandidates({ windowDays = 60 } = {}) {
+  const since = Math.floor(Date.now() / 1000) - windowDays * 86400;
+  return db.prepare(`
+    SELECT o.id AS order_id, o.steam_id, o.product_id, o.server_id, o.payer_email,
+           o.amount_cents, o.completed_at, o.test_mode,
+           u.persona AS display_name,
+           p.title AS product_title, p.currency, p.type AS product_type
+    FROM orders o
+    JOIN users u    ON o.steam_id = u.steam_id
+    JOIN products p ON o.product_id = p.id
+    WHERE o.status = 'completed'
+      AND o.test_mode = 0
+      AND p.type = 'subscription'
+      AND o.payer_email IS NOT NULL
+      AND o.paypal_subscription_id IS NULL
+      AND o.completed_at >= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM orders o2
+        WHERE o2.steam_id = o.steam_id
+          AND o2.product_id = o.product_id
+          AND o2.paypal_subscription_id IS NOT NULL
+          AND o2.status IN ('completed','pending')
+      )
+      AND o.id = (
+        SELECT MAX(id) FROM orders o3
+        WHERE o3.steam_id = o.steam_id AND o3.product_id = o.product_id
+          AND o3.status = 'completed'
+      )
+    ORDER BY o.completed_at DESC
+  `).all(since);
+}
+
+// Preview the migration list without sending anything.
+router.get('/api/shop/admin/subscriptions/migration-candidates', requireAdmin, (req, res) => {
+  const windowDays = Math.max(1, Math.min(365, parseInt(req.query.windowDays || '60', 10) || 60));
+  const rows = findSubscriptionMigrationCandidates({ windowDays });
+  res.json({
+    windowDays,
+    count: rows.length,
+    candidates: rows.map(r => ({
+      orderId: r.order_id,
+      payerEmail: r.payer_email,
+      displayName: r.display_name,
+      productTitle: r.product_title,
+      amountCents: r.amount_cents,
+      currency: r.currency,
+      completedAt: r.completed_at,
+      serverId: r.server_id
+    }))
+  });
+});
+
+// Send the auto-renew invite email to every candidate (or a single one when
+// `onlyEmail` is set, useful for testing). The deep link bounces them to the
+// shop in subscribe-this-product mode so checkout uses the new sub flow.
+router.post('/api/shop/admin/subscriptions/send-migration-emails', requireAdmin, async (req, res) => {
+  const { onlyEmail, windowDays } = req.body || {};
+  const win = Math.max(1, Math.min(365, parseInt(windowDays || '60', 10) || 60));
+  let rows = findSubscriptionMigrationCandidates({ windowDays: win });
+  if (onlyEmail) {
+    const e = String(onlyEmail).toLowerCase();
+    rows = rows.filter(r => (r.payer_email || '').toLowerCase() === e);
+  }
+  const results = [];
+  for (const r of rows) {
+    const deepLink = `${BASE_URL}/shop?subscribe=${r.product_id}${r.server_id ? `&server=${encodeURIComponent(r.server_id)}` : ''}`;
+    const out = await sendSubscriptionInvite({
+      to: r.payer_email,
+      displayName: r.display_name,
+      productTitle: r.product_title,
+      priceCents: r.amount_cents,
+      currency: r.currency,
+      deepLink
+    });
+    results.push({ to: r.payer_email, productTitle: r.product_title, ok: !!out.ok, error: out.error || out.skipped || null });
+  }
+  res.json({ sent: results.filter(r => r.ok).length, total: results.length, results });
+});
 
 // ============================================================
 //  PayPal webhook handler (exported separately for raw body)

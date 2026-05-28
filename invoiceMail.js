@@ -179,4 +179,78 @@ async function sendInvoice({ to, orderId, captureId, productTitle, amountCents, 
   }
 }
 
-module.exports = { sendInvoice };
+// One-shot invite asking an existing one-time buyer to switch their purchase
+// over to a real auto-renewing subscription. Sent during the bulk migration
+// run after subscription products were rewired to PayPal Subscriptions API.
+// `deepLink` is a URL on our shop that takes them straight to the Subscribe
+// flow for the same product (no log-in friction beyond the usual Steam SSO).
+async function sendSubscriptionInvite({ to, displayName, productTitle, priceCents, currency, deepLink }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to) return { ok: false, skipped: 'no_recipient' };
+
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const price = money(priceCents, currency);
+  const item = productTitle || 'your purchase';
+  const name = displayName || 'there';
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <tr><td style="background:#0d0f12;padding:24px;color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.5px">ReforgedZ</td></tr>
+        <tr><td style="padding:28px 24px;font-size:15px;color:#1a1a1a;line-height:1.55">
+          <p style="margin:0 0 12px">Hey ${esc(name)},</p>
+          <p style="margin:0 0 12px">${esc(item)} is set up as a recurring monthly product, but your most recent purchase went through our one-time checkout (a quirk of our PayPal cutover). That means it won't auto-renew when the cycle ends and you'd have to buy it again.</p>
+          <p style="margin:0 0 12px">Switch your purchase to auto-renew so you never lose your spot. Same price, ${esc(price)}/month, cancel anytime from your PayPal account.</p>
+          <p style="margin:24px 0">
+            <a href="${esc(deepLink)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">Set up auto-renew</a>
+          </p>
+          <p style="margin:0 0 12px;color:#4b5563;font-size:13px">No charge happens until you confirm the subscription on PayPal's page. Your existing one-time purchase stays active through its current cycle.</p>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:16px 24px;border-top:1px solid #ecedf0;font-size:12px;color:#6b7280">
+          Questions? <a href="mailto:contact@reforgedz.net" style="color:#2563eb;text-decoration:none">contact@reforgedz.net</a> &middot; <a href="${base}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    `Hey ${name},`,
+    '',
+    `${item} is set up as a monthly recurring product, but your most recent`,
+    `purchase went through our one-time checkout. It won't auto-renew when`,
+    `the cycle ends and you'd have to buy it again.`,
+    '',
+    `Set up auto-renew here so you never lose your spot:`,
+    deepLink,
+    '',
+    `Same price, ${price}/month. Cancel anytime from your PayPal account.`,
+    `No charge happens until you confirm on PayPal. Your existing one-time`,
+    `purchase stays active through its current cycle.`,
+    '',
+    'Questions? contact@reforgedz.net',
+    `${base}/shop`
+  ].join('\n');
+
+  try {
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject: `Switch your ${item} to auto-renew`,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] sub invite send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { sendInvoice, sendSubscriptionInvite };
