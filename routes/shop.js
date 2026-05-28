@@ -259,14 +259,33 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     amountCents = requested;
   }
 
-  // Create pending order. Subscriptions are no longer supported — every
-  // purchase is a one-time PayPal capture (the buyer re-purchases to renew).
+  // Create the pending order row up-front so the customId we hand to PayPal
+  // can map back to our DB even before they approve.
   const order = db.prepare(`
     INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode) VALUES (?, ?, ?, 'pending', ?, ?)
   `).run(req.user.steam_id, product.id, orderServerId, amountCents, useTest ? 1 : 0);
   const orderId = order.lastInsertRowid;
 
+  const isRecurring = product.type === 'subscription' || product.type === 'recurring_custom';
+
   try {
+    if (isRecurring) {
+      // Subscription path — use PayPal Billing Plans + Subscriptions so the
+      // buyer is auto-billed each cycle without re-checkout.
+      const planId = await ensurePlanForProduct(product, useTest);
+      const { id: subscriptionId, approveUrl } = await paypal.createSubscription(useTest, {
+        planId,
+        customId: orderId,
+        brandName: 'ReforgedZ',
+        returnUrl: `${BASE_URL}/api/shop/paypal/return-sub?order=${orderId}`,
+        cancelUrl: `${BASE_URL}/shop?cancelled=1`
+      });
+      if (!approveUrl) throw new Error('PayPal did not return a subscription approve URL');
+      db.prepare('UPDATE orders SET paypal_subscription_id = ? WHERE id = ?').run(subscriptionId, orderId);
+      return res.json({ url: approveUrl });
+    }
+
+    // One-time path (Orders v2 capture).
     const { id: paypalOrderId, approveUrl } = await paypal.createOrder(useTest, {
       amountCents,
       currency: product.currency || 'USD',
@@ -285,6 +304,46 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to create checkout' });
   }
 });
+
+// Lazily provision (and cache on the product row) the PayPal catalog-product
+// + billing-plan ids for this product, per environment. The first checkout
+// for a subscription product pays the create cost; subsequent ones reuse.
+async function ensurePlanForProduct(product, useTest) {
+  const planCol = useTest ? 'paypal_plan_id_test' : 'paypal_plan_id_live';
+  const prodCol = useTest ? 'paypal_product_id_test' : 'paypal_product_id_live';
+
+  let planId = product[planCol];
+  if (planId) return planId;
+
+  let catalogProductId = product[prodCol];
+  if (!catalogProductId) {
+    catalogProductId = await paypal.createCatalogProduct(useTest, {
+      name: product.title,
+      description: product.description || product.title
+    });
+    db.prepare(`UPDATE products SET ${prodCol} = ? WHERE id = ?`).run(catalogProductId, product.id);
+  }
+
+  // Default to monthly. recurring_custom carries its own cadence in days.
+  let intervalUnit = 'MONTH';
+  let intervalCount = 1;
+  if (product.type === 'recurring_custom' && product.interval_days) {
+    intervalUnit = 'DAY';
+    intervalCount = product.interval_days;
+  }
+
+  planId = await paypal.createPlan(useTest, {
+    catalogProductId,
+    name: `${product.title} (monthly)`,
+    description: product.description || product.title,
+    priceCents: product.price_cents,
+    currency: (product.currency || 'USD').toUpperCase(),
+    intervalUnit,
+    intervalCount
+  });
+  db.prepare(`UPDATE products SET ${planCol} = ? WHERE id = ?`).run(planId, product.id);
+  return planId;
+}
 
 // ---- Shared fulfillment (idempotent) ----
 // Transitions a pending order → completed exactly once and runs all the
@@ -358,6 +417,39 @@ router.get('/api/shop/paypal/return', async (req, res) => {
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   } catch (err) {
     console.error('PayPal capture (return) error:', err.message);
+    return res.redirect(BASE_URL + '/shop?error=1');
+  }
+});
+
+// Subscription return path. Buyer has clicked "Subscribe" on PayPal and is
+// bouncing back to us. Fetch the sub, and if it's ACTIVE/APPROVAL_PENDING with
+// a captured first cycle, fulfill the pending order. PayPal also fires
+// BILLING.SUBSCRIPTION.ACTIVATED — fulfillOrder is idempotent so whichever
+// gets here first wins.
+router.get('/api/shop/paypal/return-sub', async (req, res) => {
+  const orderId = parseInt(req.query.order, 10);
+  const order = orderId ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) : null;
+  if (!order || !order.paypal_subscription_id) {
+    return res.redirect(BASE_URL + '/shop?cancelled=1');
+  }
+  const useTest = !!order.test_mode;
+  try {
+    const sub = await paypal.getSubscription(useTest, order.paypal_subscription_id);
+    const status = (sub?.status || '').toUpperCase();
+    if (status === 'ACTIVE' || status === 'APPROVED' || status === 'APPROVAL_PENDING') {
+      const lastPayment = sub.billing_info?.last_payment || {};
+      const amt = lastPayment.amount || {};
+      const feeCents = null; // fees on the first cycle land via the webhook
+      fulfillOrder(orderId, {
+        captureId: sub.id,
+        payerEmail: sub.subscriber?.email_address || null,
+        feeCents
+      });
+      return res.redirect(BASE_URL + '/shop?success=1');
+    }
+    return res.redirect(BASE_URL + '/shop?cancelled=1');
+  } catch (err) {
+    console.error('PayPal subscription (return) error:', err.message);
     return res.redirect(BASE_URL + '/shop?error=1');
   }
 });
@@ -1592,6 +1684,105 @@ async function webhookHandler(req, res) {
             status: 'failed', serverId: order.server_id
           });
         }
+      }
+      break;
+    }
+
+    case 'BILLING.SUBSCRIPTION.ACTIVATED': {
+      // First payment succeeded — fulfill the pending order we created at
+      // checkout. Also catches any sub that activated late.
+      const subId = resource.id;
+      const found = orderId
+        ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId)
+        : (subId ? db.prepare('SELECT * FROM orders WHERE paypal_subscription_id = ?').get(subId) : null);
+      if (found) {
+        fulfillOrder(found.id, {
+          captureId: subId,
+          payerEmail: resource.subscriber?.email_address || null,
+          feeCents: null
+        });
+      }
+      break;
+    }
+
+    case 'PAYMENT.SALE.COMPLETED': {
+      // Each recurring billing cycle on a subscription fires this. Find the
+      // owning subscription and book a renewal order row so MRR + the
+      // buyer's order history both reflect the new cycle.
+      const subId = resource.billing_agreement_id;
+      if (subId) {
+        const original = db.prepare(`
+          SELECT o.*, p.title AS product_title, p.currency
+          FROM orders o JOIN products p ON o.product_id = p.id
+          WHERE o.paypal_subscription_id = ? AND o.status IN ('completed','pending')
+          ORDER BY o.id ASC LIMIT 1
+        `).get(subId);
+        if (original) {
+          const cycleAmount = resource.amount?.total
+            ? Math.round(parseFloat(resource.amount.total) * 100)
+            : original.amount_cents;
+          const feeCents = resource.transaction_fee?.value != null
+            ? Math.round(parseFloat(resource.transaction_fee.value) * 100) : null;
+          // Idempotency guard — if we've already booked a row for this
+          // transaction id, skip.
+          const existing = db.prepare('SELECT id FROM orders WHERE paypal_capture_id = ?').get(resource.id);
+          if (!existing) {
+            const ins = db.prepare(`
+              INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
+                                  paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
+                                  completed_at, created_at)
+              VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+            `).run(
+              original.steam_id, original.product_id, original.server_id,
+              cycleAmount, original.test_mode,
+              subId, resource.id, resource.payer?.email_address || original.payer_email || null,
+              feeCents, null
+            );
+            const newOrderId = ins.lastInsertRowid;
+            sendDiscordNotification({
+              eventType: 'subscription_renewed',
+              user: { steam_id: original.steam_id },
+              productTitle: original.product_title,
+              amountCents: cycleAmount,
+              currency: original.currency,
+              status: 'completed',
+              serverId: original.server_id
+            });
+            syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+            tryAssignDiscordRoleForOrder(newOrderId);
+            if (resource.payer?.email_address || original.payer_email) {
+              sendInvoice({
+                to: resource.payer?.email_address || original.payer_email,
+                orderId: newOrderId,
+                captureId: resource.id,
+                productTitle: original.product_title,
+                amountCents: cycleAmount,
+                currency: original.currency,
+                feeCents,
+                serverLabel: SERVER_LABELS[original.server_id] || original.server_id,
+                dateMs: Date.now()
+              }).catch(e => console.error('[invoice] send failed:', e.message));
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case 'BILLING.SUBSCRIPTION.CANCELLED':
+    case 'BILLING.SUBSCRIPTION.SUSPENDED':
+    case 'BILLING.SUBSCRIPTION.EXPIRED': {
+      const subId = resource.id;
+      if (subId) {
+        // Mark all completed cycles for this sub as cancelled so they no
+        // longer count toward active grants. The buyer keeps what they
+        // already paid for through the end of their current period — the
+        // next sync removes them once renewal stops landing.
+        db.prepare(`
+          UPDATE orders SET status = 'cancelled'
+          WHERE paypal_subscription_id = ? AND status IN ('pending','completed')
+        `).run(subId);
+        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
       }
       break;
     }

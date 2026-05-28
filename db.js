@@ -138,6 +138,21 @@ if (!userHasColumn('discord_id')) {
   db.exec("ALTER TABLE users ADD COLUMN discord_id TEXT");
 }
 
+// PayPal Subscriptions API: cache the live + sandbox catalog-product + plan
+// ids per product so checkout doesn't recreate them on every purchase.
+if (!productHasColumn('paypal_product_id_live')) {
+  db.exec("ALTER TABLE products ADD COLUMN paypal_product_id_live TEXT");
+}
+if (!productHasColumn('paypal_product_id_test')) {
+  db.exec("ALTER TABLE products ADD COLUMN paypal_product_id_test TEXT");
+}
+if (!productHasColumn('paypal_plan_id_live')) {
+  db.exec("ALTER TABLE products ADD COLUMN paypal_plan_id_live TEXT");
+}
+if (!productHasColumn('paypal_plan_id_test')) {
+  db.exec("ALTER TABLE products ADD COLUMN paypal_plan_id_test TEXT");
+}
+
 // Monthly expense buckets that the Finances tab subtracts from the Stripe balance.
 db.exec(`
   CREATE TABLE IF NOT EXISTS monthly_expenses (
@@ -234,6 +249,10 @@ if (!orderHasColumn('payer_email')) {
 if (!orderHasColumn('fee_cents')) {
   db.exec("ALTER TABLE orders ADD COLUMN fee_cents INTEGER");
 }
+if (!orderHasColumn('paypal_subscription_id')) {
+  db.exec("ALTER TABLE orders ADD COLUMN paypal_subscription_id TEXT");
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_orders_paypal_sub ON orders(paypal_subscription_id) WHERE paypal_subscription_id IS NOT NULL");
 
 // Self-healing backfill: Stripe session IDs encode their environment in
 // the prefix (cs_test_* vs cs_live_*), so any order still flagged as live

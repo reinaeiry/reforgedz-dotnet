@@ -196,14 +196,44 @@ const WEBHOOK_EVENTS = [
   'PAYMENT.CAPTURE.DENIED',
   'PAYMENT.CAPTURE.REFUNDED',
   'PAYMENT.CAPTURE.REVERSED',
-  'CHECKOUT.ORDER.APPROVED'
+  'CHECKOUT.ORDER.APPROVED',
+  'BILLING.SUBSCRIPTION.ACTIVATED',
+  'BILLING.SUBSCRIPTION.CANCELLED',
+  'BILLING.SUBSCRIPTION.SUSPENDED',
+  'BILLING.SUBSCRIPTION.EXPIRED',
+  'BILLING.SUBSCRIPTION.PAYMENT.FAILED',
+  'PAYMENT.SALE.COMPLETED'
 ];
+
+async function syncWebhookEvents(testMode, webhookId, desired) {
+  if (!webhookId) return;
+  try {
+    const cur = await ppFetch(testMode, `/v1/notifications/webhooks/${webhookId}`);
+    const have = new Set((cur?.event_types || []).map((e) => e.name));
+    const want = desired.filter((n) => !have.has(n));
+    if (!want.length) return;
+    await ppFetch(testMode, `/v1/notifications/webhooks/${webhookId}`, {
+      method: 'PATCH',
+      body: [{
+        op: 'replace',
+        path: '/event_types',
+        value: desired.map((name) => ({ name }))
+      }]
+    });
+  } catch (e) {
+    console.error(`[paypal] syncWebhookEvents (${testMode ? 'sandbox' : 'live'}) failed:`, e.message);
+  }
+}
 
 async function ensureWebhook(testMode, url) {
   if (!isConfigured(testMode)) return null;
   const list = await ppFetch(testMode, '/v1/notifications/webhooks').catch(() => null);
   const existing = (list?.webhooks || []).find((w) => w.url === url);
-  if (existing) return existing.id;
+  if (existing) {
+    // Ensure any newly-added event types are subscribed on the existing hook.
+    await syncWebhookEvents(testMode, existing.id, WEBHOOK_EVENTS);
+    return existing.id;
+  }
   try {
     const created = await ppFetch(testMode, '/v1/notifications/webhooks', {
       method: 'POST',
@@ -217,7 +247,10 @@ async function ensureWebhook(testMode, url) {
     // 400 "webhook url already exists" — relist and match.
     const relist = await ppFetch(testMode, '/v1/notifications/webhooks').catch(() => null);
     const match = (relist?.webhooks || []).find((w) => w.url === url);
-    if (match) return match.id;
+    if (match) {
+      await syncWebhookEvents(testMode, match.id, WEBHOOK_EVENTS);
+      return match.id;
+    }
     console.error(`[paypal] ensureWebhook (${testMode ? 'sandbox' : 'live'}) failed:`, e.message);
     return null;
   }
@@ -360,6 +393,94 @@ async function listActiveSubscriptions(testMode) {
   }
 }
 
+// ─── Catalog Products + Plans + Subscriptions (create/manage) ───────────────
+
+// Create a PayPal Catalog Product. Returns its id. Used as the parent for a
+// Billing Plan. Idempotent per call (callers cache the resulting id).
+async function createCatalogProduct(testMode, { name, description, category = 'SOFTWARE' }) {
+  const res = await ppFetch(testMode, '/v1/catalogs/products', {
+    method: 'POST',
+    headers: { 'PayPal-Request-Id': `rfgz-prod-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` },
+    body: {
+      name,
+      description: description || name,
+      type: 'SERVICE',
+      category
+    }
+  });
+  return res.id;
+}
+
+// Create a monthly REGULAR-tenure Billing Plan against a catalog product.
+// Returns the plan id, ready to attach subscriptions to.
+async function createPlan(testMode, {
+  catalogProductId, name, description, priceCents, currency = 'USD',
+  intervalUnit = 'MONTH', intervalCount = 1
+}) {
+  const body = {
+    product_id: catalogProductId,
+    name,
+    description: description || name,
+    status: 'ACTIVE',
+    billing_cycles: [{
+      frequency: { interval_unit: intervalUnit, interval_count: intervalCount },
+      tenure_type: 'REGULAR',
+      sequence: 1,
+      total_cycles: 0, // 0 == bill forever until cancelled
+      pricing_scheme: {
+        fixed_price: { value: (priceCents / 100).toFixed(2), currency_code: currency.toUpperCase() }
+      }
+    }],
+    payment_preferences: {
+      auto_bill_outstanding: true,
+      setup_fee: { value: '0', currency_code: currency.toUpperCase() },
+      setup_fee_failure_action: 'CONTINUE',
+      payment_failure_threshold: 3
+    }
+  };
+  const res = await ppFetch(testMode, '/v1/billing/plans', {
+    method: 'POST',
+    headers: { 'PayPal-Request-Id': `rfgz-plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` },
+    body
+  });
+  return res.id;
+}
+
+// Create a Subscription against an existing plan. Returns { id, approveUrl }.
+// `customId` is echoed back on every billing event so we can map cycles to
+// our orders.
+async function createSubscription(testMode, {
+  planId, customId, brandName = 'ReforgedZ', returnUrl, cancelUrl
+}) {
+  const body = {
+    plan_id: planId,
+    custom_id: customId != null ? String(customId) : undefined,
+    application_context: {
+      brand_name: brandName,
+      shipping_preference: 'NO_SHIPPING',
+      user_action: 'SUBSCRIBE_NOW',
+      payment_method: { payer_selected: 'PAYPAL', payee_preferred: 'IMMEDIATE_PAYMENT_REQUIRED' },
+      return_url: returnUrl,
+      cancel_url: cancelUrl
+    }
+  };
+  const res = await ppFetch(testMode, '/v1/billing/subscriptions', { method: 'POST', body });
+  const approveUrl = (res.links || []).find(l => l.rel === 'approve')?.href || null;
+  return { id: res.id, approveUrl, status: res.status };
+}
+
+async function getSubscription(testMode, subscriptionId) {
+  return ppFetch(testMode, `/v1/billing/subscriptions/${subscriptionId}`);
+}
+
+async function cancelSubscription(testMode, subscriptionId, reason = 'Cancelled by user') {
+  await ppFetch(testMode, `/v1/billing/subscriptions/${subscriptionId}/cancel`, {
+    method: 'POST',
+    body: { reason }
+  });
+  return { ok: true };
+}
+
 module.exports = {
   isConfigured,
   createOrder,
@@ -371,5 +492,10 @@ module.exports = {
   ensureWebhook,
   getBalance,
   listTransactions,
-  listActiveSubscriptions
+  listActiveSubscriptions,
+  createCatalogProduct,
+  createPlan,
+  createSubscription,
+  getSubscription,
+  cancelSubscription
 };
