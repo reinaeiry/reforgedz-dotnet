@@ -421,11 +421,13 @@ router.get('/api/shop/paypal/return', async (req, res) => {
   }
 });
 
-// Subscription return path. Buyer has clicked "Subscribe" on PayPal and is
-// bouncing back to us. Fetch the sub, and if it's ACTIVE/APPROVAL_PENDING with
-// a captured first cycle, fulfill the pending order. PayPal also fires
-// BILLING.SUBSCRIPTION.ACTIVATED — fulfillOrder is idempotent so whichever
-// gets here first wins.
+// Subscription return path. Buyer is bouncing back to us after the PayPal
+// hosted page. Only treat ACTIVE as success — APPROVAL_PENDING means they
+// never clicked Subscribe (no billing agreement), APPROVED is a transient
+// state right before activation. The canonical activation event is the
+// BILLING.SUBSCRIPTION.ACTIVATED webhook, which signs the result; if the
+// buyer arrives back before that webhook lands we'd rather show "processing"
+// than risk a free fulfillment.
 router.get('/api/shop/paypal/return-sub', async (req, res) => {
   const orderId = parseInt(req.query.order, 10);
   const order = orderId ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) : null;
@@ -436,16 +438,17 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
   try {
     const sub = await paypal.getSubscription(useTest, order.paypal_subscription_id);
     const status = (sub?.status || '').toUpperCase();
-    if (status === 'ACTIVE' || status === 'APPROVED' || status === 'APPROVAL_PENDING') {
-      const lastPayment = sub.billing_info?.last_payment || {};
-      const amt = lastPayment.amount || {};
-      const feeCents = null; // fees on the first cycle land via the webhook
+    if (status === 'ACTIVE') {
       fulfillOrder(orderId, {
         captureId: sub.id,
         payerEmail: sub.subscriber?.email_address || null,
-        feeCents
+        feeCents: null
       });
       return res.redirect(BASE_URL + '/shop?success=1');
+    }
+    if (status === 'APPROVED') {
+      // First payment not yet captured. Webhook will activate within seconds.
+      return res.redirect(BASE_URL + '/shop?processing=1');
     }
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   } catch (err) {
