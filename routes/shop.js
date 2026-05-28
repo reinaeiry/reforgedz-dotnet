@@ -1081,9 +1081,16 @@ async function mrrEstimate() {
           .all()
           .map(r => r.paypal_capture_id)
       );
+      // Only count txns that look like recurring-subscription payments — must
+      // have a positive amount, a subject matching a known recurring product,
+      // and not already be tracked as one of our one-time orders. The subject
+      // gate matters because Transaction Search also surfaces payouts, refunds
+      // and ad-hoc captures (e.g. test payments) with null subjects.
+      const SUB_SUBJECT_RE = /priority\s*queue|supporter|subscr|recurring/i;
       const byPayer = new Map();
       for (const t of txns) {
         if (!t || !t.id || !t.grossCents || t.grossCents <= 0) continue;
+        if (!t.subject || !SUB_SUBJECT_RE.test(t.subject)) continue;
         if (ourCaptureIds.has(t.id)) continue; // one-time order we already fulfilled
         const key = (t.payerEmail || t.id).toLowerCase();
         const prev = byPayer.get(key);
