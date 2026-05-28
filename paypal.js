@@ -398,12 +398,15 @@ async function listActiveSubscriptions(testMode) {
 // Create a PayPal Catalog Product. Returns its id. Used as the parent for a
 // Billing Plan. Idempotent per call (callers cache the resulting id).
 async function createCatalogProduct(testMode, { name, description, category = 'SOFTWARE' }) {
+  // Catalog product allows up to 256 chars on description and 127 on name.
+  const prodName = String(name || '').slice(0, 127);
+  const prodDesc = String(description || name || '').replace(/\s+/g, ' ').slice(0, 256);
   const res = await ppFetch(testMode, '/v1/catalogs/products', {
     method: 'POST',
     headers: { 'PayPal-Request-Id': `rfgz-prod-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` },
     body: {
-      name,
-      description: description || name,
+      name: prodName,
+      description: prodDesc,
       type: 'SERVICE',
       category
     }
@@ -417,10 +420,14 @@ async function createPlan(testMode, {
   catalogProductId, name, description, priceCents, currency = 'USD',
   intervalUnit = 'MONTH', intervalCount = 1
 }) {
+  // PayPal caps plan name at 127 and description at 127 chars. Catalog product
+  // description allows more but plan does not. Truncate aggressively.
+  const planName = String(name || '').slice(0, 127);
+  const planDesc = String(description || name || '').replace(/\s+/g, ' ').slice(0, 127);
   const body = {
     product_id: catalogProductId,
-    name,
-    description: description || name,
+    name: planName,
+    description: planDesc,
     billing_cycles: [{
       frequency: { interval_unit: intervalUnit, interval_count: intervalCount },
       tenure_type: 'REGULAR',
