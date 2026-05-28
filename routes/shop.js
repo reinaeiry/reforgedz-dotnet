@@ -1844,8 +1844,11 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       const subId = resource.billing_agreement_id;
       if (subId) {
         const original = db.prepare(`
-          SELECT o.*, p.title AS product_title, p.currency
-          FROM orders o JOIN products p ON o.product_id = p.id
+          SELECT o.*, p.title AS product_title, p.currency,
+                 u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid
+          FROM orders o
+          JOIN products p ON o.product_id = p.id
+          JOIN users u    ON o.steam_id   = u.steam_id
           WHERE o.paypal_subscription_id = ? AND o.status IN ('completed','pending')
           ORDER BY o.id ASC LIMIT 1
         `).get(subId);
@@ -1873,7 +1876,14 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             const newOrderId = ins.lastInsertRowid;
             sendDiscordNotification({
               eventType: 'subscription_renewed',
-              user: { steam_id: original.steam_id },
+              user: {
+                platform: original.platform,
+                persona: original.persona,
+                steam_id: original.steam_id,
+                gamertag: original.gamertag,
+                bm_player_id: original.bm_player_id
+              },
+              biUid: original.bi_uid,
               productTitle: original.product_title,
               amountCents: cycleAmount,
               currency: original.currency,
