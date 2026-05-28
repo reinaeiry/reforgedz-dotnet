@@ -421,12 +421,11 @@ async function createPlan(testMode, {
     product_id: catalogProductId,
     name,
     description: description || name,
-    status: 'ACTIVE',
     billing_cycles: [{
       frequency: { interval_unit: intervalUnit, interval_count: intervalCount },
       tenure_type: 'REGULAR',
       sequence: 1,
-      total_cycles: 0, // 0 == bill forever until cancelled
+      total_cycles: 0, // bill forever until cancelled
       pricing_scheme: {
         fixed_price: { value: (priceCents / 100).toFixed(2), currency_code: currency.toUpperCase() }
       }
@@ -440,9 +439,16 @@ async function createPlan(testMode, {
   };
   const res = await ppFetch(testMode, '/v1/billing/plans', {
     method: 'POST',
-    headers: { 'PayPal-Request-Id': `rfgz-plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` },
+    headers: {
+      'PayPal-Request-Id': `rfgz-plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      'Prefer': 'return=representation'
+    },
     body
   });
+  // Plans are created in CREATED state. Activate so subscriptions can attach.
+  if ((res.status || '').toUpperCase() !== 'ACTIVE') {
+    await ppFetch(testMode, `/v1/billing/plans/${res.id}/activate`, { method: 'POST' });
+  }
   return res.id;
 }
 
