@@ -1737,6 +1737,18 @@ async function webhookHandler(req, res) {
   const resource = event.resource || {};
   const orderId = parseInt(resource.custom_id, 10);
 
+  try {
+    await dispatchPayPalEvent(event, resource, orderId);
+  } catch (e) {
+    // Never let a webhook bug crash the process — PayPal aggressively
+    // retries on non-2xx, so a single bad event would loop-kill the box.
+    console.error(`[paypal] webhook handler threw on ${event.event_type}:`, e.stack || e.message);
+    return res.sendStatus(500);
+  }
+  return res.sendStatus(200);
+}
+
+async function dispatchPayPalEvent(event, resource, orderId) {
   switch (event.event_type) {
     case 'PAYMENT.CAPTURE.COMPLETED': {
       if (orderId) {
@@ -1824,7 +1836,7 @@ async function webhookHandler(req, res) {
               original.steam_id, original.product_id, original.server_id,
               cycleAmount, original.test_mode,
               subId, resource.id, resource.payer?.email_address || original.payer_email || null,
-              feeCents, null
+              feeCents
             );
             const newOrderId = ins.lastInsertRowid;
             sendDiscordNotification({
@@ -1909,8 +1921,6 @@ async function webhookHandler(req, res) {
       break;
     }
   }
-
-  res.sendStatus(200);
 }
 
 module.exports = { router, webhookHandler, registerPayPalWebhooks };
