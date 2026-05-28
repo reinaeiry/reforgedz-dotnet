@@ -271,6 +271,95 @@ async function listTransactions(testMode, { days = 31 } = {}) {
   }
 }
 
+// ─── Subscriptions (Billing Plans v1) ───────────────────────────────────────
+
+// Normalize a price + billing-cycle frequency to a monthly amount in cents.
+function cycleToMonthlyCents(priceValue, freq) {
+  if (priceValue == null || !freq) return 0;
+  const price = Math.round(parseFloat(priceValue) * 100);
+  if (!isFinite(price) || price <= 0) return 0;
+  const n = Math.max(1, parseInt(freq.interval_count || 1, 10));
+  switch ((freq.interval_unit || '').toUpperCase()) {
+    case 'DAY':   return Math.round((price * 30) / n);
+    case 'WEEK':  return Math.round((price * 30) / (7 * n));
+    case 'MONTH': return Math.round(price / n);
+    case 'YEAR':  return Math.round(price / (12 * n));
+    default:      return 0;
+  }
+}
+
+// Pick the REGULAR (non-trial) billing cycle from a plan detail response.
+function planRegularCycle(plan) {
+  const cycles = plan?.billing_cycles || [];
+  return cycles.find(c => (c.tenure_type || '').toUpperCase() === 'REGULAR') || cycles[0] || null;
+}
+
+async function listActivePlans(testMode) {
+  const out = [];
+  for (let page = 1; page < 50; page++) {
+    const qs = new URLSearchParams({
+      page: String(page), page_size: '20', total_required: 'true'
+    });
+    const res = await ppFetch(testMode, `/v1/billing/plans?${qs}`);
+    const plans = res?.plans || [];
+    for (const p of plans) {
+      if ((p.status || '').toUpperCase() === 'ACTIVE') out.push({ id: p.id, name: p.name });
+    }
+    if (plans.length < 20) break;
+  }
+  return out;
+}
+
+async function listSubscriptionsForPlan(testMode, planId) {
+  const out = [];
+  for (let page = 1; page < 50; page++) {
+    const qs = new URLSearchParams({
+      plan_id: planId, page: String(page), page_size: '20', total_required: 'true'
+    });
+    const res = await ppFetch(testMode, `/v1/billing/subscriptions?${qs}`);
+    const subs = res?.subscriptions || [];
+    for (const s of subs) out.push(s);
+    if (subs.length < 20) break;
+  }
+  return out;
+}
+
+// Returns a flat list of ACTIVE subscriptions with each one's normalized
+// monthly amount in cents. { id, planId, payerEmail, status, monthlyCents,
+// currency }. Returns { error } on failure (never throws) so callers can
+// fall through to zero gracefully.
+async function listActiveSubscriptions(testMode) {
+  try {
+    const plans = await listActivePlans(testMode);
+    const out = [];
+    for (const planRef of plans) {
+      const plan = await ppFetch(testMode, `/v1/billing/plans/${planRef.id}`);
+      const cycle = planRegularCycle(plan);
+      if (!cycle) continue;
+      const planPriceValue = cycle.pricing_scheme?.fixed_price?.value;
+      const planCurrency = cycle.pricing_scheme?.fixed_price?.currency_code || 'USD';
+      const subs = await listSubscriptionsForPlan(testMode, planRef.id);
+      for (const s of subs) {
+        if ((s.status || '').toUpperCase() !== 'ACTIVE') continue;
+        const lastAmt = s.billing_info?.last_payment?.amount?.value;
+        const monthlyCents = cycleToMonthlyCents(lastAmt != null ? lastAmt : planPriceValue, cycle.frequency);
+        out.push({
+          id: s.id,
+          planId: planRef.id,
+          planName: planRef.name || plan.name || null,
+          payerEmail: s.subscriber?.email_address || null,
+          status: s.status,
+          monthlyCents,
+          currency: s.billing_info?.last_payment?.amount?.currency_code || planCurrency
+        });
+      }
+    }
+    return { subscriptions: out };
+  } catch (e) {
+    return { error: e.message, subscriptions: [] };
+  }
+}
+
 module.exports = {
   isConfigured,
   createOrder,
@@ -281,5 +370,6 @@ module.exports = {
   verifyWebhook,
   ensureWebhook,
   getBalance,
-  listTransactions
+  listTransactions,
+  listActiveSubscriptions
 };

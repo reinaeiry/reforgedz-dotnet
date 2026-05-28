@@ -1029,10 +1029,13 @@ function revenueSummary() {
   };
 }
 
-// Estimate Monthly Recurring Revenue from the most recent completed order
-// for each active stripe_subscription_id. Per-day intervals are normalized
-// to a 30-day month, monthly subs are taken at face value.
-function mrrEstimate() {
+// Estimate Monthly Recurring Revenue. Combines two sources:
+//   1) Legacy Stripe subs still tracked in our orders table (kept so historical
+//      MRR from before the PayPal cutover still counts until those subs end).
+//   2) Active PayPal subscriptions pulled live from the Billing Plans API
+//      (priority-queue subs etc. that aren't created via our checkout flow).
+// Per-day intervals normalize to a 30-day month; monthly subs at face value.
+async function mrrEstimate() {
   const rows = db.prepare(`
     SELECT o.amount_cents, p.type, p.interval_days, o.stripe_subscription_id
     FROM orders o
@@ -1049,7 +1052,26 @@ function mrrEstimate() {
     else if (r.type === 'recurring_custom' && r.interval_days) monthly = Math.round(r.amount_cents * 30 / r.interval_days);
     if (monthly > 0) { cents += monthly; count += 1; }
   }
-  return { activeSubs: count, mrrCents: cents };
+
+  let paypalSubs = [];
+  let paypalError = null;
+  try {
+    const live = await paypal.listActiveSubscriptions(false);
+    if (live.error) paypalError = live.error;
+    paypalSubs = live.subscriptions || [];
+  } catch (e) {
+    paypalError = e.message;
+  }
+  for (const s of paypalSubs) {
+    if (s.monthlyCents > 0) { cents += s.monthlyCents; count += 1; }
+  }
+
+  return {
+    activeSubs: count,
+    mrrCents: cents,
+    paypalSubs: paypalSubs.length,
+    paypalError
+  };
 }
 
 function topProductsByRevenue(limit = 10) {
@@ -1216,9 +1238,8 @@ function runway(stripeUsdCents, mrrCents, monthlyBurnCents) {
 }
 
 router.get('/api/shop/admin/finances', requireAdmin, async (req, res) => {
-  const [balance, payouts] = await Promise.all([fetchProviderBalance(), recentTransactions()]);
+  const [balance, payouts, mrr] = await Promise.all([fetchProviderBalance(), recentTransactions(), mrrEstimate()]);
   const revenue = revenueSummary();
-  const mrr = mrrEstimate();
   const top = topProductsByRevenue(10);
   const refundsByProd = refundsByProduct(10);
   const buyers = topBuyers(10);
