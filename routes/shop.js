@@ -1066,11 +1066,52 @@ async function mrrEstimate() {
     if (s.monthlyCents > 0) { cents += s.monthlyCents; count += 1; }
   }
 
+  // Classic PayPal "Subscribe" button payments (Priority Queue, Supporter, etc.)
+  // don't surface on the Billing Plans API. They DO flow through Transaction
+  // Search though, so derive MRR from the last 30 days of transactions that
+  // are not matched to one of our one-time orders.
+  let legacySubMrrCents = 0;
+  let legacySubPayers = 0;
+  let legacyError = null;
+  try {
+    const txns = await paypal.listTransactions(false, { days: 31 });
+    if (Array.isArray(txns) && txns.length) {
+      const ourCaptureIds = new Set(
+        db.prepare(`SELECT paypal_capture_id FROM orders WHERE paypal_capture_id IS NOT NULL AND test_mode = 0`)
+          .all()
+          .map(r => r.paypal_capture_id)
+      );
+      const byPayer = new Map();
+      for (const t of txns) {
+        if (!t || !t.id || !t.grossCents || t.grossCents <= 0) continue;
+        if (ourCaptureIds.has(t.id)) continue; // one-time order we already fulfilled
+        const key = (t.payerEmail || t.id).toLowerCase();
+        const prev = byPayer.get(key);
+        if (!prev || (t.date && (!prev.date || t.date > prev.date))) {
+          byPayer.set(key, t);
+        }
+      }
+      for (const t of byPayer.values()) {
+        legacySubMrrCents += t.grossCents;
+        legacySubPayers += 1;
+      }
+    } else if (txns && txns.error) {
+      legacyError = txns.error;
+    }
+  } catch (e) {
+    legacyError = e.message;
+  }
+  cents += legacySubMrrCents;
+  count += legacySubPayers;
+
   return {
     activeSubs: count,
     mrrCents: cents,
     paypalSubs: paypalSubs.length,
-    paypalError
+    paypalError,
+    legacySubPayers,
+    legacySubMrrCents,
+    legacyError
   };
 }
 
