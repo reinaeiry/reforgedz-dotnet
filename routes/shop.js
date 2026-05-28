@@ -468,8 +468,20 @@ router.get('/api/shop/orders', requireAuth, (req, res) => {
   res.json(orders);
 });
 
-// Set own BI UID
+// Set own BI UID. Steam-OpenID users are trusted to enter their own UID
+// because Steam doesn't expose it for us. Console (PSN/Xbox) users had
+// their UID resolved from BattleMetrics during signup — we don't let them
+// change it from the web, because an attacker who hijacked their session
+// would otherwise redirect their entitlements (priority queue etc.) onto
+// the attacker's own GUID. Console-account UID changes go through admin
+// support via /api/shop/admin/users/:steamId/bi-uid.
 router.post('/api/shop/set-bi-uid', requireAuth, (req, res) => {
+  if (req.user.platform === 'psn' || req.user.platform === 'xbox') {
+    return res.status(403).json({
+      error: 'Console accounts have their UID set automatically from BattleMetrics. To change it, open a ticket in our Discord.'
+    });
+  }
+
   const { biUid } = req.body;
   if (!biUid || typeof biUid !== 'string') return res.status(400).json({ error: 'Missing BI UID' });
 

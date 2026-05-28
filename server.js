@@ -252,6 +252,18 @@ app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
     });
   }
 
+  // Account takeover protection: gamertags are public, BM lookup just maps
+  // gamertag → bm_player_id with no proof of ownership. If we already have an
+  // account on that bm_player_id, only let the requester log in when their
+  // console cookie proves they're the same person who originally linked.
+  // First-time account creation is unrestricted because there's nothing yet
+  // to take over.
+  if (existing && (!lockCookie || lockCookie.bmPlayerId !== existing.bm_player_id)) {
+    return res.status(409).json({
+      error: 'This gamertag is already linked to an account. If it is yours and you cleared your cookies (or switched browsers), open a ticket in our Discord and an admin will re-link you.'
+    });
+  }
+
   if (!existing) {
     try {
       db.prepare(`
