@@ -7,7 +7,7 @@ const discord = require('../discord');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
-const { sendInvoice, sendSubscriptionInvite } = require('../invoiceMail');
+const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation } = require('../invoiceMail');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 // Resolved on boot by server.js calling registerPayPalWebhooks(); read at
@@ -156,6 +156,28 @@ function sweepStalePending() {
 
 sweepStalePending();
 setInterval(sweepStalePending, SWEEPER_INTERVAL_MS);
+
+// Whenever a subscription cycle's effective_until just crossed into the past,
+// re-run the purchase sync so the GUID drops out of game.admins. No state
+// change to the order row — sync.js's effective_until check handles the
+// entitlement filter; status stays 'completed' so revenue stats still see it.
+let lastEffectiveSweepUnix = Math.floor(Date.now() / 1000);
+function sweepExpiredEntitlements() {
+  const now = Math.floor(Date.now() / 1000);
+  const just = db.prepare(`
+    SELECT COUNT(*) AS c FROM orders
+    WHERE status = 'completed'
+      AND effective_until IS NOT NULL
+      AND effective_until <= ?
+      AND effective_until > ?
+  `).get(now, lastEffectiveSweepUnix).c;
+  lastEffectiveSweepUnix = now;
+  if (just > 0) {
+    console.log(`[orders] ${just} subscription cycle(s) just lapsed — re-syncing`);
+    syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+  }
+}
+setInterval(sweepExpiredEntitlements, 5 * 60 * 1000);
 
 // ---- Middleware helpers ----
 function requireAuth(req, res, next) {
@@ -943,6 +965,22 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
     status: 'refunded',
     serverId: order.server_id
   });
+
+  // Refund confirmation email. Sent from the admin path because the PayPal
+  // webhook handler short-circuits once status flips to 'refunded' — and
+  // admin-initiated refunds beat the webhook there.
+  if (refund && order.payer_email) {
+    sendRefundConfirmation({
+      to: order.payer_email,
+      displayName: order.persona || order.gamertag || null,
+      productTitle: order.product_title,
+      amountCents: refundedCents || order.amount_cents,
+      currency: order.currency,
+      captureId: order.paypal_capture_id,
+      orderId: order.id,
+      dateMs: Date.now()
+    }).catch(e => console.error('[refund-mail] send failed:', e.message));
+  }
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
   tryRemoveDiscordRoleForOrder(orderId);
@@ -1833,6 +1871,15 @@ async function dispatchPayPalEvent(event, resource, orderId) {
           payerEmail: resource.subscriber?.email_address || null,
           feeCents: null
         });
+        // Pin the entitlement end-date to PayPal's next billing time so a
+        // mid-cycle cancellation still honours the period the buyer paid for.
+        const nextBilling = resource.billing_info?.next_billing_time;
+        if (nextBilling) {
+          const untilUnix = Math.floor(new Date(nextBilling).getTime() / 1000);
+          if (isFinite(untilUnix) && untilUnix > 0) {
+            db.prepare('UPDATE orders SET effective_until = ? WHERE id = ?').run(untilUnix, found.id);
+          }
+        }
       }
       break;
     }
@@ -1862,16 +1909,30 @@ async function dispatchPayPalEvent(event, resource, orderId) {
           // transaction id, skip.
           const existing = db.prepare('SELECT id FROM orders WHERE paypal_capture_id = ?').get(resource.id);
           if (!existing) {
+            // PAYMENT.SALE.COMPLETED doesn't include next_billing_time, but
+            // the sub does — one extra API call gets us the cycle end so
+            // mid-cycle cancellations honour the paid period.
+            let effectiveUntil = null;
+            try {
+              const sub = await paypal.getSubscription(!!original.test_mode, subId);
+              const next = sub?.billing_info?.next_billing_time;
+              if (next) {
+                const u = Math.floor(new Date(next).getTime() / 1000);
+                if (isFinite(u) && u > 0) effectiveUntil = u;
+              }
+            } catch (e) {
+              console.warn('[paypal] renewal next_billing_time lookup failed:', e.message);
+            }
             const ins = db.prepare(`
               INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
                                   paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
-                                  completed_at, created_at)
-              VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+                                  effective_until, completed_at, created_at)
+              VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
             `).run(
               original.steam_id, original.product_id, original.server_id,
               cycleAmount, original.test_mode,
               subId, resource.id, resource.payer?.email_address || original.payer_email || null,
-              feeCents
+              feeCents, effectiveUntil
             );
             const newOrderId = ins.lastInsertRowid;
             sendDiscordNotification({
@@ -1915,16 +1976,72 @@ async function dispatchPayPalEvent(event, resource, orderId) {
     case 'BILLING.SUBSCRIPTION.SUSPENDED':
     case 'BILLING.SUBSCRIPTION.EXPIRED': {
       const subId = resource.id;
-      if (subId) {
-        // Mark all completed cycles for this sub as cancelled so they no
-        // longer count toward active grants. The buyer keeps what they
-        // already paid for through the end of their current period — the
-        // next sync removes them once renewal stops landing.
+      if (!subId) break;
+
+      // Buyer paid for the current cycle — they keep their entitlement
+      // through the end of it. Pin effective_until on the most recent
+      // completed cycle to PayPal's next_billing_time (or the event-supplied
+      // next billing date), and stop accepting future cycles by cancelling
+      // any pending row. Status on completed cycles stays 'completed' so
+      // sync.js's effective_until check is what eventually removes them.
+      const next = resource.billing_info?.next_billing_time;
+      let until = null;
+      if (next) {
+        const u = Math.floor(new Date(next).getTime() / 1000);
+        if (isFinite(u) && u > 0) until = u;
+      }
+      // Fallback: most recent cycle's completed_at + 31 days (approx monthly).
+      if (!until) {
+        const last = db.prepare(`
+          SELECT completed_at FROM orders
+          WHERE paypal_subscription_id = ? AND status = 'completed'
+          ORDER BY id DESC LIMIT 1
+        `).get(subId);
+        if (last?.completed_at) until = last.completed_at + 31 * 86400;
+      }
+
+      // Drop any pending cycle (buyer abandoned approval or sub never activated)
+      db.prepare(`UPDATE orders SET status = 'cancelled' WHERE paypal_subscription_id = ? AND status = 'pending'`).run(subId);
+
+      if (until) {
         db.prepare(`
-          UPDATE orders SET status = 'cancelled'
-          WHERE paypal_subscription_id = ? AND status IN ('pending','completed')
-        `).run(subId);
-        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+          UPDATE orders SET effective_until = ?
+          WHERE paypal_subscription_id = ? AND status = 'completed'
+            AND (effective_until IS NULL OR effective_until > ?)
+        `).run(until, subId, until);
+      }
+      syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+
+      // Notify Discord + email the buyer.
+      const ctx = db.prepare(`
+        SELECT o.*, u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid,
+               p.title AS product_title, p.currency, p.price_cents
+        FROM orders o
+        JOIN users u    ON o.steam_id = u.steam_id
+        JOIN products p ON o.product_id = p.id
+        WHERE o.paypal_subscription_id = ?
+        ORDER BY o.id DESC LIMIT 1
+      `).get(subId);
+      if (ctx) {
+        sendDiscordNotification({
+          eventType: 'subscription_cancelled',
+          user: { platform: ctx.platform, persona: ctx.persona, steam_id: ctx.steam_id, gamertag: ctx.gamertag, bm_player_id: ctx.bm_player_id },
+          biUid: ctx.bi_uid, productTitle: ctx.product_title,
+          amountCents: ctx.price_cents, currency: ctx.currency,
+          status: event.event_type.replace('BILLING.SUBSCRIPTION.', '').toLowerCase(),
+          serverId: ctx.server_id
+        });
+        const to = resource.subscriber?.email_address || ctx.payer_email;
+        if (to) {
+          sendSubscriptionCancelled({
+            to,
+            displayName: ctx.persona || ctx.gamertag || null,
+            productTitle: ctx.product_title,
+            accessEndsAtMs: until ? until * 1000 : null,
+            priceCents: ctx.price_cents,
+            currency: ctx.currency
+          }).catch(e => console.error('[cancel-mail] send failed:', e.message));
+        }
       }
       break;
     }
@@ -1958,6 +2075,19 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             amountCents: full.amount_cents, currency: full.currency,
             status: 'refunded', serverId: full.server_id
           });
+          const to = full.payer_email || resource.payer?.email_address || null;
+          if (to) {
+            sendRefundConfirmation({
+              to,
+              displayName: full.persona || full.gamertag || null,
+              productTitle: full.product_title,
+              amountCents: full.amount_cents,
+              currency: full.currency,
+              captureId: full.paypal_capture_id,
+              orderId: full.id,
+              dateMs: Date.now()
+            }).catch(e => console.error('[refund-mail] send failed:', e.message));
+          }
         }
       }
       break;

@@ -253,4 +253,169 @@ async function sendSubscriptionInvite({ to, displayName, productTitle, priceCent
   }
 }
 
-module.exports = { sendInvoice, sendSubscriptionInvite };
+// Confirmation that an auto-renewing subscription was cancelled. The buyer
+// keeps their entitlement through the end of the current paid cycle — the
+// email surfaces that end date so they don't think they lost access.
+async function sendSubscriptionCancelled({ to, displayName, productTitle, accessEndsAtMs, priceCents, currency }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to) return { ok: false, skipped: 'no_recipient' };
+
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const item = productTitle || 'your subscription';
+  const name = displayName || 'there';
+  const endsStr = accessEndsAtMs
+    ? new Date(accessEndsAtMs).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC'
+    : 'the end of your current paid period';
+  const priceLine = priceCents ? ` (${money(priceCents, currency)}/month)` : '';
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <tr><td style="background:#0d0f12;padding:24px;color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.5px">ReforgedZ</td></tr>
+        <tr><td style="padding:28px 24px;font-size:15px;color:#1a1a1a;line-height:1.55">
+          <p style="margin:0 0 12px">Hi ${esc(name)},</p>
+          <p style="margin:0 0 12px">Your <strong>${esc(item)}</strong>${esc(priceLine)} subscription has been cancelled. You won't be charged again.</p>
+          <p style="margin:0 0 12px">You keep your access through <strong>${esc(endsStr)}</strong> — that's the end of the period you already paid for.</p>
+          <p style="margin:24px 0">
+            <a href="${esc(base)}/shop" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">Re-subscribe anytime</a>
+          </p>
+          <p style="margin:0 0 12px;color:#4b5563;font-size:13px">Changed your mind, or cancelled by accident? Email <a href="mailto:contact@reforgedz.net" style="color:#2563eb;text-decoration:none">contact@reforgedz.net</a> and we'll sort it.</p>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:16px 24px;border-top:1px solid #ecedf0;font-size:12px;color:#6b7280">
+          ReforgedZ &middot; <a href="${esc(base)}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    `Hi ${name},`,
+    '',
+    `Your ${item}${priceLine} subscription has been cancelled. You won't be`,
+    'charged again.',
+    '',
+    `You keep your access through ${endsStr} — that's the end of the period`,
+    'you already paid for.',
+    '',
+    `Re-subscribe anytime: ${base}/shop`,
+    '',
+    'Changed your mind, or cancelled by accident? Email contact@reforgedz.net',
+    'and we\'ll sort it.'
+  ].join('\n');
+
+  try {
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject: `Your ${item} subscription has been cancelled`,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] cancel send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+// Confirmation that a refund was processed. Mirrors the invoice template's
+// structure but with a red "REFUNDED" badge in place of the green PAID one.
+async function sendRefundConfirmation({ to, displayName, productTitle, amountCents, currency, captureId, orderId, dateMs }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to) return { ok: false, skipped: 'no_recipient' };
+
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const item = productTitle || 'Purchase';
+  const name = displayName || 'there';
+  const amount = money(amountCents, currency);
+  const invoiceNo = orderId ? `RFGZ-${String(orderId).padStart(6, '0')}` : '';
+  const dateStr = new Date(dateMs || Date.now()).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC';
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <tr><td style="background:#0d0f12;padding:28px 24px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="font-size:20px;font-weight:700;color:#ffffff;letter-spacing:.5px">ReforgedZ</td>
+              <td style="text-align:right">
+                <div style="font-size:18px;font-weight:600;color:#ffffff;letter-spacing:2px">REFUND</div>
+                <div style="font-size:12px;color:#9aa0a6;margin-top:2px">${esc(invoiceNo)}</div>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:24px 24px 8px;font-size:15px;color:#1a1a1a;line-height:1.55">
+          <p style="margin:0 0 12px">Hi ${esc(name)},</p>
+          <p style="margin:0 0 12px">We've processed a refund of <strong>${esc(amount)}</strong> for your <strong>${esc(item)}</strong> purchase.</p>
+          <p style="margin:0 0 12px;font-size:13px;color:#4b5563">It will appear in your PayPal balance immediately, and on your linked card / bank within 3-5 business days depending on your bank.</p>
+        </td></tr>
+        <tr><td style="padding:8px 24px 16px">
+          <span style="display:inline-block;background:#fee2e2;color:#b91c1c;font-size:12px;font-weight:700;letter-spacing:1px;padding:4px 12px;border-radius:999px">REFUNDED</span>
+          <span style="color:#6b7280;font-size:12px;margin-left:8px">${esc(dateStr)}</span>
+        </td></tr>
+        ${captureId ? `<tr><td style="padding:0 24px 16px">
+          <div style="font-size:11px;color:#9ca3af">Original PayPal transaction ID: <span style="color:#6b7280">${esc(captureId)}</span></div>
+        </td></tr>` : ''}
+        <tr><td style="padding:8px 24px 24px">
+          <div style="font-size:13px;color:#4b5563;line-height:1.5;border-top:1px solid #ecedf0;padding-top:16px">
+            Any associated server access (priority queue, roles, etc.) has been removed.
+          </div>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:20px 24px;border-top:1px solid #ecedf0">
+          <div style="font-size:12px;color:#6b7280;line-height:1.6">
+            Questions about this refund? Email <a href="mailto:contact@reforgedz.net" style="color:#2563eb;text-decoration:none">contact@reforgedz.net</a>.<br>
+            ReforgedZ &middot; <a href="${esc(base)}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+          </div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    `Hi ${name},`,
+    '',
+    `We've processed a refund of ${amount} for your ${item} purchase.`,
+    '',
+    'It will appear in your PayPal balance immediately, and on your linked',
+    'card or bank within 3-5 business days depending on your bank.',
+    '',
+    captureId ? `Original PayPal transaction ID: ${captureId}` : null,
+    `Refunded on: ${dateStr}`,
+    '',
+    'Any associated server access (priority queue, roles, etc.) has been removed.',
+    '',
+    'Questions about this refund? Email contact@reforgedz.net',
+    `${base}/shop`
+  ].filter((l) => l !== null).join('\n');
+
+  try {
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject: `ReforgedZ refund ${invoiceNo ? invoiceNo + ' ' : ''}- ${item}`,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] refund send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation };

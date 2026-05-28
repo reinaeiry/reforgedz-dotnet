@@ -119,6 +119,7 @@ function buildPriorityQueueGuidsPerServer() {
     WHERE o.status = 'completed'
       AND p.grants_priority_queue = 1
       AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
+      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
   `).all();
 
   const manualRows = db.prepare(`SELECT guid, server_id FROM priority_queue_grants`).all();

@@ -254,6 +254,16 @@ if (!orderHasColumn('paypal_subscription_id')) {
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_orders_paypal_sub ON orders(paypal_subscription_id) WHERE paypal_subscription_id IS NOT NULL");
 
+// When a recurring subscription cycle was paid, this records the unix
+// timestamp the buyer's entitlement is valid through (= the next-billing
+// time PayPal reported when the cycle was created or when the sub was
+// cancelled). NULL = no expiry (one-time purchases, legacy rows). PQ sync
+// honours effective_until so cancelled-mid-cycle subs keep their queue
+// skip through the end of the period they already paid for.
+if (!orderHasColumn('effective_until')) {
+  db.exec("ALTER TABLE orders ADD COLUMN effective_until INTEGER");
+}
+
 // Self-healing backfill: Stripe session IDs encode their environment in
 // the prefix (cs_test_* vs cs_live_*), so any order still flagged as live
 // with a cs_test_ session is sandbox pollution that should be hidden from
