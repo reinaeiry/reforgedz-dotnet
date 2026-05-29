@@ -1866,8 +1866,12 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId)
         : (subId ? db.prepare('SELECT * FROM orders WHERE paypal_subscription_id = ?').get(subId) : null);
       if (found) {
+        // Don't set a capture_id here — the matching PAYMENT.SALE.COMPLETED
+        // event carries the real transaction id and will fill it in. (Older
+        // code passed subId as a placeholder, which then caused a duplicate
+        // row when SALE.COMPLETED inserted a "real" cycle on top.)
         fulfillOrder(found.id, {
-          captureId: subId,
+          captureId: null,
           payerEmail: resource.subscriber?.email_address || null,
           feeCents: null
         });
@@ -1923,48 +1927,88 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             } catch (e) {
               console.warn('[paypal] renewal next_billing_time lookup failed:', e.message);
             }
-            const ins = db.prepare(`
-              INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
-                                  paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
-                                  effective_until, completed_at, created_at)
-              VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
-            `).run(
-              original.steam_id, original.product_id, original.server_id,
-              cycleAmount, original.test_mode,
-              subId, resource.id, resource.payer?.email_address || original.payer_email || null,
-              feeCents, effectiveUntil
-            );
-            const newOrderId = ins.lastInsertRowid;
-            sendDiscordNotification({
-              eventType: 'subscription_renewed',
-              user: {
-                platform: original.platform,
-                persona: original.persona,
-                steam_id: original.steam_id,
-                gamertag: original.gamertag,
-                bm_player_id: original.bm_player_id
-              },
-              biUid: original.bi_uid,
-              productTitle: original.product_title,
-              amountCents: cycleAmount,
-              currency: original.currency,
-              status: 'completed',
-              serverId: original.server_id
-            });
-            syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-            tryAssignDiscordRoleForOrder(newOrderId);
-            if (resource.payer?.email_address || original.payer_email) {
-              sendInvoice({
-                to: resource.payer?.email_address || original.payer_email,
-                orderId: newOrderId,
-                captureId: resource.id,
+            // First-cycle case: BILLING.SUBSCRIPTION.ACTIVATED already
+            // promoted the buyer's pending order to completed with no
+            // capture id (or a legacy capture_id == subId placeholder). Fill
+            // it in here instead of inserting a duplicate row.
+            const placeholder = db.prepare(`
+              SELECT id FROM orders
+              WHERE paypal_subscription_id = ? AND status = 'completed'
+                AND (paypal_capture_id IS NULL OR paypal_capture_id = paypal_subscription_id)
+              ORDER BY id ASC LIMIT 1
+            `).get(subId);
+            let newOrderId;
+            if (placeholder) {
+              db.prepare(`
+                UPDATE orders SET
+                  paypal_capture_id = ?,
+                  payer_email = COALESCE(?, payer_email),
+                  fee_cents = ?,
+                  effective_until = COALESCE(?, effective_until),
+                  amount_cents = ?
+                WHERE id = ?
+              `).run(
+                resource.id,
+                resource.payer?.email_address || null,
+                feeCents,
+                effectiveUntil,
+                cycleAmount,
+                placeholder.id
+              );
+              newOrderId = placeholder.id;
+            } else {
+              // True renewal cycle — buyer's been on the sub for ≥1 month and
+              // this is a fresh billing. Insert a new row.
+              const ins = db.prepare(`
+                INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
+                                    paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
+                                    effective_until, completed_at, created_at)
+                VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+              `).run(
+                original.steam_id, original.product_id, original.server_id,
+                cycleAmount, original.test_mode,
+                subId, resource.id, resource.payer?.email_address || original.payer_email || null,
+                feeCents, effectiveUntil
+              );
+              newOrderId = ins.lastInsertRowid;
+            }
+            // Side effects (Discord notif, invoice, role grant, sync) only
+            // fire on TRUE renewals. The first cycle already went through
+            // fulfillOrder during BILLING.SUBSCRIPTION.ACTIVATED — re-firing
+            // here would mean two notifications and two invoice emails for
+            // a single payment.
+            if (!placeholder) {
+              sendDiscordNotification({
+                eventType: 'subscription_renewed',
+                user: {
+                  platform: original.platform,
+                  persona: original.persona,
+                  steam_id: original.steam_id,
+                  gamertag: original.gamertag,
+                  bm_player_id: original.bm_player_id
+                },
+                biUid: original.bi_uid,
                 productTitle: original.product_title,
                 amountCents: cycleAmount,
                 currency: original.currency,
-                feeCents,
-                serverLabel: SERVER_LABELS[original.server_id] || original.server_id,
-                dateMs: Date.now()
-              }).catch(e => console.error('[invoice] send failed:', e.message));
+                status: 'completed',
+                serverId: original.server_id
+              });
+              syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+              tryAssignDiscordRoleForOrder(newOrderId);
+              if (resource.payer?.email_address || original.payer_email) {
+                sendInvoice({
+                  to: resource.payer?.email_address || original.payer_email,
+                  orderId: newOrderId,
+                  captureId: resource.id,
+                  productTitle: original.product_title,
+                  amountCents: cycleAmount,
+                  currency: original.currency,
+                  feeCents,
+                  serverLabel: SERVER_LABELS[original.server_id] || original.server_id,
+                  dateMs: Date.now()
+                }).catch(e => console.error('[invoice] send failed:', e.message));
+              }
             }
           }
         }
