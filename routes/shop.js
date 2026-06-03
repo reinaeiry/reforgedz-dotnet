@@ -121,10 +121,24 @@ function perServerStockUsed(productId) {
   return out;
 }
 
+// Per-server stock cap for a server_specific product. Honours the optional
+// stock_limit_overrides JSON map ({serverId: limit}); falls back to the shared
+// stock_limit when a server isn't listed there.
+function effectiveStockLimit(product, serverId) {
+  const raw = product.stock_limit_overrides;
+  if (raw) {
+    let ov = raw;
+    if (typeof raw === 'string') { try { ov = JSON.parse(raw); } catch { ov = null; } }
+    if (ov && ov[serverId] != null) return ov[serverId];
+  }
+  return product.stock_limit;
+}
+
 function attachStock(product) {
   if (!product) return product;
   if (product.server_specific) {
     product.per_server_used = perServerStockUsed(product.id);
+    product.per_server_limit = Object.fromEntries(SERVER_IDS.map(id => [id, effectiveStockLimit(product, id)]));
     product.stock_used = Object.values(product.per_server_used).reduce((a, b) => a + b, 0);
     product.sold_out = false;
   } else {
@@ -200,7 +214,7 @@ function requireAdmin(req, res, next) {
 // Get active products
 router.get('/api/shop/products', (req, res) => {
   const products = db.prepare(`
-    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, active
+    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, active
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
   res.json(products.map(p => attachStock(attachImages(p))));
@@ -238,9 +252,10 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Pick a server for this purchase.' });
     }
     orderServerId = serverId;
-    if (product.stock_limit != null) {
+    const effLimit = effectiveStockLimit(product, serverId);
+    if (effLimit != null) {
       const used = perServerStockUsed(product.id)[serverId] || 0;
-      if (used >= product.stock_limit) {
+      if (used >= effLimit) {
         const buyerOnServer = db.prepare(`
           SELECT 1 FROM orders WHERE product_id = ? AND server_id = ? AND steam_id = ? AND status = 'completed' LIMIT 1
         `).get(product.id, serverId, req.user.steam_id);

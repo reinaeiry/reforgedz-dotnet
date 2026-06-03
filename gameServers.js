@@ -1,5 +1,5 @@
 const SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2'];
-const SERVER_LABELS = { eu1: 'EU1', eu2: 'EU2', eu3: 'EU3', na1: 'NA1', na2: 'NA2' };
+const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Chernarus)', eu3: 'EU3 (Everon)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Chernarus)' };
 
 // Given the shop's purchases.json path (which sits deep inside the
 // pterodactyl volume), strip back to the volume root and append the

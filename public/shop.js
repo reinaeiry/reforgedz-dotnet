@@ -13,7 +13,7 @@ if (!['USD', 'GBP', 'EUR'].includes(currentCurrency)) currentCurrency = 'USD';
 const CURRENCY_SYMBOLS = { USD: '$', GBP: '£', EUR: '€' };
 const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
 const SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2'];
-const SERVER_LABELS = { eu1: 'EU1', eu2: 'EU2', eu3: 'EU3', na1: 'NA1', na2: 'NA2' };
+const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Chernarus)', eu3: 'EU3 (Everon)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Chernarus)' };
 
 // ---- DOM refs (static elements only — re-queried as needed for dynamic ones) ----
 const navAuth = document.getElementById('navAuth');
@@ -125,7 +125,9 @@ function formatTypeLabel(type, intervalDays) {
 function stockBadgeHtml(p) {
   if (p.stock_limit == null) return '';
   const used = p.stock_used || 0;
-  const totalCap = p.server_specific ? p.stock_limit * SERVER_IDS.length : p.stock_limit;
+  const totalCap = p.server_specific
+    ? (p.per_server_limit ? Object.values(p.per_server_limit).reduce((a, b) => a + (b || 0), 0) : p.stock_limit * SERVER_IDS.length)
+    : p.stock_limit;
   const remaining = Math.max(0, totalCap - used);
   if (remaining === 0) return '<span class="stock-badge sold-out">Sold out</span>';
   const cls = remaining <= Math.max(1, Math.floor(totalCap * 0.2)) ? 'low' : 'available';
@@ -581,9 +583,10 @@ function renderServerPicker(product) {
   }
   wrap.style.display = '';
   const used = product.per_server_used || {};
-  const limit = product.stock_limit;
+  const limits = product.per_server_limit || {};
   grid.innerHTML = SERVER_IDS.map(id => {
     const u = used[id] || 0;
+    const limit = (limits[id] != null) ? limits[id] : product.stock_limit;
     const stock = (limit != null) ? `${Math.max(0, limit - u)} / ${limit}` : 'Unlimited';
     const isFull = limit != null && u >= limit;
     const selected = id === selectedServerId ? ' selected' : '';
@@ -678,7 +681,8 @@ function updateDetailBuyButton() {
       return;
     }
     const used = (product.per_server_used || {})[selectedServerId] || 0;
-    if (product.stock_limit != null && used >= product.stock_limit) {
+    const limit = (product.per_server_limit && product.per_server_limit[selectedServerId] != null) ? product.per_server_limit[selectedServerId] : product.stock_limit;
+    if (limit != null && used >= limit) {
       buyBtn.textContent = `Sold out on ${SERVER_LABELS[selectedServerId]}`;
       buyBtn.disabled = true;
       buyBtn.onclick = null;

@@ -134,6 +134,12 @@ if (!productHasColumn('price_max_cents')) {
 if (!productHasColumn('discord_role_id')) {
   db.exec("ALTER TABLE products ADD COLUMN discord_role_id TEXT");
 }
+// Optional per-server stock caps for server_specific products, as a JSON map
+// of serverId -> limit (e.g. {"eu3":40}). Servers absent from the map fall
+// back to the product's shared stock_limit.
+if (!productHasColumn('stock_limit_overrides')) {
+  db.exec("ALTER TABLE products ADD COLUMN stock_limit_overrides TEXT");
+}
 if (!userHasColumn('discord_id')) {
   db.exec("ALTER TABLE users ADD COLUMN discord_id TEXT");
 }
