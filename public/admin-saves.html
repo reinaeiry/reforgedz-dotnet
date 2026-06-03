@@ -108,7 +108,12 @@
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     function curServer(){ return $('server').value; }
     function canWrite(){ return serverRunning === false; }
-    function download(rel){ window.location.href = `/api/shop/admin/save-download?server=${encodeURIComponent(curServer())}&path=${encodeURIComponent(rel)}`; }
+    function download(rel){
+      const u = `/api/shop/admin/save-download?server=${encodeURIComponent(curServer())}&path=${encodeURIComponent(rel)}`;
+      const a = document.createElement('a');
+      a.href = u; a.download = ''; a.style.display = 'none';
+      document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 0);
+    }
 
     function setBanner(state, text){
       const b = $('banner'); b.className = 'si-banner ' + state;
@@ -193,6 +198,7 @@
           <span class="si-result-id">${esc(rec.id)}</span>
           ${rec.role?`<span class="si-role${/^This /.test(rec.role)?' own':''}" title="${esc((rec.matchPaths||[]).join(', '))}">${esc(rec.role)}</span>`:''}
           <span class="si-result-meta">
+            <span class="si-act" onclick="event.stopPropagation();copyRecord(this)">Copy</span>
             ${linkedId?`<span class="si-act" onclick="event.stopPropagation();loadLinked(this,'${esc(linkedId)}')">Linked character</span>`:''}
             <span class="si-act" onclick="event.stopPropagation();toggleEdit(this)">Edit</span>
             <span class="si-act del${dis ? ' disabled':''}" onclick="event.stopPropagation();dropRecord(this)">Drop</span>
@@ -287,6 +293,22 @@
       } catch { alert('Drop failed.'); updateOrphBtn(); }
     }
 
+    function copyRecord(btn){
+      const box = btn.closest('.si-result');
+      const ta = box.querySelector('textarea');
+      const text = ta ? ta.value : (box.querySelector('pre') ? box.querySelector('pre').textContent : '');
+      const done = () => { const o = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = o, 1200); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+      } else { fallbackCopy(text, done); }
+    }
+    function fallbackCopy(text, done){
+      const t = document.createElement('textarea'); t.value = text; t.style.position='fixed'; t.style.opacity='0';
+      document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); done(); } catch {}
+      t.remove();
+    }
+    window.copyRecord=copyRecord;
     window.download=download; window.loadLinked=loadLinked; window.togglePre=togglePre;
     window.toggleEdit=toggleEdit; window.saveEdit=saveEdit; window.cancelEdit=cancelEdit; window.dropRecord=dropRecord;
     window.updateOrphBtn=updateOrphBtn;
