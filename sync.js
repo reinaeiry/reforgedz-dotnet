@@ -429,7 +429,7 @@ async function getSaveRecord(serverId, entityId) {
   if (!privateKey) throw new Error('SSH key not configured');
   const entryHost = servers.find(s => s.region === 'eu') || servers[0];
 
-  const inner = `SB='${saveBase}'; f=$(find "$SB" -name '${id}.json' 2>/dev/null | head -1); [ -n "$f" ] && echo "FILE:$f:$(base64 -w0 "$f")"`;
+  const inner = `SB='${saveBase}'; f=$(find "$SB" -name '${id}.json' 2>/dev/null | head -1); if [ -n "$f" ]; then echo "FILE:$f:$(base64 -w0 "$f")"; fi`;
   const cmd = wrapForRegion(server, inner);
   const conn = await sshOpen(privateKey, entryHost.host, entryHost.port, entryHost.user);
   let out;
