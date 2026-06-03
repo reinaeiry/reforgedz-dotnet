@@ -90,6 +90,9 @@
       <div class="si-sub">Search, edit, drop & clean the ReforgedZ persistence. Edits/drops need the server stopped and are backed up to a recoverable trash folder.</div>
 
       <div id="banner" class="si-banner unknown"><span class="si-dot unknown"></span><span>Checking server status…</span></div>
+      <label id="forceWrap" style="display:none;align-items:center;gap:8px;margin:-8px 0 16px;font-size:.82rem;color:var(--si-mut);cursor:pointer">
+        <input type="checkbox" id="forceWrite"> <span>Allow edits while the server is running — dead bodies &amp; orphaned records drop and stay (they're not in the server's memory). Anything still live — your current character, occupied vehicles, active bases — gets re-saved by the server and reappears.</span>
+      </label>
 
       <div class="si-tabs">
         <div class="si-tab active" data-tab="search">Search</div>
@@ -150,15 +153,19 @@
     const catColor = (c) => CAT_COLORS[c] || '#5a5a64';
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     function curServer(){ return $('server').value; }
-    function canWrite(){ return serverRunning === false; }
+    function forceWrite(){ const c=$('forceWrite'); return !!(c && c.checked); }
+    function canWrite(){ return serverRunning === false || (serverRunning === true && forceWrite()); }
+    function applyWriteState(){
+      document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
+      updateOrphBtn(); updateDeadBtn();
+    }
     function download(rel){ const u=`/api/shop/admin/save-download?server=${encodeURIComponent(curServer())}&path=${encodeURIComponent(rel)}`; const a=document.createElement('a'); a.href=u; a.download=''; a.style.display='none'; document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(),0); }
 
     function setBanner(state, text){
       $('banner').className = 'si-banner ' + state;
       $('banner').innerHTML = `<span class="si-dot ${state}"></span><span>${esc(text)}</span>`;
-      document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
-      updateOrphBtn();
-      updateDeadBtn();
+      const fw = $('forceWrap'); if (fw) fw.style.display = (serverRunning === true) ? 'flex' : 'none';
+      applyWriteState();
     }
     async function refreshStatus(){
       serverRunning=null; setBanner('unknown','Checking server status…');
@@ -183,6 +190,7 @@
 
       $('server').onchange = () => { statsLoaded=false; refreshStatus(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('note').textContent=''; };
       $('refreshStatus').onclick = refreshStatus;
+      $('forceWrite').onchange = applyWriteState;
       $('searchBtn').onclick = doSearch;
       $('q').addEventListener('keydown', e => { if (e.key==='Enter') doSearch(); });
       $('statsRefresh').onclick = () => loadStats(true);
@@ -321,7 +329,7 @@
       if (!confirm(`Save changes to\n${id}?\n\nThe server must be stopped. The previous version is backed up.`)) return;
       btn.textContent='Saving…';
       try {
-        const r = await (await fetch('/api/shop/admin/save-update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),id,json:JSON.stringify(parsed)})})).json();
+        const r = await (await fetch('/api/shop/admin/save-update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),id,json:JSON.stringify(parsed),force:forceWrite()})})).json();
         if (r.error){ alert('Save failed: '+r.error); btn.textContent='Save changes'; return; }
         const pre=card.querySelector('pre'); pre.textContent=JSON.stringify(parsed,null,2); pre.style.display='block';
         ta.remove(); btn.closest('.si-editbar').remove();
@@ -332,7 +340,7 @@
       if (!canWrite()){ alert('Stop the server first — a delete on a running server can reappear.'); return; }
       if (!confirm(`⚠️ ARE YOU SURE?\n\nDrop this record as a LAST RESORT:\n${id}\n\nIt moves to a recoverable trash folder on the server. Continue?`)) return;
       try {
-        const r = await (await fetch('/api/shop/admin/save-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),ids:[id]})})).json();
+        const r = await (await fetch('/api/shop/admin/save-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),ids:[id],force:forceWrite()})})).json();
         if (r.error){ alert('Drop failed: '+r.error); return; }
         card.style.opacity='.4'; card.querySelector('.si-acts').innerHTML=`<span class="si-note">Dropped → trash</span>`;
       } catch { alert('Drop failed.'); }
@@ -393,7 +401,7 @@
       if (!confirm(`Final confirm: purging ${orphanCount.toLocaleString()} ${cat} records on ${curServer().toUpperCase()}. Proceed?`)) return;
       $('orphPurge').disabled=true; $('orphPurge').textContent='Purging…';
       try {
-        const r = await (await fetch('/api/shop/admin/save-purge-orphans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),category:cat})})).json();
+        const r = await (await fetch('/api/shop/admin/save-purge-orphans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),category:cat,force:forceWrite()})})).json();
         if (r.error){ alert('Purge failed: '+r.error); updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans'; return; }
         $('orphNote').innerHTML=`<span class="si-ok">Purged ${r.moved.toLocaleString()} orphaned ${cat} records → trash. Start the server and verify it's healthy.</span>`;
         $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans';
@@ -432,7 +440,7 @@
       if (!confirm(`Final confirm: purging ${deadCount.toLocaleString()} dead characters on ${curServer().toUpperCase()}. Proceed?`)) return;
       $('deadPurge').disabled=true; $('deadPurge').textContent='Purging…';
       try {
-        const r = await (await fetch('/api/shop/admin/save-purge-dead',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer()})})).json();
+        const r = await (await fetch('/api/shop/admin/save-purge-dead',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),force:forceWrite()})})).json();
         if (r.error){ alert('Purge failed: '+r.error); updateDeadBtn(); return; }
         $('deadNote').innerHTML=`<span class="si-ok">Moved ${r.moved.toLocaleString()} dead character${r.moved===1?'':'s'} → trash. Start the server and verify it's healthy.</span>`;
         $('deadList').innerHTML=''; deadCount=0; statsLoaded=false; updateDeadBtn();
@@ -446,7 +454,7 @@
       if (ids.length>50 && !confirm(`Confirm again: dropping ${ids.length} items. Proceed?`)) return;
       $('orphDelete').disabled=true; $('orphDelete').textContent='Dropping…';
       try {
-        const r = await (await fetch('/api/shop/admin/save-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),ids})})).json();
+        const r = await (await fetch('/api/shop/admin/save-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),ids,force:forceWrite()})})).json();
         if (r.error){ alert('Drop failed: '+r.error); updateOrphBtn(); return; }
         $('orphNote').innerHTML=`<span class="si-ok">Dropped ${r.moved} of ${r.requested} → trash</span>`;
         ids.forEach(id=>document.querySelector(`.orph-cb[data-id="${id}"]`)?.closest('.si-orph-row')?.remove());

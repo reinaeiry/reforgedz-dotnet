@@ -537,8 +537,10 @@ async function getServerRunning(serverId) {
 // uuid AND saveBase so the docker-unavailable fallback can check save activity.
 const RUNNING_GUARD = (uuid, saveBase) => `${detectRunningSnippet(uuid, saveBase)}; if [ "$__RZ_RUN" = RUNNING ]; then echo RUNNING; exit 0; fi`;
 
-// Overwrite a record's JSON (server must be stopped). Backs up the old version.
-async function updateSaveRecord(serverId, entityId, jsonText) {
+// Overwrite a record's JSON. Server should be stopped; pass force=true to proceed
+// while running (safe for dormant records — the server doesn't re-read files at
+// runtime — but a live entity's record is overwritten by the next savepoint).
+async function updateSaveRecord(serverId, entityId, jsonText, force = false) {
   const id = String(entityId == null ? '' : entityId).trim();
   if (!/^[0-9a-fA-F-]{6,64}$/.test(id)) throw new Error('Invalid entity id');
   let obj;
@@ -547,33 +549,35 @@ async function updateSaveRecord(serverId, entityId, jsonText) {
   const ctx = await saveOpContext(serverId);
   const b64 = Buffer.from(newJson, 'utf8').toString('base64');
   const inner = [
-    RUNNING_GUARD(ctx.uuid, ctx.saveBase),
+    force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; TRASH='${ctx.trashBase}/edits'`,
     `f=$(find "$SB" -name '${id}.json' 2>/dev/null | head -1)`,
     `[ -z "$f" ] && { echo NOTFOUND; exit 0; }`,
     `mkdir -p "$TRASH"; cp "$f" "$TRASH/${id}.$(date +%s).bak.json"`,
     `printf %s '${b64}' | base64 -d > "$f"`,
     `echo OK`,
-  ].join('; ');
+  ].filter(Boolean).join('; ');
   const out = (await runOn(ctx, inner)).trim();
   if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
   if (out.includes('NOTFOUND')) return { ok: false, error: 'not_found' };
   return { ok: out.includes('OK') };
 }
 
-// Move records to the recoverable trash (server must be stopped).
-async function deleteSaveRecords(serverId, ids) {
+// Move records to the recoverable trash. Server should be stopped; pass force=true
+// to proceed while running (dead/orphan records drop and stay — they're not in the
+// server's memory; a live entity's record just gets re-saved on the next savepoint).
+async function deleteSaveRecords(serverId, ids, force = false) {
   const valid = (Array.isArray(ids) ? ids : []).map(x => String(x).trim()).filter(x => /^[0-9a-fA-F-]{6,64}$/.test(x));
   if (!valid.length) throw new Error('No valid ids');
   if (valid.length > 5000) throw new Error('Too many at once (max 5000)');
   const ctx = await saveOpContext(serverId);
   const idsB64 = Buffer.from(valid.join('\n'), 'utf8').toString('base64');
   const inner = [
-    RUNNING_GUARD(ctx.uuid, ctx.saveBase),
+    force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; TS=$(date +%s); TRASH="${ctx.trashBase}/deleted/$TS"; mkdir -p "$TRASH"`,
     `printf %s '${idsB64}' | base64 -d | while IFS= read -r id; do [ -z "$id" ] && continue; f=$(find "$SB" -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && mv "$f" "$TRASH/"; done`,
     `echo "MOVED:$(ls "$TRASH" 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
-  ].join('; ');
+  ].filter(Boolean).join('; ');
   const out = (await runOn(ctx, inner)).trim();
   if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
   const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
@@ -620,13 +624,14 @@ async function scanOrphans(serverId, category = 'Item', limit = 1000) {
   return { category: cat, total: all, orphanCount: total, shown: orphans.length, orphans };
 }
 
-// Move ALL orphans of a category to the recoverable trash in one pass (server
-// must be stopped). Efficient (glob mv, no per-id find) for large cleanups.
-async function purgeOrphans(serverId, category) {
+// Move ALL orphans of a category to the recoverable trash in one pass. Server
+// should be stopped; pass force=true to run while up (orphans are dormant — not in
+// server memory — so they drop and stay). Efficient (glob mv) for large cleanups.
+async function purgeOrphans(serverId, category, force = false) {
   const cat = safeCategory(category);
   const ctx = await saveOpContext(serverId);
   const inner = [
-    RUNNING_GUARD(ctx.uuid, ctx.saveBase),
+    force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
     `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/orphans-${cat}-$TS"; mkdir -p "$TRASH"`,
     `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/ids"`,
@@ -634,7 +639,7 @@ async function purgeOrphans(serverId, category) {
     `comm -23 "$T/ids" "$T/refs" | while IFS= read -r id; do mv "$SB"/*/gamemode/${cat}/"$id".json "$TRASH/" 2>/dev/null; done`,
     `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
     `rm -rf "$T"`,
-  ].join('; ');
+  ].filter(Boolean).join('; ');
   const out = (await runOn(ctx, inner)).trim();
   if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
   const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
@@ -678,19 +683,20 @@ async function scanDeadCharacters(serverId, limit = 1000) {
 }
 
 // Move every confirmed-dead character (Health hitzone <= 0) to the recoverable
-// trash in one pass (server must be stopped). A dead body still linked to a
-// player just means that player fresh-spawns on next join — the intended result.
-async function purgeDeadCharacters(serverId) {
+// trash in one pass. Server should be stopped; pass force=true to run while up —
+// dead bodies are dormant (despawned, not in memory), so they drop and stay. A dead
+// body still linked to a player just means that player fresh-spawns on next join.
+async function purgeDeadCharacters(serverId, force = false) {
   const ctx = await saveOpContext(serverId);
   const inner = [
-    RUNNING_GUARD(ctx.uuid, ctx.saveBase),
+    force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
     `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/dead-characters-$TS"; mkdir -p "$TRASH"`,
     `find "$SB"/*/gamemode/Character -name '*.json' -print0 2>/dev/null | xargs -0 -r jq -r '${DEAD_HEALTH_JQ} as $h | select($h != null and $h <= 0) | input_filename' 2>/dev/null > "$T/deadfiles"`,
     `while IFS= read -r f; do [ -n "$f" ] && mv "$f" "$TRASH/" 2>/dev/null; done < "$T/deadfiles"`,
     `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
     `rm -rf "$T"`,
-  ].join('; ');
+  ].filter(Boolean).join('; ');
   const out = (await runOn(ctx, inner)).trim();
   if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
   const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;

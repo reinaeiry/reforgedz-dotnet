@@ -1182,10 +1182,10 @@ router.get('/api/shop/admin/save-status', requireAdmin, async (req, res) => {
 });
 
 router.post('/api/shop/admin/save-update', requireAdmin, async (req, res) => {
-  const { server, id, json } = req.body || {};
+  const { server, id, json, force } = req.body || {};
   if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
-    const r = await updateSaveRecord(server, id, json);
+    const r = await updateSaveRecord(server, id, json, force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first (changes would be overwritten).' });
     if (!r.ok && r.error === 'not_found') return res.status(404).json({ error: 'Record not found.' });
     if (!r.ok && r.error === 'Invalid JSON') return res.status(400).json({ error: 'Invalid JSON.' });
@@ -1197,10 +1197,10 @@ router.post('/api/shop/admin/save-update', requireAdmin, async (req, res) => {
 });
 
 router.post('/api/shop/admin/save-delete', requireAdmin, async (req, res) => {
-  const { server, ids } = req.body || {};
+  const { server, ids, force } = req.body || {};
   if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
-    const r = await deleteSaveRecords(server, ids);
+    const r = await deleteSaveRecords(server, ids, force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first (a delete can reappear).' });
     res.json(r);
   } catch (e) {
@@ -1221,10 +1221,10 @@ router.get('/api/shop/admin/save-orphans', requireAdmin, async (req, res) => {
 });
 
 router.post('/api/shop/admin/save-purge-orphans', requireAdmin, async (req, res) => {
-  const { server, category } = req.body || {};
+  const { server, category, force } = req.body || {};
   if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
-    const r = await purgeOrphans(server, category || 'Item');
+    const r = await purgeOrphans(server, category || 'Item', force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
     res.json(r);
   } catch (e) {
@@ -1245,10 +1245,10 @@ router.get('/api/shop/admin/save-scan-dead', requireAdmin, async (req, res) => {
 });
 
 router.post('/api/shop/admin/save-purge-dead', requireAdmin, async (req, res) => {
-  const { server } = req.body || {};
+  const { server, force } = req.body || {};
   if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
-    const r = await purgeDeadCharacters(server);
+    const r = await purgeDeadCharacters(server, force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
     res.json(r);
   } catch (e) {
