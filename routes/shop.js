@@ -146,13 +146,37 @@ function pqUsedPerServer() {
   return out;
 }
 
+// Hard cap on entries in a server's game.admins before Reforger errors on the
+// config. Priority-queue stock is squeezed so that PQ + GMs never exceeds it.
+const ADMIN_CEILING = parseInt(process.env.ADMIN_CEILING || '50', 10);
+
+// Non-PQ admins (GMs + owner) per server, recorded by sync.js on each run.
+function gmCountPerServer() {
+  const out = Object.fromEntries(SERVER_IDS.map(id => [id, 0]));
+  for (const row of db.prepare('SELECT server_id, non_shop_admin_count FROM config_admin_sync_state').all()) {
+    if (row.server_id in out) out[row.server_id] = row.non_shop_admin_count || 0;
+  }
+  return out;
+}
+
 function attachStock(product) {
   if (!product) return product;
   if (product.server_specific) {
-    product.per_server_used = product.grants_priority_queue
-      ? pqUsedPerServer()
-      : perServerStockUsed(product.id);
-    product.per_server_limit = Object.fromEntries(SERVER_IDS.map(id => [id, effectiveStockLimit(product, id)]));
+    const isPq = !!product.grants_priority_queue;
+    product.per_server_used = isPq ? pqUsedPerServer() : perServerStockUsed(product.id);
+    const gm = isPq ? gmCountPerServer() : {};
+    product.per_server_limit = {};      // the configured cap (display denominator)
+    product.per_server_available = {};  // how many can still be sold (numerator)
+    for (const id of SERVER_IDS) {
+      const cap = effectiveStockLimit(product, id);
+      product.per_server_limit[id] = cap;
+      if (cap == null) { product.per_server_available[id] = null; continue; }
+      const used = product.per_server_used[id] || 0;
+      // For PQ the real ceiling is min(cap, ADMIN_CEILING - GMs), so PQ + GMs
+      // can never push game.admins past the limit. e.g. cap 40, 15 GMs -> 25/40.
+      const effective = isPq ? Math.min(cap, ADMIN_CEILING - (gm[id] || 0)) : cap;
+      product.per_server_available[id] = Math.max(0, effective - used);
+    }
     product.stock_used = Object.values(product.per_server_used).reduce((a, b) => a + b, 0);
     product.sold_out = false;
   } else {
@@ -206,6 +230,10 @@ function sweepExpiredEntitlements() {
   }
 }
 setInterval(sweepExpiredEntitlements, 5 * 60 * 1000);
+
+// Periodic re-sync so each server's recorded GM count (which the PQ stock math
+// subtracts from the admin ceiling) stays fresh even with no purchase activity.
+setInterval(() => syncPurchasesToServers().catch(e => console.error('[sync periodic] Error:', e.message)), 10 * 60 * 1000);
 
 // ---- Middleware helpers ----
 function requireAuth(req, res, next) {
@@ -268,22 +296,25 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     orderServerId = serverId;
     const effLimit = effectiveStockLimit(product, serverId);
     if (effLimit != null) {
-      let used, alreadyHas;
+      let used, alreadyHas, limit = effLimit;
       if (product.grants_priority_queue) {
         // Gate against the real reserved set (effective purchases + manual
         // grants, deduped by GUID) so manual grants can't push game.admins
         // past the cap. A buyer whose GUID is already reserved here is a
-        // renewal — let them through (they don't add a new slot).
+        // renewal — let them through (they don't add a new slot). The cap is
+        // also squeezed by the server's GM count so PQ + GMs <= ADMIN_CEILING.
         const set = buildPriorityQueueGuidsPerServer()[serverId] || new Set();
         used = set.size;
         alreadyHas = !!(req.user.bi_uid && set.has(req.user.bi_uid));
+        const gm = gmCountPerServer()[serverId] || 0;
+        limit = Math.min(effLimit, ADMIN_CEILING - gm);
       } else {
         used = perServerStockUsed(product.id)[serverId] || 0;
         alreadyHas = !!db.prepare(`
           SELECT 1 FROM orders WHERE product_id = ? AND server_id = ? AND steam_id = ? AND status = 'completed' LIMIT 1
         `).get(product.id, serverId, req.user.steam_id);
       }
-      if (used >= effLimit && !alreadyHas) {
+      if (used >= limit && !alreadyHas) {
         return res.status(409).json({ error: `Sold out on ${SERVER_LABELS[serverId] || serverId.toUpperCase()}.` });
       }
     }

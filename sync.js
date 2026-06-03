@@ -198,6 +198,18 @@ async function patchServerAdmins(conn, server, desiredGuids) {
     previouslyOwned = new Set();
   }
 
+  // Record the non-shop (GM/owner) admin count so the shop can cap priority
+  // queue at (ceiling - GMs) and never push game.admins past the limit. Stored
+  // every sync, including the no-op case handled below.
+  const nonShopAdminCount = currentAdmins.filter(g => !previouslyOwned.has(g)).length;
+  db.prepare(`
+    INSERT INTO config_admin_sync_state (server_id, non_shop_admin_count, updated_at)
+    VALUES (?, ?, unixepoch())
+    ON CONFLICT(server_id) DO UPDATE SET
+      non_shop_admin_count = excluded.non_shop_admin_count,
+      updated_at = excluded.updated_at
+  `).run(server.id, nonShopAdminCount);
+
   // 3) Compute new array: strip OUR previously-owned entries that are no longer
   //    desired, then add OUR currently-desired entries. Entries from the GM tab
   //    (or anything else) live untouched in `currentAdmins`.

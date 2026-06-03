@@ -196,6 +196,13 @@ db.exec(`
   )
 `);
 
+// Count of admins in each server's game.admins that the shop did NOT put there
+// (GMs + the owner). Recorded on every sync so the shop can cap priority-queue
+// stock at (admin ceiling - GMs) and never push game.admins past the 50 limit.
+if (!db.prepare("PRAGMA table_info(config_admin_sync_state)").all().some(c => c.name === 'non_shop_admin_count')) {
+  db.exec("ALTER TABLE config_admin_sync_state ADD COLUMN non_shop_admin_count INTEGER NOT NULL DEFAULT 0");
+}
+
 // Repair: an earlier migration of `products` had SQLite's
 // auto-rewrite-of-references behavior on, which silently rewrote
 // orders.product_id's FK target to `products_old`. After that table

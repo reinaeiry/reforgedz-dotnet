@@ -128,7 +128,9 @@ function stockBadgeHtml(p) {
   const totalCap = p.server_specific
     ? (p.per_server_limit ? Object.values(p.per_server_limit).reduce((a, b) => a + (b || 0), 0) : p.stock_limit * SERVER_IDS.length)
     : p.stock_limit;
-  const remaining = Math.max(0, totalCap - used);
+  const remaining = (p.server_specific && p.per_server_available)
+    ? Object.values(p.per_server_available).reduce((a, b) => a + (b || 0), 0)
+    : Math.max(0, totalCap - used);
   if (remaining === 0) return '<span class="stock-badge sold-out">Sold out</span>';
   const cls = remaining <= Math.max(1, Math.floor(totalCap * 0.2)) ? 'low' : 'available';
   return `<span class="stock-badge ${cls}">${remaining} / ${totalCap} left</span>`;
@@ -584,11 +586,13 @@ function renderServerPicker(product) {
   wrap.style.display = '';
   const used = product.per_server_used || {};
   const limits = product.per_server_limit || {};
+  const avail = product.per_server_available || {};
   grid.innerHTML = SERVER_IDS.map(id => {
     const u = used[id] || 0;
     const limit = (limits[id] != null) ? limits[id] : product.stock_limit;
-    const stock = (limit != null) ? `${Math.max(0, limit - u)} / ${limit}` : 'Unlimited';
-    const isFull = limit != null && u >= limit;
+    const available = (avail[id] != null) ? avail[id] : ((limit != null) ? Math.max(0, limit - u) : null);
+    const stock = (limit != null) ? `${available} / ${limit}` : 'Unlimited';
+    const isFull = limit != null && available <= 0;
     const selected = id === selectedServerId ? ' selected' : '';
     return `
       <button type="button" class="detail-server-btn${selected}" data-server-id="${id}" ${isFull ? 'disabled' : ''}>
@@ -682,7 +686,9 @@ function updateDetailBuyButton() {
     }
     const used = (product.per_server_used || {})[selectedServerId] || 0;
     const limit = (product.per_server_limit && product.per_server_limit[selectedServerId] != null) ? product.per_server_limit[selectedServerId] : product.stock_limit;
-    if (limit != null && used >= limit) {
+    const availMap = product.per_server_available || {};
+    const available = (availMap[selectedServerId] != null) ? availMap[selectedServerId] : ((limit != null) ? Math.max(0, limit - used) : null);
+    if (available != null && available <= 0) {
       buyBtn.textContent = `Sold out on ${SERVER_LABELS[selectedServerId]}`;
       buyBtn.disabled = true;
       buyBtn.onclick = null;
