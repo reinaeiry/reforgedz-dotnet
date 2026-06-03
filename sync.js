@@ -507,14 +507,35 @@ async function runOn(ctx, inner) {
   try { return await sshRun(conn, cmd); } finally { conn.end(); }
 }
 
-// Is the game-server container currently running? (destructive ops are blocked when it is)
-async function getServerRunning(serverId) {
-  const ctx = await saveOpContext(serverId);
-  const out = await runOn(ctx, `docker ps -q -f name=${ctx.uuid} 2>/dev/null | head -1`);
-  return String(out).trim().length > 0;
+// Robust "is the game server running?" probe. Two-tier so it can NEVER silently
+// mis-report a live server as stopped (which would let an admin edit a save that
+// the running server then overwrites — exactly the EU3 "drop didn't stick" bug):
+//   1. docker — if `docker ps` RUNS cleanly (exit 0), trust it: container present
+//      = running, absent = stopped. Exact, used wherever the SSH user sees docker.
+//   2. fallback — if docker is unavailable to that user/host (e.g. the EU3 nested
+//      hop runs as a non-docker user, so the probe errors), infer from save activity:
+//      a running server rewrites a .json under the save root every few minutes, so a
+//      write in the last 10 min = running. Fails safe toward "running" when unsure.
+// Emits RUNNING or STOPPED into $__RZ_RUN.
+function detectRunningSnippet(uuid, saveBase) {
+  return [
+    `__RZ_RUN=STOPPED; __RZ_DOK=no`,
+    `if command -v docker >/dev/null 2>&1; then __RZ_O=$(docker ps -q -f name=${uuid} 2>/dev/null); if [ $? -eq 0 ]; then __RZ_DOK=yes; [ -n "$__RZ_O" ] && __RZ_RUN=RUNNING; fi; fi`,
+    `if [ "$__RZ_DOK" = no ]; then __RZ_O=$(find '${saveBase}' -name '*.json' -mmin -10 -print -quit 2>/dev/null); [ -n "$__RZ_O" ] && __RZ_RUN=RUNNING; fi`,
+  ].join('; ');
 }
 
-const RUNNING_GUARD = (uuid) => `if docker ps -q -f name=${uuid} 2>/dev/null | grep -q .; then echo RUNNING; exit 0; fi`;
+// Is the game server running? (destructive ops are blocked when it is)
+async function getServerRunning(serverId) {
+  const ctx = await saveOpContext(serverId);
+  const out = await runOn(ctx, `${detectRunningSnippet(ctx.uuid, ctx.saveBase)}; echo "$__RZ_RUN"`);
+  return /RUNNING/.test(String(out));
+}
+
+// Embeddable guard for destructive ops: prints RUNNING and exits early if the
+// server appears to be up (or can't be confirmed down). Pass the op context's
+// uuid AND saveBase so the docker-unavailable fallback can check save activity.
+const RUNNING_GUARD = (uuid, saveBase) => `${detectRunningSnippet(uuid, saveBase)}; if [ "$__RZ_RUN" = RUNNING ]; then echo RUNNING; exit 0; fi`;
 
 // Overwrite a record's JSON (server must be stopped). Backs up the old version.
 async function updateSaveRecord(serverId, entityId, jsonText) {
@@ -526,7 +547,7 @@ async function updateSaveRecord(serverId, entityId, jsonText) {
   const ctx = await saveOpContext(serverId);
   const b64 = Buffer.from(newJson, 'utf8').toString('base64');
   const inner = [
-    RUNNING_GUARD(ctx.uuid),
+    RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; TRASH='${ctx.trashBase}/edits'`,
     `f=$(find "$SB" -name '${id}.json' 2>/dev/null | head -1)`,
     `[ -z "$f" ] && { echo NOTFOUND; exit 0; }`,
@@ -548,7 +569,7 @@ async function deleteSaveRecords(serverId, ids) {
   const ctx = await saveOpContext(serverId);
   const idsB64 = Buffer.from(valid.join('\n'), 'utf8').toString('base64');
   const inner = [
-    RUNNING_GUARD(ctx.uuid),
+    RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; TS=$(date +%s); TRASH="${ctx.trashBase}/deleted/$TS"; mkdir -p "$TRASH"`,
     `printf %s '${idsB64}' | base64 -d | while IFS= read -r id; do [ -z "$id" ] && continue; f=$(find "$SB" -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && mv "$f" "$TRASH/"; done`,
     `echo "MOVED:$(ls "$TRASH" 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
@@ -605,7 +626,7 @@ async function purgeOrphans(serverId, category) {
   const cat = safeCategory(category);
   const ctx = await saveOpContext(serverId);
   const inner = [
-    RUNNING_GUARD(ctx.uuid),
+    RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
     `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/orphans-${cat}-$TS"; mkdir -p "$TRASH"`,
     `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/ids"`,
@@ -662,7 +683,7 @@ async function scanDeadCharacters(serverId, limit = 1000) {
 async function purgeDeadCharacters(serverId) {
   const ctx = await saveOpContext(serverId);
   const inner = [
-    RUNNING_GUARD(ctx.uuid),
+    RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
     `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/dead-characters-$TS"; mkdir -p "$TRASH"`,
     `find "$SB"/*/gamemode/Character -name '*.json' -print0 2>/dev/null | xargs -0 -r jq -r '${DEAD_HEALTH_JQ} as $h | select($h != null and $h <= 0) | input_filename' 2>/dev/null > "$T/deadfiles"`,
