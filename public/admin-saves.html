@@ -153,8 +153,10 @@
     const catColor = (c) => CAT_COLORS[c] || '#5a5a64';
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     function curServer(){ return $('server').value; }
-    function forceWrite(){ const c=$('forceWrite'); return !!(c && c.checked); }
-    function canWrite(){ return serverRunning === false || (serverRunning === true && forceWrite()); }
+    // Drops/edits are always allowed — no running-server block. Live entities just
+    // get re-saved by the server (log the player off first); dead/dormant records drop clean.
+    function forceWrite(){ return true; }
+    function canWrite(){ return true; }
     function applyWriteState(){
       document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
       updateOrphBtn(); updateDeadBtn();
@@ -164,7 +166,7 @@
     function setBanner(state, text){
       $('banner').className = 'si-banner ' + state;
       $('banner').innerHTML = `<span class="si-dot ${state}"></span><span>${esc(text)}</span>`;
-      const fw = $('forceWrap'); if (fw) fw.style.display = (serverRunning === true) ? 'flex' : 'none';
+      const fw = $('forceWrap'); if (fw) fw.style.display = 'none';
       applyWriteState();
     }
     async function refreshStatus(){
@@ -174,8 +176,8 @@
         if (r.error){ setBanner('unknown', r.error); return; }
         serverRunning = !!r.running;
         setBanner(serverRunning?'run':'stop', serverRunning
-          ? 'Server is RUNNING — viewing & downloads only. Stop it in the panel to enable edits/drops (changes would otherwise be overwritten).'
-          : 'Server is STOPPED — safe to edit & drop. Every change is backed up to a recoverable trash folder.');
+          ? 'Server is RUNNING — drops & edits ALLOWED. Dead bodies and logged-off / orphaned records drop cleanly and stay gone. Anything still LIVE (a connected player\'s character, occupied vehicles, active bases) gets re-saved by the server and reappears — have the player log off first. Everything is backed up to a recoverable trash folder.'
+          : 'Server is STOPPED — safe to edit & drop anything. Every change is backed up to a recoverable trash folder.');
       } catch { setBanner('unknown','Could not check status.'); }
     }
 
