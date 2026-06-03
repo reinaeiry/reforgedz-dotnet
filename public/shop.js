@@ -1101,15 +1101,32 @@ formType.addEventListener('change', () => {
 formStockLimited.addEventListener('change', () => {
   formStockRow.style.display = formStockLimited.checked ? 'block' : 'none';
   if (!formStockLimited.checked) formStockLimit.value = '';
+  refreshStockLabel();
 });
+
+const formStockOverridesRow = document.getElementById('formStockOverridesRow');
+
+function renderStockOverrideInputs(values) {
+  const grid = document.getElementById('formStockOverridesGrid');
+  if (!grid) return;
+  grid.innerHTML = SERVER_IDS.map(id => `
+    <label style="display:flex;flex-direction:column;font-size:0.7rem;color:var(--text-ghost);gap:3px">
+      ${SERVER_LABELS[id]}
+      <input type="number" min="0" id="formStockOv_${id}" placeholder="default" value="${values && values[id] != null ? values[id] : ''}">
+    </label>`).join('');
+}
 
 function refreshStockLabel() {
   formStockLimitLabel.textContent = formServerSpecific.checked
-    ? 'Max active buyers per server'
+    ? 'Max active buyers per server (default)'
     : 'Max active buyers / subscribers';
+  if (formStockOverridesRow) {
+    formStockOverridesRow.style.display = (formServerSpecific.checked && formStockLimited.checked) ? 'block' : 'none';
+  }
 }
 
 formServerSpecific.addEventListener('change', refreshStockLabel);
+renderStockOverrideInputs({});
 refreshStockLabel();
 
 function refreshCustomPriceUi() {
@@ -1181,6 +1198,20 @@ productForm.addEventListener('submit', async (e) => {
     }
   }
 
+  // Per-server stock caps (only when server-specific + limited). Blank = default.
+  let stockLimitOverrides = null;
+  if (formServerSpecific.checked && formStockLimited.checked) {
+    const ov = {};
+    for (const id of SERVER_IDS) {
+      const el = document.getElementById('formStockOv_' + id);
+      if (el && el.value.trim() !== '') {
+        const n = parseInt(el.value, 10);
+        if (Number.isFinite(n) && n >= 0) ov[id] = n;
+      }
+    }
+    stockLimitOverrides = Object.keys(ov).length ? ov : null;
+  }
+
   const body = {
     title: formTitle.value.trim(),
     description: formDesc.value.trim(),
@@ -1190,6 +1221,7 @@ productForm.addEventListener('submit', async (e) => {
     intervalDays,
     imagesExtra,
     stockLimit,
+    stockLimitOverrides,
     serverSpecific: formServerSpecific.checked,
     grantsPriorityQueue: formGrantsPriorityQueue.checked,
     customPrice,
@@ -1236,6 +1268,11 @@ function editProduct(id) {
     formStockRow.style.display = limited ? 'block' : 'none';
     formServerSpecific.checked = !!p.server_specific;
     formGrantsPriorityQueue.checked = !!p.grants_priority_queue;
+    let ovVals = {};
+    if (p.stock_limit_overrides) {
+      try { ovVals = typeof p.stock_limit_overrides === 'string' ? JSON.parse(p.stock_limit_overrides) : p.stock_limit_overrides; } catch (e) {}
+    }
+    renderStockOverrideInputs(ovVals);
     formCustomPrice.checked = !!p.custom_price;
     formPriceMin.value = p.price_min_cents != null ? (p.price_min_cents / 100).toFixed(2) : '';
     formPriceMax.value = p.price_max_cents != null ? (p.price_max_cents / 100).toFixed(2) : '';
@@ -1265,6 +1302,7 @@ function clearForm() {
   formStockRow.style.display = 'none';
   formServerSpecific.checked = false;
   formGrantsPriorityQueue.checked = false;
+  renderStockOverrideInputs({});
   formCustomPrice.checked = false;
   formPriceMin.value = '';
   formPriceMax.value = '';

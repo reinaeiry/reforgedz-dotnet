@@ -289,4 +289,4 @@ async function syncPurchasesToServers() {
   }
 }
 
-module.exports = { syncPurchasesToServers };
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer };

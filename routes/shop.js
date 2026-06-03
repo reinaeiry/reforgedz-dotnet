@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { syncPurchasesToServers } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -134,10 +134,24 @@ function effectiveStockLimit(product, serverId) {
   return product.stock_limit;
 }
 
+// For priority-queue products the meaningful "used" count is the actual set of
+// GUIDs written into each server's game.admins — i.e. effective purchases PLUS
+// manual grants, deduped — NOT the raw purchase count. Counting that set keeps
+// the per-server cap honest: "40 / 40" means 40 entries in game.admins, so the
+// 50-admin config ceiling can't be blown by manual grants slipping past the cap.
+function pqUsedPerServer() {
+  const sets = buildPriorityQueueGuidsPerServer();
+  const out = {};
+  for (const id of SERVER_IDS) out[id] = sets[id] ? sets[id].size : 0;
+  return out;
+}
+
 function attachStock(product) {
   if (!product) return product;
   if (product.server_specific) {
-    product.per_server_used = perServerStockUsed(product.id);
+    product.per_server_used = product.grants_priority_queue
+      ? pqUsedPerServer()
+      : perServerStockUsed(product.id);
     product.per_server_limit = Object.fromEntries(SERVER_IDS.map(id => [id, effectiveStockLimit(product, id)]));
     product.stock_used = Object.values(product.per_server_used).reduce((a, b) => a + b, 0);
     product.sold_out = false;
@@ -254,14 +268,23 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     orderServerId = serverId;
     const effLimit = effectiveStockLimit(product, serverId);
     if (effLimit != null) {
-      const used = perServerStockUsed(product.id)[serverId] || 0;
-      if (used >= effLimit) {
-        const buyerOnServer = db.prepare(`
+      let used, alreadyHas;
+      if (product.grants_priority_queue) {
+        // Gate against the real reserved set (effective purchases + manual
+        // grants, deduped by GUID) so manual grants can't push game.admins
+        // past the cap. A buyer whose GUID is already reserved here is a
+        // renewal — let them through (they don't add a new slot).
+        const set = buildPriorityQueueGuidsPerServer()[serverId] || new Set();
+        used = set.size;
+        alreadyHas = !!(req.user.bi_uid && set.has(req.user.bi_uid));
+      } else {
+        used = perServerStockUsed(product.id)[serverId] || 0;
+        alreadyHas = !!db.prepare(`
           SELECT 1 FROM orders WHERE product_id = ? AND server_id = ? AND steam_id = ? AND status = 'completed' LIMIT 1
         `).get(product.id, serverId, req.user.steam_id);
-        if (!buyerOnServer) {
-          return res.status(409).json({ error: `Sold out on ${SERVER_LABELS[serverId] || serverId.toUpperCase()}.` });
-        }
+      }
+      if (used >= effLimit && !alreadyHas) {
+        return res.status(409).json({ error: `Sold out on ${SERVER_LABELS[serverId] || serverId.toUpperCase()}.` });
       }
     }
   } else if (product.stock_limit != null) {
@@ -669,6 +692,25 @@ function normalizeStockLimit(value) {
   return n;
 }
 
+// Per-server stock caps as a JSON map {serverId: limit}. Only valid server ids
+// with non-negative integer caps are kept; empty result stores NULL (shared
+// stock_limit applies everywhere).
+function normalizeStockOverrides(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  let obj = value;
+  if (typeof value === 'string') { try { obj = JSON.parse(value); } catch { return null; } }
+  if (typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const out = {};
+  for (const id of SERVER_IDS) {
+    const v = obj[id];
+    if (v === undefined || v === null || v === '') continue;
+    const n = parseInt(v, 10);
+    if (Number.isFinite(n) && n >= 0) out[id] = n;
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
+
 function normalizeAmountCents(v) {
   if (v === undefined || v === null || v === '') return null;
   const n = parseInt(v, 10);
@@ -701,7 +743,7 @@ function normalizeDiscordRoleId(v) {
 
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -723,6 +765,7 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
   const imagesJson = normalizeImagesExtra(imagesExtra) ?? null;
   const stockLimitVal = normalizeStockLimit(stockLimit);
+  const stockOverridesVal = normalizeStockOverrides(stockLimitOverrides);
   const serverSpecificVal = serverSpecific ? 1 : 0;
   const grantsPqVal = grantsPriorityQueue ? 1 : 0;
 
@@ -732,9 +775,9 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
   const discordRoleIdVal = normalizeDiscordRoleId(discordRoleId);
 
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max, discordRoleIdVal || null);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, stockOverridesVal === undefined ? null : stockOverridesVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max, discordRoleIdVal || null);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
   res.json(attachStock(attachImages(product)));
@@ -742,7 +785,7 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
@@ -775,6 +818,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
   const imagesJson = normalizeImagesExtra(imagesExtra);
   const stockLimitVal = normalizeStockLimit(stockLimit);
   const stockLimitWasSent = stockLimit !== undefined;
+  const stockOverridesVal = normalizeStockOverrides(stockLimitOverrides);
+  const stockOverridesWasSent = stockLimitOverrides !== undefined;
   const serverSpecificWasSent = serverSpecific !== undefined;
   const serverSpecificVal = serverSpecific ? 1 : 0;
   const grantsPqWasSent = grantsPriorityQueue !== undefined;
@@ -813,6 +858,7 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       interval_days = CASE WHEN ? THEN ? ELSE interval_days END,
       images_json = COALESCE(?, images_json),
       stock_limit = CASE WHEN ? THEN ? ELSE stock_limit END,
+      stock_limit_overrides = CASE WHEN ? THEN ? ELSE stock_limit_overrides END,
       server_specific = CASE WHEN ? THEN ? ELSE server_specific END,
       grants_priority_queue = CASE WHEN ? THEN ? ELSE grants_priority_queue END,
       custom_price = CASE WHEN ? THEN ? ELSE custom_price END,
@@ -833,6 +879,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     imagesJson !== undefined ? imagesJson : null,
     stockLimitWasSent ? 1 : 0,
     stockLimitVal === undefined ? null : stockLimitVal,
+    stockOverridesWasSent ? 1 : 0,
+    stockOverridesVal === undefined ? null : stockOverridesVal,
     serverSpecificWasSent ? 1 : 0,
     serverSpecificVal,
     grantsPqWasSent ? 1 : 0,

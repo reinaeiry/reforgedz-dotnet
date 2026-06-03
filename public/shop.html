@@ -759,8 +759,12 @@
               <input type="checkbox" id="formServerSpecific"> Specific Server Purchase
             </label>
             <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
-              Buyers pick one of EU1/EU2/NA1/NA2 at checkout. Their entitlement only syncs to that server. Stock limit (above) becomes per-server when this is on.
+              Buyers pick one of your servers at checkout. Their entitlement only syncs to that server. The stock limit above becomes the per-server default when this is on.
             </div>
+          </div>
+          <div class="admin-field full" id="formStockOverridesRow" style="display:none">
+            <label>Per-server cap (blank = use default above)</label>
+            <div id="formStockOverridesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:6px"></div>
           </div>
           <div class="admin-field full">
             <label class="stock-toggle">
