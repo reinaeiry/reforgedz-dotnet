@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Save Inspector | ReforgedZ Admin</title>
+  <meta name="theme-color" content="#cc1f1f">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .si-page { padding: 120px 20px 80px; min-height: 100vh; background: var(--bg-dark, #0c0c0e); color: #e8e8ea; max-width: 1100px; margin: 0 auto; }
+    .si-page h1 { font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 2rem; margin: 0 0 4px; }
+    .si-sub { color: #9a9aa2; font-size: .85rem; margin-bottom: 24px; }
+    .si-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
+    .si-controls select, .si-controls input { background: #17171b; border: 1px solid #2c2c34; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: .9rem; }
+    .si-controls input[type=text] { flex: 1; min-width: 240px; }
+    .si-btn { background: #cc1f1f; color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: .9rem; }
+    .si-btn.ghost { background: #23232a; }
+    .si-btn:disabled { opacity: .5; cursor: default; }
+    .si-note { color: #9a9aa2; font-size: .8rem; margin: 8px 0; }
+    .si-err { color: #ff6b6b; font-size: .85rem; margin: 8px 0; }
+    table.si-cats { width: 100%; border-collapse: collapse; margin-bottom: 28px; }
+    table.si-cats th, table.si-cats td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1f1f25; font-size: .85rem; }
+    table.si-cats th { color: #9a9aa2; font-weight: 500; text-transform: uppercase; font-size: .7rem; letter-spacing: .5px; }
+    .si-cat-tag { display: inline-block; background: #23232a; border-radius: 4px; padding: 2px 8px; font-size: .72rem; color: #ffb4b4; }
+    .si-result { background: #131318; border: 1px solid #22222a; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+    .si-result-head { display: flex; gap: 10px; align-items: center; padding: 10px 14px; cursor: pointer; }
+    .si-result-head:hover { background: #17171d; }
+    .si-result-id { font-family: monospace; font-size: .8rem; color: #cfd0d6; }
+    .si-result-meta { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+    .si-result pre { margin: 0; padding: 12px 14px; background: #0e0e12; border-top: 1px solid #22222a; max-height: 420px; overflow: auto; font-size: .78rem; white-space: pre-wrap; word-break: break-word; }
+    .si-dl { color: #7db3ff; text-decoration: none; font-size: .78rem; border: 1px solid #2c4a6e; padding: 3px 9px; border-radius: 6px; }
+    .si-dl:hover { background: #16263a; }
+    .si-denied { text-align: center; padding: 80px 20px; color: #ff6b6b; }
+    a.back { color: #9a9aa2; text-decoration: none; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <div class="si-page">
+    <div id="denied" class="si-denied" style="display:none">Admins only. <a class="back" href="/shop">← back</a></div>
+
+    <div id="content" style="display:none">
+      <a class="back" href="/admin/orders">← Admin</a>
+      <h1>Save Inspector</h1>
+      <div class="si-sub">Search and download the ReforgedZ persistence saves (what Pterodactyl's file browser can't).</div>
+
+      <div class="si-controls">
+        <select id="server"></select>
+        <input type="text" id="q" placeholder="Search: UUID, prefab GUID, store name, coords…" />
+        <button class="si-btn" id="searchBtn">Search</button>
+        <button class="si-btn ghost" id="overviewBtn">Overview</button>
+        <button class="si-btn ghost" id="dlAllBtn">Download entire save</button>
+      </div>
+      <div id="err" class="si-err"></div>
+      <div id="note" class="si-note"></div>
+
+      <div id="overview"></div>
+      <div id="results"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    function curServer(){ return $('server').value; }
+    function setErr(m){ $('err').textContent = m || ''; }
+    function setNote(m){ $('note').textContent = m || ''; }
+    function download(rel){
+      const u = `/api/shop/admin/save-download?server=${encodeURIComponent(curServer())}&path=${encodeURIComponent(rel)}`;
+      window.location.href = u;
+    }
+
+    async function init(){
+      let user = null;
+      try { user = await (await fetch('/api/auth/me')).json(); } catch {}
+      if (!user || user.role !== 'admin') { $('denied').style.display = 'block'; return; }
+      $('content').style.display = 'block';
+      try {
+        const servers = await (await fetch('/api/shop/admin/save-servers')).json();
+        $('server').innerHTML = servers.map(s => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
+      } catch { setErr('Could not load servers.'); }
+
+      $('searchBtn').onclick = doSearch;
+      $('overviewBtn').onclick = doOverview;
+      $('dlAllBtn').onclick = () => download('.');
+      $('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+    }
+
+    async function doOverview(){
+      setErr(''); setNote('Loading overview…'); $('results').innerHTML = ''; $('overview').innerHTML = '';
+      try {
+        const data = await (await fetch(`/api/shop/admin/save-categories?server=${encodeURIComponent(curServer())}`)).json();
+        if (data.error) { setErr(data.error); setNote(''); return; }
+        const cats = (data.categories || []).sort((a,b) => b.count - a.count);
+        const total = cats.reduce((a,c) => a + c.count, 0);
+        setNote(`${cats.length} categories · ${total} records`);
+        $('overview').innerHTML = `<table class="si-cats"><thead><tr><th>Category</th><th>World</th><th>Records</th><th></th></tr></thead><tbody>` +
+          cats.map(c => `<tr>
+            <td><span class="si-cat-tag">${esc(c.category)}</span></td>
+            <td style="color:#7a7a82">${esc(c.world)}</td>
+            <td>${c.count}</td>
+            <td><a class="si-dl" href="#" onclick="download('${esc(c.rel)}');return false;">Download</a></td>
+          </tr>`).join('') + `</tbody></table>`;
+      } catch (e) { setErr('Overview failed.'); setNote(''); }
+    }
+
+    async function doSearch(){
+      const q = $('q').value.trim();
+      setErr(''); $('overview').innerHTML = '';
+      if (!q) { setErr('Enter something to search for.'); return; }
+      setNote('Searching…'); $('results').innerHTML = '';
+      try {
+        const data = await (await fetch(`/api/shop/admin/save-search?server=${encodeURIComponent(curServer())}&q=${encodeURIComponent(q)}`)).json();
+        if (data.error) { setErr(data.error); setNote(''); return; }
+        const r = data.results || [];
+        setNote(`${data.total} match${data.total === 1 ? '' : 'es'}${data.total > r.length ? ` — showing first ${r.length}` : ''}`);
+        if (!r.length) { $('results').innerHTML = '<div class="si-note">No matching records.</div>'; return; }
+        $('results').innerHTML = r.map((rec, i) => {
+          const rel = `${rec.world}/gamemode/${rec.category}/${rec.id}.json`;
+          return `<div class="si-result">
+            <div class="si-result-head" onclick="this.parentNode.querySelector('pre').style.display = this.parentNode.querySelector('pre').style.display==='none'?'block':'none'">
+              <span class="si-cat-tag">${esc(rec.category || '?')}</span>
+              <span class="si-result-id">${esc(rec.id)}</span>
+              <span class="si-result-meta">
+                <a class="si-dl" href="#" onclick="event.stopPropagation();download('${esc(rel)}');return false;">Download</a>
+              </span>
+            </div>
+            <pre style="display:${i === 0 ? 'block' : 'none'}">${esc(JSON.stringify(rec.data, null, 2))}</pre>
+          </div>`;
+        }).join('');
+      } catch (e) { setErr('Search failed.'); setNote(''); }
+    }
+
+    window.download = download;
+    init();
+  </script>
+</body>
+</html>

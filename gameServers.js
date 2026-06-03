@@ -14,6 +14,17 @@ function configPathFromShopPath(shopPath) {
   return shopPath.substring(0, i) + '/config.json';
 }
 
+// The ReforgedZ persistence save root for a server, derived the same way:
+//   <volume>/profile/profile/eiry/reforgedz-dotnet-shop
+// becomes
+//   <volume>/profile/profile/.save/game   (holds <world>/gamemode/<category>/*.json)
+function saveGamePathFromShopPath(shopPath) {
+  if (!shopPath) return null;
+  const i = shopPath.indexOf('/profile/');
+  if (i < 0) return null;
+  return shopPath.substring(0, i) + '/profile/profile/.save/game';
+}
+
 function listServers() {
   const eu = (process.env.GAME_SERVER_EU_PATHS || '').split(',').map(s => s.trim()).filter(Boolean);
   const na = (process.env.GAME_SERVER_NA_PATHS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -42,7 +53,8 @@ function listServers() {
   ];
   return all.filter(s => s.host && s.path).map(s => ({
     ...s,
-    configPath: configPathFromShopPath(s.path)
+    configPath: configPathFromShopPath(s.path),
+    savePath: saveGamePathFromShopPath(s.path)
   }));
 }
 
@@ -54,4 +66,4 @@ function isValidServerId(id) {
   return SERVER_IDS.includes(id);
 }
 
-module.exports = { SERVER_IDS, SERVER_LABELS, listServers, getServer, isValidServerId };
+module.exports = { SERVER_IDS, SERVER_LABELS, listServers, getServer, isValidServerId, configPathFromShopPath, saveGamePathFromShopPath };

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -1147,6 +1147,60 @@ function buildPriorityQueueList() {
 function priorityQueueServers() {
   return SERVER_IDS.map(id => ({ id, label: SERVER_LABELS[id] || id.toUpperCase() }));
 }
+
+// ============================================================
+//  Save Inspector — freetext search over a server's persistence
+//  (the .save JSON files), since Pterodactyl's file browser can't.
+// ============================================================
+router.get('/api/shop/admin/save-servers', requireAdmin, (req, res) => {
+  res.json(priorityQueueServers());
+});
+
+router.get('/api/shop/admin/save-search', requireAdmin, async (req, res) => {
+  const { server, q, limit } = req.query;
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!q || !String(q).trim()) return res.status(400).json({ error: 'Enter something to search for.' });
+  try {
+    const out = await searchSaveFiles(server, String(q), limit);
+    res.json(out);
+  } catch (e) {
+    console.error('[save-search]', e.message);
+    res.status(500).json({ error: e.message || 'Search failed' });
+  }
+});
+
+router.get('/api/shop/admin/save-categories', requireAdmin, async (req, res) => {
+  const { server } = req.query;
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    res.json(await listSaveCategories(server));
+  } catch (e) {
+    console.error('[save-categories]', e.message);
+    res.status(500).json({ error: e.message || 'Failed to list categories' });
+  }
+});
+
+// Streams a .tar.gz of a folder/record under the save root. GET (with the admin
+// session cookie) so it can be triggered as a plain browser download.
+router.get('/api/shop/admin/save-download', requireAdmin, async (req, res) => {
+  const { server, path: relPath } = req.query;
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Invalid server' });
+  let dl;
+  try {
+    dl = await openSaveDownloadStream(server, relPath);
+  } catch (e) {
+    console.error('[save-download]', e.message);
+    return res.status(500).json({ error: e.message || 'Download failed' });
+  }
+  res.setHeader('Content-Type', 'application/gzip');
+  res.setHeader('Content-Disposition', `attachment; filename="${dl.filename}"`);
+  let done = false;
+  const cleanup = () => { if (done) return; done = true; try { dl.conn.end(); } catch {} };
+  dl.stream.on('error', () => { cleanup(); try { res.destroy(); } catch {} });
+  dl.stream.on('close', cleanup);
+  res.on('close', cleanup);
+  dl.stream.pipe(res);
+});
 
 const BI_UID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 

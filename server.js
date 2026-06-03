@@ -621,6 +621,10 @@ app.get('/admin/orders', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-orders.html'));
 });
 
+app.get('/admin/saves', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin-saves.html'));
+});
+
 app.get('/map', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'map', 'index.html'));
 });

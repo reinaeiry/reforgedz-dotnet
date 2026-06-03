@@ -1,6 +1,6 @@
 const { Client } = require('ssh2');
 const db = require('./db');
-const { listServers, SERVER_IDS } = require('./gameServers');
+const { listServers, SERVER_IDS, saveGamePathFromShopPath } = require('./gameServers');
 
 function getPrivateKey() {
   const b64 = process.env.SSH_PRIVATE_KEY_B64;
@@ -301,4 +301,116 @@ async function syncPurchasesToServers() {
   }
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer };
+// Freetext search of a server's persistence save files (one JSON per entity).
+// Greps over SSH (honouring the NA/eu3 hop) for an exact string and returns the
+// matching records, parsed. The query is base64-encoded and matched with
+// `grep -F -- "$Q"`, so it can never break the shell or be read as an option.
+async function searchSaveFiles(serverId, query, limit = 50) {
+  const q = String(query == null ? '' : query).trim();
+  if (!q) return { results: [], total: 0, shown: 0 };
+
+  const servers = listServers();
+  const server = servers.find(s => s.id === serverId);
+  if (!server) throw new Error('Unknown server');
+  const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
+  if (!saveBase) throw new Error('No save path for this server');
+
+  const privateKey = getPrivateKey();
+  if (!privateKey) throw new Error('SSH key not configured');
+  const entryHost = servers.find(s => s.region === 'eu') || servers[0];
+  if (!entryHost) throw new Error('No entry host');
+
+  const cap = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+  const qb64 = Buffer.from(q, 'utf8').toString('base64');
+  const inner = [
+    `SB='${saveBase}'`,
+    `Q=$(printf %s '${qb64}' | base64 -d)`,
+    `[ -d "$SB" ] || { echo "COUNT:0"; exit 0; }`,
+    `echo "COUNT:$(grep -rlF --include='*.json' -- "$Q" "$SB" 2>/dev/null | wc -l)"`,
+    `grep -rlF --include='*.json' -- "$Q" "$SB" 2>/dev/null | head -${cap} | while IFS= read -r f; do echo "FILE:$f:$(base64 -w0 "$f")"; done`,
+  ].join('; ');
+  const cmd = wrapForRegion(server, inner);
+
+  const conn = await sshOpen(privateKey, entryHost.host, entryHost.port, entryHost.user);
+  let out;
+  try {
+    out = await sshRun(conn, cmd);
+  } finally {
+    conn.end();
+  }
+
+  let total = 0;
+  const results = [];
+  for (const line of String(out).split('\n')) {
+    if (line.startsWith('COUNT:')) { total = parseInt(line.slice(6), 10) || 0; continue; }
+    const m = line.match(/^FILE:(.*?):([A-Za-z0-9+/=]+)$/);
+    if (!m) continue;
+    const fpath = m[1];
+    let data = null;
+    try { data = JSON.parse(Buffer.from(m[2], 'base64').toString('utf8')); } catch {}
+    const category = (fpath.match(/\/gamemode\/([^/]+)\//) || [])[1]
+      || (fpath.match(/\/game\/[^/]+\/([^/]+)\//) || [])[1] || '';
+    const world = (fpath.match(/\/game\/([^/]+)\//) || [])[1] || '';
+    const id = (fpath.split('/').pop() || '').replace(/\.json$/, '');
+    results.push({ category, world, id, data });
+  }
+  return { results, total, shown: results.length, cap };
+}
+
+// Overview of a server's save: per-world, per-category JSON counts. Powers the
+// inspector's browse view + download targets.
+async function listSaveCategories(serverId) {
+  const servers = listServers();
+  const server = servers.find(s => s.id === serverId);
+  if (!server) throw new Error('Unknown server');
+  const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
+  if (!saveBase) throw new Error('No save path for this server');
+  const privateKey = getPrivateKey();
+  if (!privateKey) throw new Error('SSH key not configured');
+  const entryHost = servers.find(s => s.region === 'eu') || servers[0];
+
+  const inner = `SB='${saveBase}'; [ -d "$SB" ] || exit 0; for w in "$SB"/*/; do wn=$(basename "$w"); for c in "$w"gamemode/*/; do [ -d "$c" ] || continue; cn=$(basename "$c"); n=$(find "$c" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l); echo "$wn|$cn|$n"; done; done`;
+  const cmd = wrapForRegion(server, inner);
+  const conn = await sshOpen(privateKey, entryHost.host, entryHost.port, entryHost.user);
+  let out;
+  try { out = await sshRun(conn, cmd); } finally { conn.end(); }
+
+  const categories = [];
+  for (const line of String(out).split('\n')) {
+    const p = line.split('|');
+    if (p.length !== 3) continue;
+    categories.push({ world: p[0], category: p[1], count: parseInt(p[2], 10) || 0, rel: `${p[0]}/gamemode/${p[1]}` });
+  }
+  return { categories };
+}
+
+// Open a streaming tar.gz of a path under the save root (a category folder, a
+// world, a single record, or '.' for the whole save). Path is sanitised + sent
+// base64 so traversal/shell injection is impossible. Returns {conn, stream}.
+async function openSaveDownloadStream(serverId, relPath) {
+  const servers = listServers();
+  const server = servers.find(s => s.id === serverId);
+  if (!server) throw new Error('Unknown server');
+  const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
+  if (!saveBase) throw new Error('No save path for this server');
+
+  let rel = String(relPath == null ? '.' : relPath).replace(/\\/g, '/').replace(/\.\.(\/|$)/g, '').replace(/^\/+/, '').trim();
+  if (!rel) rel = '.';
+
+  const privateKey = getPrivateKey();
+  if (!privateKey) throw new Error('SSH key not configured');
+  const entryHost = servers.find(s => s.region === 'eu') || servers[0];
+
+  const relB64 = Buffer.from(rel, 'utf8').toString('base64');
+  const inner = `SB='${saveBase}'; REL=$(printf %s '${relB64}' | base64 -d); cd "$SB" 2>/dev/null || exit 1; tar -czf - -- "$REL" 2>/dev/null`;
+  const cmd = wrapForRegion(server, inner);
+
+  const conn = await sshOpen(privateKey, entryHost.host, entryHost.port, entryHost.user);
+  const stream = await new Promise((resolve, reject) => {
+    conn.exec(cmd, (err, s) => (err ? reject(err) : resolve(s)));
+  });
+  const safeName = `${serverId}-${rel === '.' ? 'save' : rel.replace(/[^\w.-]+/g, '_')}.tar.gz`;
+  return { conn, stream, filename: safeName };
+}
+
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream };
