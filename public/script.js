@@ -117,9 +117,10 @@ function shortName(name) {
   return m ? m[1] : name;
 }
 
-function mapName(tag) {
-  if (tag.endsWith('1')) return 'Chernarus';
-  if (tag.endsWith('2')) return 'Everon';
+function mapName(name) {
+  // Derive the map from the server's own name so it stays correct as servers
+  // change (e.g. "[EU3] Official ReforgedZ Everon"). Defaults to Chernarus.
+  if (/everon/i.test(name)) return 'Everon';
   return 'Chernarus';
 }
 
@@ -148,7 +149,7 @@ function renderServers(data) {
     const list = groups[region].slice().sort((a, b) => shortName(a.name).localeCompare(shortName(b.name)));
     const tiles = list.map(srv => {
       const tag = shortName(srv.name);
-      const map = mapName(tag);
+      const map = mapName(srv.name);
       const hasCount = srv.players != null && srv.max != null && srv.max > 0;
       const players = hasCount ? srv.players : null;
       const max = hasCount ? srv.max : null;
