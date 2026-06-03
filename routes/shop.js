@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -1166,6 +1166,17 @@ router.get('/api/shop/admin/save-search', requireAdmin, async (req, res) => {
   } catch (e) {
     console.error('[save-search]', e.message);
     res.status(500).json({ error: e.message || 'Search failed' });
+  }
+});
+
+router.get('/api/shop/admin/save-record', requireAdmin, async (req, res) => {
+  const { server, id } = req.query;
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    res.json(await getSaveRecord(server, id));
+  } catch (e) {
+    console.error('[save-record]', e.message);
+    res.status(500).json({ error: e.message || 'Lookup failed' });
   }
 });
 

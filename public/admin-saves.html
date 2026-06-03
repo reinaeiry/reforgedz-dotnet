@@ -118,21 +118,45 @@
         if (!r.length) { $('results').innerHTML = '<div class="si-note">No matching records.</div>'; return; }
         $('results').innerHTML = r.map((rec, i) => {
           const rel = `${rec.world}/gamemode/${rec.category}/${rec.id}.json`;
+          const linkedId = rec.data && rec.data.entity && rec.data.entity.playerEntity;
+          const linkBtn = linkedId ? `<a class="si-dl" href="#" onclick="event.stopPropagation();loadLinked(this,'${esc(linkedId)}');return false;">Linked character</a>` : '';
           return `<div class="si-result">
             <div class="si-result-head" onclick="this.parentNode.querySelector('pre').style.display = this.parentNode.querySelector('pre').style.display==='none'?'block':'none'">
               <span class="si-cat-tag">${esc(rec.category || '?')}</span>
               <span class="si-result-id">${esc(rec.id)}</span>
               <span class="si-result-meta">
+                ${linkBtn}
                 <a class="si-dl" href="#" onclick="event.stopPropagation();download('${esc(rel)}');return false;">Download</a>
               </span>
             </div>
             <pre style="display:${i === 0 ? 'block' : 'none'}">${esc(JSON.stringify(rec.data, null, 2))}</pre>
+            <div class="si-linked"></div>
           </div>`;
         }).join('');
       } catch (e) { setErr('Search failed.'); setNote(''); }
     }
 
+    async function loadLinked(btn, entityId){
+      const box = btn.closest('.si-result').querySelector('.si-linked');
+      box.innerHTML = '<div class="si-note" style="padding:10px 14px">Loading linked character…</div>';
+      try {
+        const rec = await (await fetch(`/api/shop/admin/save-record?server=${encodeURIComponent(curServer())}&id=${encodeURIComponent(entityId)}`)).json();
+        if (rec.error) { box.innerHTML = `<div class="si-err" style="padding:10px 14px">${esc(rec.error)}</div>`; return; }
+        if (!rec.found) { box.innerHTML = `<div class="si-note" style="padding:10px 14px">No character record for <span class="si-result-id">${esc(entityId)}</span> — likely a dead / cleaned-up character.</div>`; return; }
+        const rel = `${rec.world}/gamemode/${rec.category}/${rec.id}.json`;
+        box.innerHTML = `<div class="si-result" style="margin:8px 14px 12px;border-color:#3a3a44">
+          <div class="si-result-head" onclick="this.parentNode.querySelector('pre').style.display = this.parentNode.querySelector('pre').style.display==='none'?'block':'none'">
+            <span class="si-cat-tag">↳ ${esc(rec.category || 'Character')}</span>
+            <span class="si-result-id">${esc(rec.id)}</span>
+            <span class="si-result-meta"><a class="si-dl" href="#" onclick="event.stopPropagation();download('${esc(rel)}');return false;">Download</a></span>
+          </div>
+          <pre>${esc(JSON.stringify(rec.data, null, 2))}</pre>
+        </div>`;
+      } catch (e) { box.innerHTML = '<div class="si-err" style="padding:10px 14px">Lookup failed.</div>'; }
+    }
+
     window.download = download;
+    window.loadLinked = loadLinked;
     init();
   </script>
 </body>

@@ -413,4 +413,35 @@ async function openSaveDownloadStream(serverId, relPath) {
   return { conn, stream, filename: safeName };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream };
+// Fetch a single save record by its entity id (the file is named <id>.json).
+// Used to resolve a Player's linked character (entity.playerEntity). id is
+// validated to hex/dash only, so it's safe to interpolate.
+async function getSaveRecord(serverId, entityId) {
+  const id = String(entityId == null ? '' : entityId).trim();
+  if (!/^[0-9a-fA-F-]{6,64}$/.test(id)) throw new Error('Invalid entity id');
+
+  const servers = listServers();
+  const server = servers.find(s => s.id === serverId);
+  if (!server) throw new Error('Unknown server');
+  const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
+  if (!saveBase) throw new Error('No save path for this server');
+  const privateKey = getPrivateKey();
+  if (!privateKey) throw new Error('SSH key not configured');
+  const entryHost = servers.find(s => s.region === 'eu') || servers[0];
+
+  const inner = `SB='${saveBase}'; f=$(find "$SB" -name '${id}.json' 2>/dev/null | head -1); [ -n "$f" ] && echo "FILE:$f:$(base64 -w0 "$f")"`;
+  const cmd = wrapForRegion(server, inner);
+  const conn = await sshOpen(privateKey, entryHost.host, entryHost.port, entryHost.user);
+  let out;
+  try { out = await sshRun(conn, cmd); } finally { conn.end(); }
+
+  const m = String(out).match(/^FILE:(.*?):([A-Za-z0-9+/=]+)$/m);
+  if (!m) return { found: false, id };
+  let data = null;
+  try { data = JSON.parse(Buffer.from(m[2], 'base64').toString('utf8')); } catch {}
+  const category = (m[1].match(/\/gamemode\/([^/]+)\//) || [])[1] || '';
+  const world = (m[1].match(/\/game\/([^/]+)\//) || [])[1] || '';
+  return { found: true, id, category, world, data };
+}
+
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord };
