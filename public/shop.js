@@ -12,8 +12,8 @@ let currentCurrency = (localStorage.getItem('rz_currency') || 'USD').toUpperCase
 if (!['USD', 'GBP', 'EUR'].includes(currentCurrency)) currentCurrency = 'USD';
 const CURRENCY_SYMBOLS = { USD: '$', GBP: '£', EUR: '€' };
 const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
-const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2'];
-const SERVER_LABELS = { eu1: 'EU1', eu2: 'EU2', na1: 'NA1', na2: 'NA2' };
+const SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2'];
+const SERVER_LABELS = { eu1: 'EU1', eu2: 'EU2', eu3: 'EU3', na1: 'NA1', na2: 'NA2' };
 
 // ---- DOM refs (static elements only — re-queried as needed for dynamic ones) ----
 const navAuth = document.getElementById('navAuth');

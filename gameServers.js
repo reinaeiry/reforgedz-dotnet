@@ -1,5 +1,5 @@
-const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2'];
-const SERVER_LABELS = { eu1: 'EU1', eu2: 'EU2', na1: 'NA1', na2: 'NA2' };
+const SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2'];
+const SERVER_LABELS = { eu1: 'EU1', eu2: 'EU2', eu3: 'EU3', na1: 'NA1', na2: 'NA2' };
 
 // Given the shop's purchases.json path (which sits deep inside the
 // pterodactyl volume), strip back to the volume root and append the
@@ -24,9 +24,19 @@ function listServers() {
   const euUser = process.env.GAME_SERVER_EU_USER || 'root';
   const naUser = process.env.GAME_SERVER_NA_USER || 'root';
 
+  // EU3 lives on its own host (a separate node), so it is reached the same way
+  // as the NA servers: a nested SSH hop from the EU entry host. Its distinct
+  // region ('eu3') is what makes sync.js wrap commands in that hop rather than
+  // running them directly on the entry host.
+  const eu3 = (process.env.GAME_SERVER_EU3_PATHS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const eu3Host = process.env.GAME_SERVER_EU3_HOST;
+  const eu3Port = parseInt(process.env.GAME_SERVER_EU3_PORT) || 22;
+  const eu3User = process.env.GAME_SERVER_EU3_USER || 'root';
+
   const all = [
     { id: 'eu1', region: 'eu', host: euHost, port: euPort, user: euUser, path: eu[0] || null },
     { id: 'eu2', region: 'eu', host: euHost, port: euPort, user: euUser, path: eu[1] || null },
+    { id: 'eu3', region: 'eu3', host: eu3Host, port: eu3Port, user: eu3User, path: eu3[0] || null },
     { id: 'na1', region: 'na', host: naHost, port: naPort, user: naUser, path: na[0] || null },
     { id: 'na2', region: 'na', host: naHost, port: naPort, user: naUser, path: na[1] || null },
   ];
