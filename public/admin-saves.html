@@ -24,6 +24,8 @@
     table.si-cats th, table.si-cats td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1f1f25; font-size: .85rem; }
     table.si-cats th { color: #9a9aa2; font-weight: 500; text-transform: uppercase; font-size: .7rem; letter-spacing: .5px; }
     .si-cat-tag { display: inline-block; background: #23232a; border-radius: 4px; padding: 2px 8px; font-size: .72rem; color: #ffb4b4; }
+    .si-role { display: inline-block; font-size: .68rem; padding: 2px 7px; border-radius: 4px; background: #20202a; color: #9aa0c0; }
+    .si-role.own { background: #14331c; color: #7fe0a0; }
     .si-result { background: #131318; border: 1px solid #22222a; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
     .si-result-head { display: flex; gap: 10px; align-items: center; padding: 10px 14px; cursor: pointer; }
     .si-result-head:hover { background: #17171d; }
@@ -124,6 +126,7 @@
             <div class="si-result-head" onclick="this.parentNode.querySelector('pre').style.display = this.parentNode.querySelector('pre').style.display==='none'?'block':'none'">
               <span class="si-cat-tag">${esc(rec.category || '?')}</span>
               <span class="si-result-id">${esc(rec.id)}</span>
+              ${rec.role ? `<span class="si-role${/^This /.test(rec.role) ? ' own' : ''}" title="${esc((rec.matchPaths || []).join(', '))}">${esc(rec.role)}</span>` : ''}
               <span class="si-result-meta">
                 ${linkBtn}
                 <a class="si-dl" href="#" onclick="event.stopPropagation();download('${esc(rel)}');return false;">Download</a>

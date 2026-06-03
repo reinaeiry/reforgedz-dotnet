@@ -301,6 +301,34 @@ async function syncPurchasesToServers() {
   }
 }
 
+// Walk a parsed record and collect the JSON paths where a string value contains
+// the query — i.e. *why* grep matched this file.
+function findMatchPaths(obj, query, base, out, depth) {
+  if (obj == null || depth > 14 || out.length > 8) return;
+  if (typeof obj !== 'object') return;
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    const path = base ? base + '.' + k : k;
+    if (typeof v === 'string') {
+      if (v.includes(query)) out.push({ path, key: k });
+    } else if (typeof v === 'object') {
+      findMatchPaths(v, query, path, out, depth + 1);
+    }
+  }
+}
+
+// Friendly label for how the searched value relates to a record.
+function deriveMatchRole(data, query, paths) {
+  if (data && data.id === query) return 'This record (own id)';
+  const keys = paths.map(p => p.key);
+  if (keys.includes('uid')) return 'This player (own uid)';
+  if (keys.includes('lastKillerUID')) return 'Killed by — this UID is the killer';
+  if (keys.includes('playerEntity')) return 'Character pointer';
+  if (keys.some(k => /owner|admin|member|authoriz|builder|buddy|team|grant/i.test(k))) return 'Owner / member reference';
+  if (paths.length) return 'Referenced in: ' + paths[0].path;
+  return 'Match';
+}
+
 // Freetext search of a server's persistence save files (one JSON per entity).
 // Greps over SSH (honouring the NA/eu3 hop) for an exact string and returns the
 // matching records, parsed. The query is base64-encoded and matched with
@@ -352,7 +380,10 @@ async function searchSaveFiles(serverId, query, limit = 50) {
       || (fpath.match(/\/game\/[^/]+\/([^/]+)\//) || [])[1] || '';
     const world = (fpath.match(/\/game\/([^/]+)\//) || [])[1] || '';
     const id = (fpath.split('/').pop() || '').replace(/\.json$/, '');
-    results.push({ category, world, id, data });
+    const paths = [];
+    if (data) findMatchPaths(data, q, '', paths, 0);
+    const role = deriveMatchRole(data, q, paths);
+    results.push({ category, world, id, data, role, matchPaths: paths.map(p => p.path).slice(0, 5) });
   }
   return { results, total, shown: results.length, cap };
 }
