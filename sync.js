@@ -621,4 +621,60 @@ async function purgeOrphans(serverId, category) {
   return { ok: true, moved, trash };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans };
+// A character's damage component stores per-hitzone health; the "Health" hitzone
+// is the global one. <= 0 == dead body. This filter returns that value (or null
+// if the record has no such hitzone). We treat ONLY a positively-found value <= 0
+// as dead, so a living character (Health > 0) or an ambiguous record (no health
+// persisted) can never be flagged — the cleaner is physically incapable of
+// touching a living character.
+const DEAD_HEALTH_JQ = '([.components[]? | objects | .hitzones? // empty | .[]? | select(.name=="Health") | .health] | first)';
+
+// Scan the Character category for confirmed-dead bodies (Health hitzone <= 0).
+// Returns total character count, dead count, and a capped sample list.
+async function scanDeadCharacters(serverId, limit = 1000) {
+  const ctx = await saveOpContext(serverId);
+  const cap = Math.min(Math.max(parseInt(limit, 10) || 1000, 1), 5000);
+  const inner = [
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "ALL:0"; echo "DEAD:0"; exit 0; }`,
+    `T=$(mktemp -d)`,
+    `echo "ALL:$(find "$SB"/*/gamemode/Character -name '*.json' 2>/dev/null | wc -l)"`,
+    `find "$SB"/*/gamemode/Character -name '*.json' -print0 2>/dev/null | xargs -0 -r jq -r '${DEAD_HEALTH_JQ} as $h | select($h != null and $h <= 0) | {id:(input_filename|sub(".*/";"")|rtrimstr(".json")), prefab:(.spawnData.prefab // ""), name:([.components[]? | objects | .name // empty] | first // ""), health:$h} | @json' 2>/dev/null > "$T/dead"`,
+    `echo "DEAD:$(wc -l < "$T/dead")"`,
+    `head -${cap} "$T/dead" | while IFS= read -r j; do echo "D:$(printf %s "$j" | base64 -w0)"; done`,
+    `rm -rf "$T"`,
+  ].join('; ');
+  const out = await runOn(ctx, inner);
+  let all = 0, dead = 0;
+  const items = [];
+  for (const line of String(out).split('\n')) {
+    if (line.startsWith('ALL:')) { all = parseInt(line.slice(4), 10) || 0; continue; }
+    if (line.startsWith('DEAD:')) { dead = parseInt(line.slice(5), 10) || 0; continue; }
+    if (line.startsWith('D:')) {
+      try { items.push(JSON.parse(Buffer.from(line.slice(2), 'base64').toString('utf8'))); } catch {}
+    }
+  }
+  return { total: all, deadCount: dead, shown: items.length, dead: items };
+}
+
+// Move every confirmed-dead character (Health hitzone <= 0) to the recoverable
+// trash in one pass (server must be stopped). A dead body still linked to a
+// player just means that player fresh-spawns on next join — the intended result.
+async function purgeDeadCharacters(serverId) {
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    RUNNING_GUARD(ctx.uuid),
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
+    `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/dead-characters-$TS"; mkdir -p "$TRASH"`,
+    `find "$SB"/*/gamemode/Character -name '*.json' -print0 2>/dev/null | xargs -0 -r jq -r '${DEAD_HEALTH_JQ} as $h | select($h != null and $h <= 0) | input_filename' 2>/dev/null > "$T/deadfiles"`,
+    `while IFS= read -r f; do [ -n "$f" ] && mv "$f" "$TRASH/" 2>/dev/null; done < "$T/deadfiles"`,
+    `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
+    `rm -rf "$T"`,
+  ].join('; ');
+  const out = (await runOn(ctx, inner)).trim();
+  if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
+  const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
+  const trash = (out.match(/TRASH:(\S+)/) || [])[1] || '';
+  return { ok: true, moved, trash };
+}
+
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters };

@@ -1,5 +1,5 @@
-const SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2'];
-const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Chernarus)', eu3: 'EU3 (Everon)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Chernarus)' };
+const SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2', 'dev1'];
+const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Chernarus)', eu3: 'EU3 (Everon)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Chernarus)', dev1: '09 — [DEV] Official Chernarus' };
 
 // Given the shop's purchases.json path (which sits deep inside the
 // pterodactyl volume), strip back to the volume root and append the
@@ -44,12 +44,19 @@ function listServers() {
   const eu3Port = parseInt(process.env.GAME_SERVER_EU3_PORT) || 22;
   const eu3User = process.env.GAME_SERVER_EU3_USER || 'root';
 
+  // The [DEV] Chernarus server lives on the NA box, so it reuses the NA host/creds
+  // and the same nested-SSH hop (region 'na'). Its own path var keeps it independent
+  // of NA list ordering. Set GAME_SERVER_NA_DEV_PATH to its volume shop path
+  // (e.g. /var/lib/pterodactyl/volumes/<dev-uuid>/profile/profile/eiry/reforgedz-dotnet-shop).
+  const naDev = (process.env.GAME_SERVER_NA_DEV_PATH || '').trim();
+
   const all = [
     { id: 'eu1', region: 'eu', host: euHost, port: euPort, user: euUser, path: eu[0] || null },
     { id: 'eu2', region: 'eu', host: euHost, port: euPort, user: euUser, path: eu[1] || null },
     { id: 'eu3', region: 'eu3', host: eu3Host, port: eu3Port, user: eu3User, path: eu3[0] || null },
     { id: 'na1', region: 'na', host: naHost, port: naPort, user: naUser, path: na[0] || null },
     { id: 'na2', region: 'na', host: naHost, port: naPort, user: naUser, path: na[1] || null },
+    { id: 'dev1', region: 'na', host: naHost, port: naPort, user: naUser, path: naDev || null },
   ];
   return all.filter(s => s.host && s.path).map(s => ({
     ...s,

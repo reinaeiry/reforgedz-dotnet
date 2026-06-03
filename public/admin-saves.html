@@ -95,6 +95,7 @@
         <div class="si-tab active" data-tab="search">Search</div>
         <div class="si-tab" data-tab="stats">Stats</div>
         <div class="si-tab" data-tab="orphans">Orphan items</div>
+        <div class="si-tab" data-tab="dead">Dead chars</div>
       </div>
 
       <div id="tab-search">
@@ -129,12 +130,22 @@
         <div id="orphErr" class="si-err"></div>
         <div id="orphList"></div>
       </div>
+
+      <div id="tab-dead" style="display:none">
+        <div class="si-row">
+          <button class="si-btn" id="deadScan">Scan dead characters</button>
+          <button class="si-btn danger" id="deadPurge" disabled>Purge ALL dead</button>
+        </div>
+        <div id="deadNote" class="si-note">Finds characters whose <b>Health</b> hitzone is &le; 0 (dead bodies) — directly, regardless of references. Living characters (Health &gt; 0) and records with no health data are never listed or touched. Server must be STOPPED to purge; everything moves to a recoverable trash folder.</div>
+        <div id="deadErr" class="si-err"></div>
+        <div id="deadList"></div>
+      </div>
     </div>
   </div>
 
   <script>
     const $ = (id) => document.getElementById(id);
-    let serverRunning = null, statsLoaded = false;
+    let serverRunning = null, statsLoaded = false, deadCount = 0;
     const CAT_COLORS = { Player:'#3b6fd4', Character:'#8a5cd0', BaseBuilding:'#c77b2a', Item:'#3fa85f', Vehicle:'#2a9fa8', Storage:'#a8902a', Stashes:'#a8902a', Turret:'#a84a2a', Farming:'#5fa83f', ModMarketplace:'#9a5cd0', PlayerDataCache:'#555', Misc:'#5a5a64', Structure:'#777', VehicleCovers:'#2a9fa8' };
     const catColor = (c) => CAT_COLORS[c] || '#5a5a64';
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -147,6 +158,7 @@
       $('banner').innerHTML = `<span class="si-dot ${state}"></span><span>${esc(text)}</span>`;
       document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
       updateOrphBtn();
+      updateDeadBtn();
     }
     async function refreshStatus(){
       serverRunning=null; setBanner('unknown','Checking server status…');
@@ -179,10 +191,12 @@
       $('orphSelectAll').onclick = () => { document.querySelectorAll('.orph-cb').forEach(c=>c.checked=true); updateOrphBtn(); };
       $('orphDelete').onclick = bulkDropOrphans;
       $('orphPurge').onclick = purgeAllOrphans;
+      $('deadScan').onclick = scanDead;
+      $('deadPurge').onclick = purgeDead;
       $('orphCat').onchange = () => { $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphNote').textContent='Pick a category and scan.'; };
       document.querySelectorAll('.si-tab').forEach(t => t.onclick = () => {
         document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active')); t.classList.add('active');
-        ['search','stats','orphans'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
+        ['search','stats','orphans','dead'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
         if (t.dataset.tab==='stats' && !statsLoaded) loadStats();
       });
       refreshStatus();
@@ -384,6 +398,46 @@
         $('orphNote').innerHTML=`<span class="si-ok">Purged ${r.moved.toLocaleString()} orphaned ${cat} records → trash. Start the server and verify it's healthy.</span>`;
         $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans';
       } catch { alert('Purge failed.'); updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans'; }
+    }
+    // ---- Dead characters (Health hitzone <= 0; ignores references) ----
+    function updateDeadBtn(){
+      const p=$('deadPurge'); if(!p) return;
+      p.disabled = !canWrite() || !deadCount;
+      p.textContent = deadCount ? `Purge ALL dead (${deadCount.toLocaleString()})` : 'Purge ALL dead';
+    }
+    async function scanDead(){
+      $('deadErr').textContent=''; $('deadList').innerHTML=''; deadCount=0; updateDeadBtn();
+      $('deadNote').textContent='Scanning every character record for Health ≤ 0… (a few seconds)';
+      $('deadScan').disabled=true;
+      try {
+        const r = await (await fetch(`/api/shop/admin/save-scan-dead?server=${encodeURIComponent(curServer())}`)).json();
+        if (r.error){ $('deadErr').textContent=r.error; $('deadNote').textContent=''; return; }
+        deadCount = r.deadCount||0;
+        $('deadNote').innerHTML = `<b>${deadCount.toLocaleString()}</b> confirmed-dead character${deadCount===1?'':'s'} (Health ≤ 0) of <b>${(r.total||0).toLocaleString()}</b> total${r.deadCount>r.shown?` (showing first ${r.shown})`:''}. Living characters are never listed.`;
+        if (!deadCount){ $('deadList').innerHTML='<div class="si-note">No dead characters — nothing to clean.</div>'; updateDeadBtn(); return; }
+        $('deadList').innerHTML = (r.dead||[]).map(d=>`<div class="si-orph-row">
+          <code>${esc(d.id)}</code>
+          ${d.name?`<span class="si-chip name">${esc(d.name)}</span>`:''}
+          <span class="si-badge" style="background:#8a5cd022;color:#8a5cd0">prefab ${esc(d.prefab||'?')}</span>
+          <span class="si-badge" style="background:#c0392b22;color:#c0392b">Health ${esc(String(d.health))}</span>
+        </div>`).join('');
+        updateDeadBtn();
+      } catch { $('deadErr').textContent='Scan failed.'; $('deadNote').textContent=''; }
+      finally { $('deadScan').disabled=false; }
+    }
+    async function purgeDead(){
+      if (!canWrite()){ alert('Stop the server first — a delete on a running server reappears (the live server re-saves it).'); return; }
+      if (!deadCount){ alert('Run a scan first.'); return; }
+      if (!confirm(`⚠️ Remove ALL ${deadCount.toLocaleString()} dead character${deadCount===1?'':'s'}?\n\nOnly bodies with Health ≤ 0 are moved — living characters are never touched. They go to a recoverable trash folder. A dead body still linked to a player just means that player fresh-spawns on next join.\n\nContinue?`)) return;
+      if (!confirm(`Final confirm: purging ${deadCount.toLocaleString()} dead characters on ${curServer().toUpperCase()}. Proceed?`)) return;
+      $('deadPurge').disabled=true; $('deadPurge').textContent='Purging…';
+      try {
+        const r = await (await fetch('/api/shop/admin/save-purge-dead',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer()})})).json();
+        if (r.error){ alert('Purge failed: '+r.error); updateDeadBtn(); return; }
+        $('deadNote').innerHTML=`<span class="si-ok">Moved ${r.moved.toLocaleString()} dead character${r.moved===1?'':'s'} → trash. Start the server and verify it's healthy.</span>`;
+        $('deadList').innerHTML=''; deadCount=0; statsLoaded=false; updateDeadBtn();
+      } catch { alert('Purge failed.'); updateDeadBtn(); }
+      finally { $('deadPurge').textContent='Purge ALL dead'; }
     }
     async function bulkDropOrphans(){
       const ids=selectedOrphans(); if(!ids.length) return;
