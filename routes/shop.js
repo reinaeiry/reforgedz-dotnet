@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphanItems } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -1166,6 +1166,57 @@ router.get('/api/shop/admin/save-search', requireAdmin, async (req, res) => {
   } catch (e) {
     console.error('[save-search]', e.message);
     res.status(500).json({ error: e.message || 'Search failed' });
+  }
+});
+
+// Is the game server running? (destructive edits/deletes are blocked while it is)
+router.get('/api/shop/admin/save-status', requireAdmin, async (req, res) => {
+  const { server } = req.query;
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    res.json({ running: await getServerRunning(server) });
+  } catch (e) {
+    console.error('[save-status]', e.message);
+    res.status(500).json({ error: e.message || 'Status check failed' });
+  }
+});
+
+router.post('/api/shop/admin/save-update', requireAdmin, async (req, res) => {
+  const { server, id, json } = req.body || {};
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    const r = await updateSaveRecord(server, id, json);
+    if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first (changes would be overwritten).' });
+    if (!r.ok && r.error === 'not_found') return res.status(404).json({ error: 'Record not found.' });
+    if (!r.ok && r.error === 'Invalid JSON') return res.status(400).json({ error: 'Invalid JSON.' });
+    res.json(r);
+  } catch (e) {
+    console.error('[save-update]', e.message);
+    res.status(e.message === 'Invalid JSON' || e.message === 'Invalid entity id' ? 400 : 500).json({ error: e.message || 'Update failed' });
+  }
+});
+
+router.post('/api/shop/admin/save-delete', requireAdmin, async (req, res) => {
+  const { server, ids } = req.body || {};
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    const r = await deleteSaveRecords(server, ids);
+    if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first (a delete can reappear).' });
+    res.json(r);
+  } catch (e) {
+    console.error('[save-delete]', e.message);
+    res.status(500).json({ error: e.message || 'Delete failed' });
+  }
+});
+
+router.get('/api/shop/admin/save-orphans', requireAdmin, async (req, res) => {
+  const { server } = req.query;
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    res.json(await scanOrphanItems(server));
+  } catch (e) {
+    console.error('[save-orphans]', e.message);
+    res.status(500).json({ error: e.message || 'Scan failed' });
   }
 });
 

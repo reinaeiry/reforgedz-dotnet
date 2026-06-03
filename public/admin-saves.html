@@ -9,31 +9,49 @@
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
   <style>
-    .si-page { padding: 120px 20px 80px; min-height: 100vh; background: var(--bg-dark, #0c0c0e); color: #e8e8ea; max-width: 1100px; margin: 0 auto; }
+    .si-page { padding: 110px 20px 80px; min-height: 100vh; background: var(--bg-dark, #0c0c0e); color: #e8e8ea; max-width: 1100px; margin: 0 auto; }
     .si-page h1 { font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 2rem; margin: 0 0 4px; }
-    .si-sub { color: #9a9aa2; font-size: .85rem; margin-bottom: 24px; }
-    .si-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
+    .si-sub { color: #9a9aa2; font-size: .85rem; margin-bottom: 18px; }
+    .si-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
     .si-controls select, .si-controls input { background: #17171b; border: 1px solid #2c2c34; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: .9rem; }
     .si-controls input[type=text] { flex: 1; min-width: 240px; }
     .si-btn { background: #cc1f1f; color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: .9rem; }
     .si-btn.ghost { background: #23232a; }
-    .si-btn:disabled { opacity: .5; cursor: default; }
+    .si-btn.danger { background: #8a1414; }
+    .si-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .si-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+    .si-tab { background: #1a1a20; border: 1px solid #2c2c34; color: #b9b9c2; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: .85rem; }
+    .si-tab.active { background: #cc1f1f; color: #fff; border-color: #cc1f1f; }
+    .si-banner { padding: 10px 14px; border-radius: 8px; font-size: .85rem; margin-bottom: 14px; display: flex; align-items: center; gap: 10px; }
+    .si-banner.run { background: #2a1414; border: 1px solid #5a2020; color: #ff9b9b; }
+    .si-banner.stop { background: #122a18; border: 1px solid #1f5a30; color: #8fe0a8; }
+    .si-banner.unknown { background: #20202a; border: 1px solid #33333c; color: #9a9aa2; }
+    .si-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+    .si-dot.run { background: #ff5b5b; } .si-dot.stop { background: #5fd07f; } .si-dot.unknown { background: #888; }
     .si-note { color: #9a9aa2; font-size: .8rem; margin: 8px 0; }
     .si-err { color: #ff6b6b; font-size: .85rem; margin: 8px 0; }
-    table.si-cats { width: 100%; border-collapse: collapse; margin-bottom: 28px; }
+    .si-ok { color: #8fe0a8; font-size: .85rem; margin: 8px 0; }
+    table.si-cats { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
     table.si-cats th, table.si-cats td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1f1f25; font-size: .85rem; }
     table.si-cats th { color: #9a9aa2; font-weight: 500; text-transform: uppercase; font-size: .7rem; letter-spacing: .5px; }
     .si-cat-tag { display: inline-block; background: #23232a; border-radius: 4px; padding: 2px 8px; font-size: .72rem; color: #ffb4b4; }
     .si-role { display: inline-block; font-size: .68rem; padding: 2px 7px; border-radius: 4px; background: #20202a; color: #9aa0c0; }
     .si-role.own { background: #14331c; color: #7fe0a0; }
     .si-result { background: #131318; border: 1px solid #22222a; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
-    .si-result-head { display: flex; gap: 10px; align-items: center; padding: 10px 14px; cursor: pointer; }
+    .si-result-head { display: flex; gap: 10px; align-items: center; padding: 10px 14px; cursor: pointer; flex-wrap: wrap; }
     .si-result-head:hover { background: #17171d; }
     .si-result-id { font-family: monospace; font-size: .8rem; color: #cfd0d6; }
     .si-result-meta { margin-left: auto; display: flex; gap: 8px; align-items: center; }
-    .si-result pre { margin: 0; padding: 12px 14px; background: #0e0e12; border-top: 1px solid #22222a; max-height: 420px; overflow: auto; font-size: .78rem; white-space: pre-wrap; word-break: break-word; }
-    .si-dl { color: #7db3ff; text-decoration: none; font-size: .78rem; border: 1px solid #2c4a6e; padding: 3px 9px; border-radius: 6px; }
-    .si-dl:hover { background: #16263a; }
+    .si-result pre, .si-result textarea { margin: 0; padding: 12px 14px; background: #0e0e12; border-top: 1px solid #22222a; max-height: 440px; overflow: auto; font-size: .78rem; white-space: pre-wrap; word-break: break-word; color: #d6d7dd; }
+    .si-result textarea { width: 100%; box-sizing: border-box; min-height: 280px; border: none; resize: vertical; font-family: monospace; }
+    .si-act { color: #cfd0d6; text-decoration: none; font-size: .76rem; border: 1px solid #33333c; padding: 3px 9px; border-radius: 6px; cursor: pointer; }
+    .si-act:hover { background: #20202a; }
+    .si-act.dl { color: #7db3ff; border-color: #2c4a6e; }
+    .si-act.del { color: #ff8a8a; border-color: #5a2424; }
+    .si-act.save { color: #8fe0a8; border-color: #1f5a30; }
+    .si-act.disabled { opacity: .35; pointer-events: none; }
+    .si-orph-row { display: flex; gap: 10px; align-items: center; padding: 7px 12px; border-bottom: 1px solid #1c1c22; font-size: .8rem; }
+    .si-orph-row code { color: #cfd0d6; font-family: monospace; }
     .si-denied { text-align: center; padding: 80px 20px; color: #ff6b6b; }
     a.back { color: #9a9aa2; text-decoration: none; font-size: .85rem; }
   </style>
@@ -45,32 +63,69 @@
     <div id="content" style="display:none">
       <a class="back" href="/admin/orders">← Admin</a>
       <h1>Save Inspector</h1>
-      <div class="si-sub">Search and download the ReforgedZ persistence saves (what Pterodactyl's file browser can't).</div>
+      <div class="si-sub">Search, edit, drop & clean the ReforgedZ persistence saves. Edits/deletes require the server stopped and are backed up to a recoverable trash folder.</div>
 
       <div class="si-controls">
         <select id="server"></select>
-        <input type="text" id="q" placeholder="Search: UUID, prefab GUID, store name, coords…" />
-        <button class="si-btn" id="searchBtn">Search</button>
-        <button class="si-btn ghost" id="overviewBtn">Overview</button>
-        <button class="si-btn ghost" id="dlAllBtn">Download entire save</button>
+        <button class="si-btn ghost" id="refreshStatus">Refresh status</button>
       </div>
-      <div id="err" class="si-err"></div>
-      <div id="note" class="si-note"></div>
+      <div id="banner" class="si-banner unknown"><span class="si-dot unknown"></span><span id="bannerText">Checking server status…</span></div>
 
-      <div id="overview"></div>
-      <div id="results"></div>
+      <div class="si-tabs">
+        <div class="si-tab active" data-tab="search">Search</div>
+        <div class="si-tab" data-tab="orphans">Orphan items</div>
+      </div>
+
+      <div id="tab-search">
+        <div class="si-controls">
+          <input type="text" id="q" placeholder="Search: UUID, prefab GUID, store name, coords…" />
+          <button class="si-btn" id="searchBtn">Search</button>
+          <button class="si-btn ghost" id="overviewBtn">Overview</button>
+          <button class="si-btn ghost" id="dlAllBtn">Download entire save</button>
+        </div>
+        <div id="err" class="si-err"></div>
+        <div id="note" class="si-note"></div>
+        <div id="overview"></div>
+        <div id="results"></div>
+      </div>
+
+      <div id="tab-orphans" style="display:none">
+        <div class="si-controls">
+          <button class="si-btn" id="scanBtn">Scan items for orphans</button>
+          <button class="si-btn ghost" id="orphSelectAll">Select all</button>
+          <button class="si-btn danger" id="orphDelete" disabled>Drop selected</button>
+        </div>
+        <div id="orphNote" class="si-note">Unreferenced items = loose world items not held by any base/character/storage/vehicle. Review before dropping.</div>
+        <div id="orphErr" class="si-err"></div>
+        <div id="orphList"></div>
+      </div>
     </div>
   </div>
 
   <script>
     const $ = (id) => document.getElementById(id);
-    function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    let serverRunning = null; // null=unknown, true/false
+    function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     function curServer(){ return $('server').value; }
-    function setErr(m){ $('err').textContent = m || ''; }
-    function setNote(m){ $('note').textContent = m || ''; }
-    function download(rel){
-      const u = `/api/shop/admin/save-download?server=${encodeURIComponent(curServer())}&path=${encodeURIComponent(rel)}`;
-      window.location.href = u;
+    function canWrite(){ return serverRunning === false; }
+    function download(rel){ window.location.href = `/api/shop/admin/save-download?server=${encodeURIComponent(curServer())}&path=${encodeURIComponent(rel)}`; }
+
+    function setBanner(state, text){
+      const b = $('banner'); b.className = 'si-banner ' + state;
+      b.innerHTML = `<span class="si-dot ${state}"></span><span>${esc(text)}</span>`;
+      // reflect on destructive controls
+      document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
+      $('orphDelete').disabled = !canWrite() || !selectedOrphans().length;
+    }
+    async function refreshStatus(){
+      serverRunning = null; setBanner('unknown', 'Checking server status…');
+      try {
+        const r = await (await fetch(`/api/shop/admin/save-status?server=${encodeURIComponent(curServer())}`)).json();
+        if (r.error) { setBanner('unknown', r.error); return; }
+        serverRunning = !!r.running;
+        if (serverRunning) setBanner('run', 'Server is RUNNING — viewing & downloads only. Stop it in the panel to enable edits/deletes (changes would otherwise be overwritten).');
+        else setBanner('stop', 'Server is STOPPED — safe to edit & drop records. All changes are backed up to a recoverable trash folder.');
+      } catch { setBanner('unknown', 'Could not check status.'); }
     }
 
     async function init(){
@@ -81,62 +136,109 @@
       try {
         const servers = await (await fetch('/api/shop/admin/save-servers')).json();
         $('server').innerHTML = servers.map(s => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
-      } catch { setErr('Could not load servers.'); }
+      } catch { $('err').textContent = 'Could not load servers.'; }
 
+      $('server').onchange = () => { refreshStatus(); $('results').innerHTML=''; $('overview').innerHTML=''; $('orphList').innerHTML=''; $('note').textContent=''; };
+      $('refreshStatus').onclick = refreshStatus;
       $('searchBtn').onclick = doSearch;
       $('overviewBtn').onclick = doOverview;
       $('dlAllBtn').onclick = () => download('.');
       $('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+      $('scanBtn').onclick = doScan;
+      $('orphSelectAll').onclick = () => { document.querySelectorAll('.orph-cb').forEach(c=>c.checked=true); updateOrphBtn(); };
+      $('orphDelete').onclick = bulkDropOrphans;
+      document.querySelectorAll('.si-tab').forEach(t => t.onclick = () => {
+        document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active'));
+        t.classList.add('active');
+        $('tab-search').style.display = t.dataset.tab==='search' ? 'block' : 'none';
+        $('tab-orphans').style.display = t.dataset.tab==='orphans' ? 'block' : 'none';
+      });
+      refreshStatus();
     }
 
+    // ---- Search ----
     async function doOverview(){
-      setErr(''); setNote('Loading overview…'); $('results').innerHTML = ''; $('overview').innerHTML = '';
+      $('err').textContent=''; $('note').textContent='Loading overview…'; $('results').innerHTML=''; $('overview').innerHTML='';
       try {
         const data = await (await fetch(`/api/shop/admin/save-categories?server=${encodeURIComponent(curServer())}`)).json();
-        if (data.error) { setErr(data.error); setNote(''); return; }
-        const cats = (data.categories || []).sort((a,b) => b.count - a.count);
-        const total = cats.reduce((a,c) => a + c.count, 0);
-        setNote(`${cats.length} categories · ${total} records`);
+        if (data.error) { $('err').textContent=data.error; $('note').textContent=''; return; }
+        const cats=(data.categories||[]).sort((a,b)=>b.count-a.count);
+        $('note').textContent=`${cats.length} categories · ${cats.reduce((a,c)=>a+c.count,0)} records`;
         $('overview').innerHTML = `<table class="si-cats"><thead><tr><th>Category</th><th>World</th><th>Records</th><th></th></tr></thead><tbody>` +
-          cats.map(c => `<tr>
-            <td><span class="si-cat-tag">${esc(c.category)}</span></td>
-            <td style="color:#7a7a82">${esc(c.world)}</td>
-            <td>${c.count}</td>
-            <td><a class="si-dl" href="#" onclick="download('${esc(c.rel)}');return false;">Download</a></td>
-          </tr>`).join('') + `</tbody></table>`;
-      } catch (e) { setErr('Overview failed.'); setNote(''); }
+          cats.map(c=>`<tr><td><span class="si-cat-tag">${esc(c.category)}</span></td><td style="color:#7a7a82">${esc(c.world)}</td><td>${c.count}</td><td><span class="si-act dl" onclick="download('${esc(c.rel)}')">Download</span></td></tr>`).join('') + `</tbody></table>`;
+      } catch { $('err').textContent='Overview failed.'; $('note').textContent=''; }
     }
 
     async function doSearch(){
-      const q = $('q').value.trim();
-      setErr(''); $('overview').innerHTML = '';
-      if (!q) { setErr('Enter something to search for.'); return; }
-      setNote('Searching…'); $('results').innerHTML = '';
+      const q=$('q').value.trim(); $('err').textContent=''; $('overview').innerHTML='';
+      if(!q){ $('err').textContent='Enter something to search for.'; return; }
+      $('note').textContent='Searching…'; $('results').innerHTML='';
       try {
         const data = await (await fetch(`/api/shop/admin/save-search?server=${encodeURIComponent(curServer())}&q=${encodeURIComponent(q)}`)).json();
-        if (data.error) { setErr(data.error); setNote(''); return; }
-        const r = data.results || [];
-        setNote(`${data.total} match${data.total === 1 ? '' : 'es'}${data.total > r.length ? ` — showing first ${r.length}` : ''}`);
-        if (!r.length) { $('results').innerHTML = '<div class="si-note">No matching records.</div>'; return; }
-        $('results').innerHTML = r.map((rec, i) => {
-          const rel = `${rec.world}/gamemode/${rec.category}/${rec.id}.json`;
-          const linkedId = rec.data && rec.data.entity && rec.data.entity.playerEntity;
-          const linkBtn = linkedId ? `<a class="si-dl" href="#" onclick="event.stopPropagation();loadLinked(this,'${esc(linkedId)}');return false;">Linked character</a>` : '';
-          return `<div class="si-result">
-            <div class="si-result-head" onclick="this.parentNode.querySelector('pre').style.display = this.parentNode.querySelector('pre').style.display==='none'?'block':'none'">
-              <span class="si-cat-tag">${esc(rec.category || '?')}</span>
-              <span class="si-result-id">${esc(rec.id)}</span>
-              ${rec.role ? `<span class="si-role${/^This /.test(rec.role) ? ' own' : ''}" title="${esc((rec.matchPaths || []).join(', '))}">${esc(rec.role)}</span>` : ''}
-              <span class="si-result-meta">
-                ${linkBtn}
-                <a class="si-dl" href="#" onclick="event.stopPropagation();download('${esc(rel)}');return false;">Download</a>
-              </span>
-            </div>
-            <pre style="display:${i === 0 ? 'block' : 'none'}">${esc(JSON.stringify(rec.data, null, 2))}</pre>
-            <div class="si-linked"></div>
-          </div>`;
-        }).join('');
-      } catch (e) { setErr('Search failed.'); setNote(''); }
+        if (data.error){ $('err').textContent=data.error; $('note').textContent=''; return; }
+        const r=data.results||[];
+        $('note').textContent=`${data.total} match${data.total===1?'':'es'}${data.total>r.length?` — showing first ${r.length}`:''}`;
+        if(!r.length){ $('results').innerHTML='<div class="si-note">No matching records.</div>'; return; }
+        $('results').innerHTML = r.map((rec,i)=>resultHtml(rec, i===0)).join('');
+      } catch { $('err').textContent='Search failed.'; $('note').textContent=''; }
+    }
+
+    function resultHtml(rec, open){
+      const rel = `${rec.world}/gamemode/${rec.category}/${rec.id}.json`;
+      const linkedId = rec.data && rec.data.entity && rec.data.entity.playerEntity;
+      const dis = canWrite() ? '' : ' disabled';
+      return `<div class="si-result" data-id="${esc(rec.id)}" data-rel="${esc(rel)}">
+        <div class="si-result-head" onclick="togglePre(this)">
+          <span class="si-cat-tag">${esc(rec.category||'?')}</span>
+          <span class="si-result-id">${esc(rec.id)}</span>
+          ${rec.role?`<span class="si-role${/^This /.test(rec.role)?' own':''}" title="${esc((rec.matchPaths||[]).join(', '))}">${esc(rec.role)}</span>`:''}
+          <span class="si-result-meta">
+            ${linkedId?`<span class="si-act" onclick="event.stopPropagation();loadLinked(this,'${esc(linkedId)}')">Linked character</span>`:''}
+            <span class="si-act" onclick="event.stopPropagation();toggleEdit(this)">Edit</span>
+            <span class="si-act del${dis ? ' disabled':''}" onclick="event.stopPropagation();dropRecord(this)">Drop</span>
+            <span class="si-act dl" onclick="event.stopPropagation();download(this.closest('.si-result').dataset.rel)">Download</span>
+          </span>
+        </div>
+        <pre style="display:${open?'block':'none'}">${esc(JSON.stringify(rec.data,null,2))}</pre>
+        <div class="si-linked"></div>
+      </div>`;
+    }
+    function togglePre(head){ const p=head.parentNode.querySelector('pre'); if(p) p.style.display = p.style.display==='none'?'block':'none'; }
+
+    function toggleEdit(btn){
+      const box = btn.closest('.si-result'); const pre = box.querySelector('pre');
+      if (box.querySelector('textarea')) return; // already editing
+      if (!canWrite()) { alert('Stop the server first — edits to a running server get overwritten.'); return; }
+      const ta = document.createElement('textarea');
+      ta.value = JSON.stringify(JSON.parse(pre.textContent), null, 2);
+      pre.style.display='none'; pre.insertAdjacentElement('afterend', ta);
+      const bar = document.createElement('div'); bar.style.cssText='padding:8px 14px;border-top:1px solid #22222a;display:flex;gap:8px';
+      bar.innerHTML = `<span class="si-act save" onclick="saveEdit(this)">Save changes</span><span class="si-act" onclick="cancelEdit(this)">Cancel</span>`;
+      ta.insertAdjacentElement('afterend', bar);
+    }
+    function cancelEdit(btn){ const box=btn.closest('.si-result'); box.querySelector('textarea')?.remove(); btn.parentNode.remove(); const pre=box.querySelector('pre'); if(pre) pre.style.display='block'; }
+    async function saveEdit(btn){
+      const box=btn.closest('.si-result'); const id=box.dataset.id; const ta=box.querySelector('textarea');
+      let parsed; try { parsed = JSON.parse(ta.value); } catch { alert('That is not valid JSON — fix it before saving.'); return; }
+      if (!confirm(`Save changes to record\n${id}?\n\nThe server must be stopped. The previous version is backed up.`)) return;
+      btn.textContent='Saving…';
+      try {
+        const r = await (await fetch('/api/shop/admin/save-update', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ server: curServer(), id, json: JSON.stringify(parsed) }) })).json();
+        if (r.error){ alert('Save failed: '+r.error); btn.textContent='Save changes'; return; }
+        const pre=box.querySelector('pre'); pre.textContent = JSON.stringify(parsed, null, 2); pre.style.display='block';
+        ta.remove(); btn.parentNode.remove();
+      } catch { alert('Save failed.'); btn.textContent='Save changes'; }
+    }
+
+    async function dropRecord(btn){
+      const box=btn.closest('.si-result'); const id=box.dataset.id;
+      if (!canWrite()) { alert('Stop the server first — a delete on a running server can reappear.'); return; }
+      if (!confirm(`⚠️ ARE YOU SURE?\n\nDrop this record as a LAST RESORT:\n${id}\n\nIt will be moved to a recoverable trash folder on the server. Continue?`)) return;
+      try {
+        const r = await (await fetch('/api/shop/admin/save-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ server: curServer(), ids: [id] }) })).json();
+        if (r.error){ alert('Drop failed: '+r.error); return; }
+        box.style.opacity='.4'; box.querySelector('.si-result-meta').innerHTML = `<span class="si-note">Dropped (${r.moved}) → trash</span>`;
+      } catch { alert('Drop failed.'); }
     }
 
     async function loadLinked(btn, entityId){
@@ -144,22 +246,50 @@
       box.innerHTML = '<div class="si-note" style="padding:10px 14px">Loading linked character…</div>';
       try {
         const rec = await (await fetch(`/api/shop/admin/save-record?server=${encodeURIComponent(curServer())}&id=${encodeURIComponent(entityId)}`)).json();
-        if (rec.error) { box.innerHTML = `<div class="si-err" style="padding:10px 14px">${esc(rec.error)}</div>`; return; }
-        if (!rec.found) { box.innerHTML = `<div class="si-note" style="padding:10px 14px">No character record for <span class="si-result-id">${esc(entityId)}</span> — likely a dead / cleaned-up character.</div>`; return; }
-        const rel = `${rec.world}/gamemode/${rec.category}/${rec.id}.json`;
-        box.innerHTML = `<div class="si-result" style="margin:8px 14px 12px;border-color:#3a3a44">
-          <div class="si-result-head" onclick="this.parentNode.querySelector('pre').style.display = this.parentNode.querySelector('pre').style.display==='none'?'block':'none'">
-            <span class="si-cat-tag">↳ ${esc(rec.category || 'Character')}</span>
-            <span class="si-result-id">${esc(rec.id)}</span>
-            <span class="si-result-meta"><a class="si-dl" href="#" onclick="event.stopPropagation();download('${esc(rel)}');return false;">Download</a></span>
-          </div>
-          <pre>${esc(JSON.stringify(rec.data, null, 2))}</pre>
-        </div>`;
-      } catch (e) { box.innerHTML = '<div class="si-err" style="padding:10px 14px">Lookup failed.</div>'; }
+        if (rec.error){ box.innerHTML=`<div class="si-err" style="padding:10px 14px">${esc(rec.error)}</div>`; return; }
+        if (!rec.found){ box.innerHTML=`<div class="si-note" style="padding:10px 14px">No character record for <span class="si-result-id">${esc(entityId)}</span> — likely a dead / cleaned-up character.</div>`; return; }
+        box.innerHTML = resultHtml(rec, true).replace('si-result"', 'si-result" style="margin:8px 14px 12px;border-color:#3a3a44"');
+      } catch { box.innerHTML='<div class="si-err" style="padding:10px 14px">Lookup failed.</div>'; }
     }
 
-    window.download = download;
-    window.loadLinked = loadLinked;
+    // ---- Orphans ----
+    function selectedOrphans(){ return Array.from(document.querySelectorAll('.orph-cb:checked')).map(c=>c.dataset.id); }
+    function updateOrphBtn(){ const n=selectedOrphans().length; $('orphDelete').disabled = !canWrite() || !n; $('orphDelete').textContent = n?`Drop selected (${n})`:'Drop selected'; }
+    async function doScan(){
+      $('orphErr').textContent=''; $('orphList').innerHTML=''; $('orphNote').textContent='Scanning… (greps every save file once — a few seconds)';
+      try {
+        const data = await (await fetch(`/api/shop/admin/save-orphans?server=${encodeURIComponent(curServer())}`)).json();
+        if (data.error){ $('orphErr').textContent=data.error; $('orphNote').textContent=''; return; }
+        $('orphNote').textContent = `${data.orphanCount} orphaned of ${data.totalItems} items${data.orphanCount>data.shown?` — showing first ${data.shown}`:''}. Tick the ones to drop.`;
+        if (!data.orphans.length){ $('orphList').innerHTML='<div class="si-note">No orphaned items — nothing to clean.</div>'; return; }
+        $('orphList').innerHTML = data.orphans.map(o=>`<div class="si-orph-row">
+          <input type="checkbox" class="orph-cb" data-id="${esc(o.id)}" onchange="updateOrphBtn()">
+          <code>${esc(o.id)}</code>
+          <span class="si-cat-tag">prefab ${esc(o.prefab||'?')}</span>
+          <span style="color:#7a7a82">${o.coords?('@ '+o.coords.map(n=>Math.round(n)).join(', ')):''}</span>
+        </div>`).join('');
+        updateOrphBtn();
+      } catch { $('orphErr').textContent='Scan failed.'; $('orphNote').textContent=''; }
+    }
+    async function bulkDropOrphans(){
+      const ids = selectedOrphans();
+      if (!ids.length) return;
+      if (!canWrite()) { alert('Stop the server first.'); return; }
+      if (!confirm(`⚠️ LAST RESORT — drop ${ids.length} orphaned item${ids.length===1?'':'s'}?\n\nThis is a deliberate, last-resort cleanup. They move to a recoverable trash folder on the server (the server must be stopped). Continue?`)) return;
+      if (ids.length > 50 && !confirm(`Confirm again: you are dropping ${ids.length} items. Proceed?`)) return;
+      $('orphDelete').disabled=true; $('orphDelete').textContent='Dropping…';
+      try {
+        const r = await (await fetch('/api/shop/admin/save-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ server: curServer(), ids }) })).json();
+        if (r.error){ alert('Drop failed: '+r.error); updateOrphBtn(); return; }
+        $('orphNote').innerHTML = `<span class="si-ok">Dropped ${r.moved} of ${r.requested} → trash (${esc(r.trash||'')})</span>`;
+        ids.forEach(id => document.querySelector(`.orph-cb[data-id="${id}"]`)?.closest('.si-orph-row')?.remove());
+        updateOrphBtn();
+      } catch { alert('Drop failed.'); updateOrphBtn(); }
+    }
+
+    window.download=download; window.loadLinked=loadLinked; window.togglePre=togglePre;
+    window.toggleEdit=toggleEdit; window.saveEdit=saveEdit; window.cancelEdit=cancelEdit; window.dropRecord=dropRecord;
+    window.updateOrphBtn=updateOrphBtn;
     init();
   </script>
 </body>

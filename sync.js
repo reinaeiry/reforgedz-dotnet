@@ -475,4 +475,120 @@ async function getSaveRecord(serverId, entityId) {
   return { found: true, id, category, world, data };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord };
+// ---- Save-editing helpers (require the server stopped; back up first) ----
+
+function volumeUuidFromPath(p) {
+  const m = String(p || '').match(/\/volumes\/([^/]+)\//);
+  return m ? m[1] : null;
+}
+// Recoverable trash sibling of .save (NOT under .save/game, so the game never loads it).
+function trashBaseFromSave(saveBase) {
+  return saveBase.replace(/\/\.save\/game$/, '/.save-inspector-trash');
+}
+
+async function saveOpContext(serverId) {
+  const servers = listServers();
+  const server = servers.find(s => s.id === serverId);
+  if (!server) throw new Error('Unknown server');
+  const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
+  if (!saveBase) throw new Error('No save path for this server');
+  const uuid = volumeUuidFromPath(server.path);
+  if (!uuid) throw new Error('Cannot resolve server container');
+  const privateKey = getPrivateKey();
+  if (!privateKey) throw new Error('SSH key not configured');
+  const entryHost = servers.find(s => s.region === 'eu') || servers[0];
+  if (!entryHost) throw new Error('No entry host');
+  return { server, saveBase, uuid, privateKey, entryHost, trashBase: trashBaseFromSave(saveBase) };
+}
+
+async function runOn(ctx, inner) {
+  const cmd = wrapForRegion(ctx.server, inner);
+  const conn = await sshOpen(ctx.privateKey, ctx.entryHost.host, ctx.entryHost.port, ctx.entryHost.user);
+  try { return await sshRun(conn, cmd); } finally { conn.end(); }
+}
+
+// Is the game-server container currently running? (destructive ops are blocked when it is)
+async function getServerRunning(serverId) {
+  const ctx = await saveOpContext(serverId);
+  const out = await runOn(ctx, `docker ps -q -f name=${ctx.uuid} 2>/dev/null | head -1`);
+  return String(out).trim().length > 0;
+}
+
+const RUNNING_GUARD = (uuid) => `if docker ps -q -f name=${uuid} 2>/dev/null | grep -q .; then echo RUNNING; exit 0; fi`;
+
+// Overwrite a record's JSON (server must be stopped). Backs up the old version.
+async function updateSaveRecord(serverId, entityId, jsonText) {
+  const id = String(entityId == null ? '' : entityId).trim();
+  if (!/^[0-9a-fA-F-]{6,64}$/.test(id)) throw new Error('Invalid entity id');
+  let obj;
+  try { obj = JSON.parse(jsonText); } catch { throw new Error('Invalid JSON'); }
+  const newJson = JSON.stringify(obj, null, 4);
+  const ctx = await saveOpContext(serverId);
+  const b64 = Buffer.from(newJson, 'utf8').toString('base64');
+  const inner = [
+    RUNNING_GUARD(ctx.uuid),
+    `SB='${ctx.saveBase}'; TRASH='${ctx.trashBase}/edits'`,
+    `f=$(find "$SB" -name '${id}.json' 2>/dev/null | head -1)`,
+    `[ -z "$f" ] && { echo NOTFOUND; exit 0; }`,
+    `mkdir -p "$TRASH"; cp "$f" "$TRASH/${id}.$(date +%s).bak.json"`,
+    `printf %s '${b64}' | base64 -d > "$f"`,
+    `echo OK`,
+  ].join('; ');
+  const out = (await runOn(ctx, inner)).trim();
+  if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
+  if (out.includes('NOTFOUND')) return { ok: false, error: 'not_found' };
+  return { ok: out.includes('OK') };
+}
+
+// Move records to the recoverable trash (server must be stopped).
+async function deleteSaveRecords(serverId, ids) {
+  const valid = (Array.isArray(ids) ? ids : []).map(x => String(x).trim()).filter(x => /^[0-9a-fA-F-]{6,64}$/.test(x));
+  if (!valid.length) throw new Error('No valid ids');
+  if (valid.length > 5000) throw new Error('Too many at once (max 5000)');
+  const ctx = await saveOpContext(serverId);
+  const idsB64 = Buffer.from(valid.join('\n'), 'utf8').toString('base64');
+  const inner = [
+    RUNNING_GUARD(ctx.uuid),
+    `SB='${ctx.saveBase}'; TS=$(date +%s); TRASH="${ctx.trashBase}/deleted/$TS"; mkdir -p "$TRASH"`,
+    `printf %s '${idsB64}' | base64 -d | while IFS= read -r id; do [ -z "$id" ] && continue; f=$(find "$SB" -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && mv "$f" "$TRASH/"; done`,
+    `echo "MOVED:$(ls "$TRASH" 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
+  ].join('; ');
+  const out = (await runOn(ctx, inner)).trim();
+  if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
+  const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
+  const trash = (out.match(/TRASH:(\S+)/) || [])[1] || '';
+  return { ok: true, moved, requested: valid.length, trash };
+}
+
+// Items whose id is referenced by NO other (non-Item) save file = loose world
+// items that never got cleaned up. Returns the orphan list + totals.
+async function scanOrphanItems(serverId, limit = 1000) {
+  const ctx = await saveOpContext(serverId);
+  const cap = Math.min(Math.max(parseInt(limit, 10) || 1000, 1), 5000);
+  const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+  const inner = [
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "TOTAL:0"; echo "ITEMS:0"; exit 0; }`,
+    `T=$(mktemp -d)`,
+    `find "$SB"/*/gamemode/Item -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/items"`,
+    `find "$SB" -name '*.json' -not -path '*/gamemode/Item/*' -print0 2>/dev/null | xargs -0 grep -hoE '${UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
+    `comm -23 "$T/items" "$T/refs" > "$T/orph"`,
+    `echo "ITEMS:$(wc -l < "$T/items")"; echo "TOTAL:$(wc -l < "$T/orph")"`,
+    `head -${cap} "$T/orph" | while IFS= read -r id; do f=$(find "$SB"/*/gamemode/Item -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && echo "ORPH:$id:$(jq -c '{prefab:.spawnData.prefab,coords:.spawnData.coords,store:.configuration.m_rStoreName}' "$f" 2>/dev/null | base64 -w0)"; done`,
+    `rm -rf "$T"`,
+  ].join('; ');
+  const out = await runOn(ctx, inner);
+  let total = 0, items = 0;
+  const orphans = [];
+  for (const line of String(out).split('\n')) {
+    if (line.startsWith('TOTAL:')) { total = parseInt(line.slice(6), 10) || 0; continue; }
+    if (line.startsWith('ITEMS:')) { items = parseInt(line.slice(6), 10) || 0; continue; }
+    const m = line.match(/^ORPH:([0-9a-fA-F-]+):([A-Za-z0-9+/=]+)$/);
+    if (!m) continue;
+    let info = {};
+    try { info = JSON.parse(Buffer.from(m[2], 'base64').toString('utf8')); } catch {}
+    orphans.push({ id: m[1], prefab: info.prefab, coords: info.coords, store: info.store });
+  }
+  return { totalItems: items, orphanCount: total, shown: orphans.length, orphans };
+}
+
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphanItems };
