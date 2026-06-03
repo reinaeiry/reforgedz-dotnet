@@ -9,51 +9,70 @@
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
   <style>
-    .si-page { padding: 110px 20px 80px; min-height: 100vh; background: var(--bg-dark, #0c0c0e); color: #e8e8ea; max-width: 1100px; margin: 0 auto; }
-    .si-page h1 { font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 2rem; margin: 0 0 4px; }
-    .si-sub { color: #9a9aa2; font-size: .85rem; margin-bottom: 18px; }
-    .si-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
-    .si-controls select, .si-controls input { background: #17171b; border: 1px solid #2c2c34; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: .9rem; }
-    .si-controls input[type=text] { flex: 1; min-width: 240px; }
-    .si-btn { background: #cc1f1f; color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: .9rem; }
-    .si-btn.ghost { background: #23232a; }
-    .si-btn.danger { background: #8a1414; }
-    .si-btn:disabled { opacity: .4; cursor: not-allowed; }
-    .si-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
-    .si-tab { background: #1a1a20; border: 1px solid #2c2c34; color: #b9b9c2; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: .85rem; }
-    .si-tab.active { background: #cc1f1f; color: #fff; border-color: #cc1f1f; }
-    .si-banner { padding: 10px 14px; border-radius: 8px; font-size: .85rem; margin-bottom: 14px; display: flex; align-items: center; gap: 10px; }
-    .si-banner.run { background: #2a1414; border: 1px solid #5a2020; color: #ff9b9b; }
-    .si-banner.stop { background: #122a18; border: 1px solid #1f5a30; color: #8fe0a8; }
-    .si-banner.unknown { background: #20202a; border: 1px solid #33333c; color: #9a9aa2; }
-    .si-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-    .si-dot.run { background: #ff5b5b; } .si-dot.stop { background: #5fd07f; } .si-dot.unknown { background: #888; }
-    .si-note { color: #9a9aa2; font-size: .8rem; margin: 8px 0; }
-    .si-err { color: #ff6b6b; font-size: .85rem; margin: 8px 0; }
-    .si-ok { color: #8fe0a8; font-size: .85rem; margin: 8px 0; }
-    table.si-cats { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-    table.si-cats th, table.si-cats td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1f1f25; font-size: .85rem; }
-    table.si-cats th { color: #9a9aa2; font-weight: 500; text-transform: uppercase; font-size: .7rem; letter-spacing: .5px; }
-    .si-cat-tag { display: inline-block; background: #23232a; border-radius: 4px; padding: 2px 8px; font-size: .72rem; color: #ffb4b4; }
-    .si-role { display: inline-block; font-size: .68rem; padding: 2px 7px; border-radius: 4px; background: #20202a; color: #9aa0c0; }
-    .si-role.own { background: #14331c; color: #7fe0a0; }
-    .si-result { background: #131318; border: 1px solid #22222a; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
-    .si-result-head { display: flex; gap: 10px; align-items: center; padding: 10px 14px; cursor: pointer; flex-wrap: wrap; }
-    .si-result-head:hover { background: #17171d; }
-    .si-result-id { font-family: monospace; font-size: .8rem; color: #cfd0d6; }
-    .si-result-meta { margin-left: auto; display: flex; gap: 8px; align-items: center; }
-    .si-result pre, .si-result textarea { margin: 0; padding: 12px 14px; background: #0e0e12; border-top: 1px solid #22222a; max-height: 440px; overflow: auto; font-size: .78rem; white-space: pre-wrap; word-break: break-word; color: #d6d7dd; }
-    .si-result textarea { width: 100%; box-sizing: border-box; min-height: 280px; border: none; resize: vertical; font-family: monospace; }
-    .si-act { color: #cfd0d6; text-decoration: none; font-size: .76rem; border: 1px solid #33333c; padding: 3px 9px; border-radius: 6px; cursor: pointer; }
-    .si-act:hover { background: #20202a; }
-    .si-act.dl { color: #7db3ff; border-color: #2c4a6e; }
-    .si-act.del { color: #ff8a8a; border-color: #5a2424; }
-    .si-act.save { color: #8fe0a8; border-color: #1f5a30; }
-    .si-act.disabled { opacity: .35; pointer-events: none; }
-    .si-orph-row { display: flex; gap: 10px; align-items: center; padding: 7px 12px; border-bottom: 1px solid #1c1c22; font-size: .8rem; }
-    .si-orph-row code { color: #cfd0d6; font-family: monospace; }
-    .si-denied { text-align: center; padding: 80px 20px; color: #ff6b6b; }
-    a.back { color: #9a9aa2; text-decoration: none; font-size: .85rem; }
+    :root { --si-bg:#0b0b0e; --si-card:#15151b; --si-card2:#101015; --si-line:#26262e; --si-mut:#8e8e98; --si-red:#cc1f1f; }
+    .si-page { padding: 100px 20px 80px; min-height: 100vh; background: var(--si-bg); color: #e9e9ec; max-width: 1140px; margin: 0 auto; font-family: 'Inter', system-ui, sans-serif; }
+    .si-top { display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:6px; }
+    .si-page h1 { font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 1.9rem; margin: 0; }
+    .si-sub { color: var(--si-mut); font-size: .82rem; margin-bottom: 18px; }
+    a.back { color: var(--si-mut); text-decoration: none; font-size: .82rem; }
+    .si-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    select, input[type=text] { background:#16161c; border:1px solid var(--si-line); color:#fff; padding:10px 12px; border-radius:9px; font-size:.9rem; }
+    input[type=text]{ flex:1; min-width:240px; }
+    .si-btn { background:var(--si-red); color:#fff; border:none; padding:10px 16px; border-radius:9px; font-weight:600; cursor:pointer; font-size:.88rem; }
+    .si-btn.ghost { background:#222229; } .si-btn.danger { background:#7e1414; } .si-btn:disabled { opacity:.4; cursor:not-allowed; }
+    .si-tabs { display:flex; gap:6px; margin:16px 0 16px; }
+    .si-tab { background:#16161c; border:1px solid var(--si-line); color:#b9b9c2; padding:9px 18px; border-radius:9px; cursor:pointer; font-weight:600; font-size:.85rem; }
+    .si-tab.active { background:var(--si-red); color:#fff; border-color:var(--si-red); }
+    .si-banner { padding:11px 14px; border-radius:9px; font-size:.84rem; margin-bottom:16px; display:flex; align-items:center; gap:10px; }
+    .si-banner.run { background:#2a1414; border:1px solid #5a2020; color:#ff9b9b; }
+    .si-banner.stop { background:#0f2a17; border:1px solid #1f5a30; color:#8fe0a8; }
+    .si-banner.unknown { background:#1a1a20; border:1px solid var(--si-line); color:var(--si-mut); }
+    .si-dot { width:9px;height:9px;border-radius:50%;flex:none; }
+    .si-dot.run{background:#ff5b5b;} .si-dot.stop{background:#5fd07f;} .si-dot.unknown{background:#888;}
+    .si-note { color:var(--si-mut); font-size:.82rem; margin:10px 0; }
+    .si-err { color:#ff6b6b; font-size:.85rem; margin:8px 0; } .si-ok { color:#8fe0a8; font-size:.85rem; margin:8px 0; }
+
+    /* result cards */
+    .si-card { background:var(--si-card); border:1px solid var(--si-line); border-radius:12px; margin-bottom:12px; overflow:hidden; }
+    .si-card.primary { border-color:#2f6b3f; }
+    .si-head { display:flex; gap:10px; align-items:center; padding:12px 14px; flex-wrap:wrap; }
+    .si-badge { display:inline-flex; align-items:center; font-size:.7rem; font-weight:600; padding:3px 9px; border-radius:6px; letter-spacing:.3px; }
+    .si-title { font-weight:600; font-size:.95rem; color:#fff; }
+    .si-id { font-family:ui-monospace,monospace; font-size:.74rem; color:var(--si-mut); }
+    .si-role { font-size:.67rem; padding:3px 8px; border-radius:6px; background:#23232c; color:#9aa0c0; }
+    .si-role.own { background:#13331c; color:#7fe0a0; }
+    .si-acts { margin-left:auto; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    .si-act { color:#cfd0d6; background:#1c1c23; border:1px solid var(--si-line); font-size:.74rem; padding:5px 10px; border-radius:7px; cursor:pointer; user-select:none; }
+    .si-act:hover { background:#26262f; }
+    .si-act.dl{ color:#86b9ff; } .si-act.del{ color:#ff8a8a; } .si-act.save{ color:#8fe0a8; border-color:#1f5a30; }
+    .si-act.disabled{ opacity:.3; pointer-events:none; }
+    /* player summary */
+    .si-summary { display:flex; flex-wrap:wrap; gap:7px; padding:0 14px 12px; }
+    .si-chip { font-size:.74rem; background:#1b1b22; border:1px solid var(--si-line); border-radius:7px; padding:4px 9px; color:#cfd0d6; }
+    .si-chip.name { background:#1a2438; color:#a9c8ff; border-color:#28456e; font-weight:600; }
+    .si-pill { font-size:.7rem; padding:3px 9px; border-radius:7px; font-weight:600; }
+    .si-pill.alive{ background:#13331c; color:#7fe0a0; } .si-pill.dead{ background:#331313; color:#ff9b9b; }
+    /* json */
+    .si-json-toggle { padding:8px 14px; border-top:1px solid var(--si-line); color:var(--si-mut); font-size:.76rem; cursor:pointer; user-select:none; }
+    .si-json-toggle:hover{ color:#fff; }
+    .si-body pre, .si-body textarea { margin:0; padding:12px 14px; background:#0c0c10; border-top:1px solid var(--si-line); max-height:440px; overflow:auto; font-size:.77rem; white-space:pre-wrap; word-break:break-word; color:#cdd2da; font-family:ui-monospace,monospace; }
+    .si-body textarea { width:100%; box-sizing:border-box; min-height:300px; border:none; resize:vertical; }
+    .si-editbar { padding:8px 14px; border-top:1px solid var(--si-line); display:flex; gap:8px; }
+    /* stats */
+    .si-statbar { display:flex; gap:14px; flex-wrap:wrap; margin:6px 0 16px; }
+    .si-stat-big { background:var(--si-card); border:1px solid var(--si-line); border-radius:12px; padding:14px 18px; min-width:130px; }
+    .si-stat-big .n { font-family:'Oswald',sans-serif; font-size:1.7rem; color:#fff; line-height:1; }
+    .si-stat-big .l { color:var(--si-mut); font-size:.72rem; text-transform:uppercase; letter-spacing:.5px; margin-top:4px; }
+    .si-cats { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }
+    .si-catcard { background:var(--si-card); border:1px solid var(--si-line); border-radius:10px; padding:12px 14px; display:flex; align-items:center; gap:10px; }
+    .si-catcard .cn { font-weight:600; font-size:.85rem; }
+    .si-catcard .cc { color:var(--si-mut); font-size:.78rem; }
+    .si-catcard .bar { height:5px; border-radius:3px; background:#26262e; margin-top:6px; overflow:hidden; }
+    .si-catcard .bar i { display:block; height:100%; }
+    .si-catcard .meta { flex:1; min-width:0; }
+    .si-orph-row { display:flex; gap:10px; align-items:center; padding:8px 12px; border-bottom:1px solid #1c1c22; font-size:.8rem; }
+    .si-orph-row code { color:#cfd0d6; font-family:ui-monospace,monospace; }
+    .si-denied { text-align:center; padding:80px 20px; color:#ff6b6b; }
   </style>
 </head>
 <body>
@@ -61,36 +80,45 @@
     <div id="denied" class="si-denied" style="display:none">Admins only. <a class="back" href="/shop">← back</a></div>
 
     <div id="content" style="display:none">
-      <a class="back" href="/admin/orders">← Admin</a>
-      <h1>Save Inspector</h1>
-      <div class="si-sub">Search, edit, drop & clean the ReforgedZ persistence saves. Edits/deletes require the server stopped and are backed up to a recoverable trash folder.</div>
-
-      <div class="si-controls">
-        <select id="server"></select>
-        <button class="si-btn ghost" id="refreshStatus">Refresh status</button>
+      <div class="si-top">
+        <div><a class="back" href="/admin/orders">← Admin</a><h1>Save Inspector</h1></div>
+        <div class="si-row">
+          <select id="server"></select>
+          <button class="si-btn ghost" id="refreshStatus">Refresh</button>
+        </div>
       </div>
-      <div id="banner" class="si-banner unknown"><span class="si-dot unknown"></span><span id="bannerText">Checking server status…</span></div>
+      <div class="si-sub">Search, edit, drop & clean the ReforgedZ persistence. Edits/drops need the server stopped and are backed up to a recoverable trash folder.</div>
+
+      <div id="banner" class="si-banner unknown"><span class="si-dot unknown"></span><span>Checking server status…</span></div>
 
       <div class="si-tabs">
         <div class="si-tab active" data-tab="search">Search</div>
+        <div class="si-tab" data-tab="stats">Stats</div>
         <div class="si-tab" data-tab="orphans">Orphan items</div>
       </div>
 
       <div id="tab-search">
-        <div class="si-controls">
-          <input type="text" id="q" placeholder="Search: UUID, prefab GUID, store name, coords…" />
+        <div class="si-row">
+          <input type="text" id="q" placeholder="Search a UID, player name, prefab GUID, store name, coords…" />
           <button class="si-btn" id="searchBtn">Search</button>
-          <button class="si-btn ghost" id="overviewBtn">Overview</button>
-          <button class="si-btn ghost" id="dlAllBtn">Download entire save</button>
         </div>
         <div id="err" class="si-err"></div>
         <div id="note" class="si-note"></div>
-        <div id="overview"></div>
         <div id="results"></div>
       </div>
 
+      <div id="tab-stats" style="display:none">
+        <div class="si-row" style="margin-bottom:6px">
+          <button class="si-btn ghost" id="statsRefresh">Reload stats</button>
+          <button class="si-btn ghost" id="dlAllBtn">Download entire save</button>
+        </div>
+        <div id="statErr" class="si-err"></div>
+        <div id="statBar" class="si-statbar"></div>
+        <div id="statCats" class="si-cats"></div>
+      </div>
+
       <div id="tab-orphans" style="display:none">
-        <div class="si-controls">
+        <div class="si-row">
           <button class="si-btn" id="scanBtn">Scan items for orphans</button>
           <button class="si-btn ghost" id="orphSelectAll">Select all</button>
           <button class="si-btn danger" id="orphDelete" disabled>Drop selected</button>
@@ -104,214 +132,248 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    let serverRunning = null; // null=unknown, true/false
+    let serverRunning = null, statsLoaded = false;
+    const CAT_COLORS = { Player:'#3b6fd4', Character:'#8a5cd0', BaseBuilding:'#c77b2a', Item:'#3fa85f', Vehicle:'#2a9fa8', Storage:'#a8902a', Stashes:'#a8902a', Turret:'#a84a2a', Farming:'#5fa83f', ModMarketplace:'#9a5cd0', PlayerDataCache:'#555', Misc:'#5a5a64', Structure:'#777', VehicleCovers:'#2a9fa8' };
+    const catColor = (c) => CAT_COLORS[c] || '#5a5a64';
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     function curServer(){ return $('server').value; }
     function canWrite(){ return serverRunning === false; }
-    function download(rel){
-      const u = `/api/shop/admin/save-download?server=${encodeURIComponent(curServer())}&path=${encodeURIComponent(rel)}`;
-      const a = document.createElement('a');
-      a.href = u; a.download = ''; a.style.display = 'none';
-      document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 0);
-    }
+    function download(rel){ const u=`/api/shop/admin/save-download?server=${encodeURIComponent(curServer())}&path=${encodeURIComponent(rel)}`; const a=document.createElement('a'); a.href=u; a.download=''; a.style.display='none'; document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(),0); }
 
     function setBanner(state, text){
-      const b = $('banner'); b.className = 'si-banner ' + state;
-      b.innerHTML = `<span class="si-dot ${state}"></span><span>${esc(text)}</span>`;
-      // reflect on destructive controls
+      $('banner').className = 'si-banner ' + state;
+      $('banner').innerHTML = `<span class="si-dot ${state}"></span><span>${esc(text)}</span>`;
       document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
       $('orphDelete').disabled = !canWrite() || !selectedOrphans().length;
     }
     async function refreshStatus(){
-      serverRunning = null; setBanner('unknown', 'Checking server status…');
+      serverRunning=null; setBanner('unknown','Checking server status…');
       try {
         const r = await (await fetch(`/api/shop/admin/save-status?server=${encodeURIComponent(curServer())}`)).json();
-        if (r.error) { setBanner('unknown', r.error); return; }
+        if (r.error){ setBanner('unknown', r.error); return; }
         serverRunning = !!r.running;
-        if (serverRunning) setBanner('run', 'Server is RUNNING — viewing & downloads only. Stop it in the panel to enable edits/deletes (changes would otherwise be overwritten).');
-        else setBanner('stop', 'Server is STOPPED — safe to edit & drop records. All changes are backed up to a recoverable trash folder.');
-      } catch { setBanner('unknown', 'Could not check status.'); }
+        setBanner(serverRunning?'run':'stop', serverRunning
+          ? 'Server is RUNNING — viewing & downloads only. Stop it in the panel to enable edits/drops (changes would otherwise be overwritten).'
+          : 'Server is STOPPED — safe to edit & drop. Every change is backed up to a recoverable trash folder.');
+      } catch { setBanner('unknown','Could not check status.'); }
     }
 
     async function init(){
-      let user = null;
-      try { user = await (await fetch('/api/auth/me')).json(); } catch {}
-      if (!user || user.role !== 'admin') { $('denied').style.display = 'block'; return; }
-      $('content').style.display = 'block';
+      let user=null; try { user = await (await fetch('/api/auth/me')).json(); } catch {}
+      if (!user || user.role !== 'admin'){ $('denied').style.display='block'; return; }
+      $('content').style.display='block';
       try {
         const servers = await (await fetch('/api/shop/admin/save-servers')).json();
-        $('server').innerHTML = servers.map(s => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
-      } catch { $('err').textContent = 'Could not load servers.'; }
+        $('server').innerHTML = servers.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
+      } catch { $('err').textContent='Could not load servers.'; }
 
-      $('server').onchange = () => { refreshStatus(); $('results').innerHTML=''; $('overview').innerHTML=''; $('orphList').innerHTML=''; $('note').textContent=''; };
+      $('server').onchange = () => { statsLoaded=false; refreshStatus(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('note').textContent=''; };
       $('refreshStatus').onclick = refreshStatus;
       $('searchBtn').onclick = doSearch;
-      $('overviewBtn').onclick = doOverview;
+      $('q').addEventListener('keydown', e => { if (e.key==='Enter') doSearch(); });
+      $('statsRefresh').onclick = () => loadStats(true);
       $('dlAllBtn').onclick = () => download('.');
-      $('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
       $('scanBtn').onclick = doScan;
       $('orphSelectAll').onclick = () => { document.querySelectorAll('.orph-cb').forEach(c=>c.checked=true); updateOrphBtn(); };
       $('orphDelete').onclick = bulkDropOrphans;
       document.querySelectorAll('.si-tab').forEach(t => t.onclick = () => {
-        document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active'));
-        t.classList.add('active');
-        $('tab-search').style.display = t.dataset.tab==='search' ? 'block' : 'none';
-        $('tab-orphans').style.display = t.dataset.tab==='orphans' ? 'block' : 'none';
+        document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active')); t.classList.add('active');
+        ['search','stats','orphans'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
+        if (t.dataset.tab==='stats' && !statsLoaded) loadStats();
       });
       refreshStatus();
     }
 
-    // ---- Search ----
-    async function doOverview(){
-      $('err').textContent=''; $('note').textContent='Loading overview…'; $('results').innerHTML=''; $('overview').innerHTML='';
+    // ---- Stats ----
+    async function loadStats(force){
+      $('statErr').textContent=''; if (!force && statsLoaded) return;
+      $('statBar').innerHTML='<div class="si-note">Loading stats…</div>'; $('statCats').innerHTML='';
       try {
         const data = await (await fetch(`/api/shop/admin/save-categories?server=${encodeURIComponent(curServer())}`)).json();
-        if (data.error) { $('err').textContent=data.error; $('note').textContent=''; return; }
-        const cats=(data.categories||[]).sort((a,b)=>b.count-a.count);
-        $('note').textContent=`${cats.length} categories · ${cats.reduce((a,c)=>a+c.count,0)} records`;
-        $('overview').innerHTML = `<table class="si-cats"><thead><tr><th>Category</th><th>World</th><th>Records</th><th></th></tr></thead><tbody>` +
-          cats.map(c=>`<tr><td><span class="si-cat-tag">${esc(c.category)}</span></td><td style="color:#7a7a82">${esc(c.world)}</td><td>${c.count}</td><td><span class="si-act dl" onclick="download('${esc(c.rel)}')">Download</span></td></tr>`).join('') + `</tbody></table>`;
-      } catch { $('err').textContent='Overview failed.'; $('note').textContent=''; }
+        if (data.error){ $('statErr').textContent=data.error; $('statBar').innerHTML=''; return; }
+        statsLoaded=true;
+        const cats=(data.categories||[]).slice().sort((a,b)=>b.count-a.count);
+        const total=cats.reduce((a,c)=>a+c.count,0);
+        const max=Math.max(1,...cats.map(c=>c.count));
+        const worlds=new Set(cats.map(c=>c.world));
+        $('statBar').innerHTML = `
+          <div class="si-stat-big"><div class="n">${total.toLocaleString()}</div><div class="l">Total records</div></div>
+          <div class="si-stat-big"><div class="n">${cats.length}</div><div class="l">Categories</div></div>
+          <div class="si-stat-big"><div class="n">${worlds.size}</div><div class="l">World${worlds.size===1?'':'s'}</div></div>`;
+        $('statCats').innerHTML = cats.map(c=>`
+          <div class="si-catcard">
+            <span class="si-badge" style="background:${catColor(c.category)}22;color:${catColor(c.category)}">${esc(c.category)}</span>
+            <div class="meta">
+              <div class="cc">${c.count.toLocaleString()} record${c.count===1?'':'s'}</div>
+              <div class="bar"><i style="width:${Math.round(c.count/max*100)}%;background:${catColor(c.category)}"></i></div>
+            </div>
+            <span class="si-act dl" onclick="download('${esc(c.rel)}')">↓</span>
+          </div>`).join('');
+      } catch { $('statErr').textContent='Stats failed.'; $('statBar').innerHTML=''; }
+    }
+
+    // ---- Search ----
+    const ROLE_RANK = (r) => /^This /.test(r)?0 : /Killed by/.test(r)?1 : /Owner/.test(r)?2 : 3;
+    function playerStat(data){
+      if(!data||!data.components) return null;
+      return Object.values(data.components).find(c=>c&&typeof c==='object'&&c.name!==undefined&&c.humanity!==undefined)
+          || Object.values(data.components).find(c=>c&&typeof c==='object'&&c.uid!==undefined&&c.name!==undefined) || null;
+    }
+    function playerSummary(data){
+      const s=playerStat(data); if(!s) return '';
+      const hrs = s.totalPlaytime!=null ? (s.totalPlaytime/3600).toFixed(1)+'h' : null;
+      const faction=(Object.values(data.components).find(c=>c&&c.factionKey!==undefined)||{}).factionKey;
+      const chips=[
+        `<span class="si-chip name">${esc(s.name||'?')}</span>`,
+        s.isDead!=null?`<span class="si-pill ${s.isDead?'dead':'alive'}">${s.isDead?'Dead':'Alive'}</span>`:'',
+        s.humanity!=null?`<span class="si-chip">☯ humanity ${s.humanity}</span>`:'',
+        `<span class="si-chip">⚔ ${s.playerKills??0} kills</span>`,
+        `<span class="si-chip">💀 ${s.totalDeaths??0} deaths</span>`,
+        s.zombieKills!=null?`<span class="si-chip">🧟 ${s.zombieKills}</span>`:'',
+        hrs?`<span class="si-chip">⏱ ${hrs}</span>`:'',
+        s.loginCount!=null?`<span class="si-chip">↻ ${s.loginCount} logins</span>`:'',
+        s.lastLogin?`<span class="si-chip">last ${esc(s.lastLogin)}</span>`:'',
+        faction?`<span class="si-chip">⚑ ${esc(faction)}</span>`:'',
+      ].filter(Boolean).join('');
+      return `<div class="si-summary">${chips}</div>`;
     }
 
     async function doSearch(){
-      const q=$('q').value.trim(); $('err').textContent=''; $('overview').innerHTML='';
+      const q=$('q').value.trim(); $('err').textContent='';
       if(!q){ $('err').textContent='Enter something to search for.'; return; }
       $('note').textContent='Searching…'; $('results').innerHTML='';
       try {
         const data = await (await fetch(`/api/shop/admin/save-search?server=${encodeURIComponent(curServer())}&q=${encodeURIComponent(q)}`)).json();
         if (data.error){ $('err').textContent=data.error; $('note').textContent=''; return; }
-        const r=data.results||[];
-        $('note').textContent=`${data.total} match${data.total===1?'':'es'}${data.total>r.length?` — showing first ${r.length}`:''}`;
+        let r=(data.results||[]).slice().sort((a,b)=> ROLE_RANK(a.role||'')-ROLE_RANK(b.role||''));
+        // breakdown
+        const by={}; r.forEach(x=>{ const k=/^This /.test(x.role)?'subject':/Killed by/.test(x.role)?'killer ref':/Owner/.test(x.role)?'base':x.category; by[k]=(by[k]||0)+1; });
+        const bd=Object.entries(by).map(([k,v])=>`${v} ${k}`).join(' · ');
+        $('note').textContent=`${data.total} match${data.total===1?'':'es'}${data.total>r.length?` (showing ${r.length})`:''}${bd?' — '+bd:''}`;
         if(!r.length){ $('results').innerHTML='<div class="si-note">No matching records.</div>'; return; }
-        $('results').innerHTML = r.map((rec,i)=>resultHtml(rec, i===0)).join('');
+        $('results').innerHTML = r.map((rec,i)=>resultCard(rec, i===0)).join('');
       } catch { $('err').textContent='Search failed.'; $('note').textContent=''; }
     }
 
-    function resultHtml(rec, open){
+    function resultCard(rec, open){
       const rel = `${rec.world}/gamemode/${rec.category}/${rec.id}.json`;
       const linkedId = rec.data && rec.data.entity && rec.data.entity.playerEntity;
-      const dis = canWrite() ? '' : ' disabled';
-      return `<div class="si-result" data-id="${esc(rec.id)}" data-rel="${esc(rel)}">
-        <div class="si-result-head" onclick="togglePre(this)">
-          <span class="si-cat-tag">${esc(rec.category||'?')}</span>
-          <span class="si-result-id">${esc(rec.id)}</span>
-          ${rec.role?`<span class="si-role${/^This /.test(rec.role)?' own':''}" title="${esc((rec.matchPaths||[]).join(', '))}">${esc(rec.role)}</span>`:''}
-          <span class="si-result-meta">
-            <span class="si-act" onclick="event.stopPropagation();copyRecord(this)">Copy</span>
-            ${linkedId?`<span class="si-act" onclick="event.stopPropagation();loadLinked(this,'${esc(linkedId)}')">Linked character</span>`:''}
-            <span class="si-act" onclick="event.stopPropagation();toggleEdit(this)">Edit</span>
-            <span class="si-act del${dis ? ' disabled':''}" onclick="event.stopPropagation();dropRecord(this)">Drop</span>
-            <span class="si-act dl" onclick="event.stopPropagation();download(this.closest('.si-result').dataset.rel)">Download</span>
+      const isOwn = /^This /.test(rec.role||'');
+      const st = playerStat(rec.data);
+      const title = st && st.name ? esc(st.name) : '';
+      const cc = catColor(rec.category);
+      const dis = canWrite()?'':' disabled';
+      return `<div class="si-card${isOwn?' primary':''}" data-id="${esc(rec.id)}" data-rel="${esc(rel)}">
+        <div class="si-head">
+          <span class="si-badge" style="background:${cc}22;color:${cc}">${esc(rec.category||'?')}</span>
+          ${title?`<span class="si-title">${title}</span>`:''}
+          <span class="si-id">${esc(rec.id)}</span>
+          ${rec.role?`<span class="si-role${isOwn?' own':''}" title="${esc((rec.matchPaths||[]).join(', '))}">${esc(rec.role)}</span>`:''}
+          <span class="si-acts">
+            <span class="si-act" onclick="copyRecord(this)">Copy</span>
+            ${linkedId?`<span class="si-act" onclick="loadLinked(this,'${esc(linkedId)}')">Character</span>`:''}
+            <span class="si-act" onclick="toggleEdit(this)">Edit</span>
+            <span class="si-act del${dis}" onclick="dropRecord(this)">Drop</span>
+            <span class="si-act dl" onclick="download(this.closest('.si-card').dataset.rel)">Download</span>
           </span>
         </div>
-        <pre style="display:${open?'block':'none'}">${esc(JSON.stringify(rec.data,null,2))}</pre>
+        ${playerSummary(rec.data)}
+        <div class="si-json-toggle" onclick="toggleJson(this)">${open?'▾ Hide JSON':'▸ Show JSON'}</div>
+        <div class="si-body" style="display:${open?'block':'none'}"><pre>${esc(JSON.stringify(rec.data,null,2))}</pre></div>
         <div class="si-linked"></div>
       </div>`;
     }
-    function togglePre(head){ const p=head.parentNode.querySelector('pre'); if(p) p.style.display = p.style.display==='none'?'block':'none'; }
+    function toggleJson(t){ const b=t.parentNode.querySelector('.si-body'); const show=b.style.display==='none'; b.style.display=show?'block':'none'; t.textContent=(show?'▾ Hide':'▸ Show')+' JSON'; }
 
     function toggleEdit(btn){
-      const box = btn.closest('.si-result'); const pre = box.querySelector('pre');
-      if (box.querySelector('textarea')) return; // already editing
-      if (!canWrite()) { alert('Stop the server first — edits to a running server get overwritten.'); return; }
-      const ta = document.createElement('textarea');
-      ta.value = JSON.stringify(JSON.parse(pre.textContent), null, 2);
-      pre.style.display='none'; pre.insertAdjacentElement('afterend', ta);
-      const bar = document.createElement('div'); bar.style.cssText='padding:8px 14px;border-top:1px solid #22222a;display:flex;gap:8px';
-      bar.innerHTML = `<span class="si-act save" onclick="saveEdit(this)">Save changes</span><span class="si-act" onclick="cancelEdit(this)">Cancel</span>`;
-      ta.insertAdjacentElement('afterend', bar);
+      const card=btn.closest('.si-card'); const body=card.querySelector('.si-body'); const pre=body.querySelector('pre');
+      if (card.querySelector('textarea')) return;
+      if (!canWrite()){ alert('Stop the server first — edits to a running server get overwritten.'); return; }
+      body.style.display='block'; card.querySelector('.si-json-toggle').textContent='▾ Hide JSON';
+      const ta=document.createElement('textarea'); ta.value=JSON.stringify(JSON.parse(pre.textContent),null,2);
+      pre.style.display='none'; body.appendChild(ta);
+      const bar=document.createElement('div'); bar.className='si-editbar';
+      bar.innerHTML=`<span class="si-act save" onclick="saveEdit(this)">Save changes</span><span class="si-act" onclick="cancelEdit(this)">Cancel</span>`;
+      body.appendChild(bar);
     }
-    function cancelEdit(btn){ const box=btn.closest('.si-result'); box.querySelector('textarea')?.remove(); btn.parentNode.remove(); const pre=box.querySelector('pre'); if(pre) pre.style.display='block'; }
+    function cancelEdit(btn){ const card=btn.closest('.si-card'); card.querySelector('textarea')?.remove(); btn.closest('.si-editbar').remove(); const pre=card.querySelector('pre'); if(pre) pre.style.display='block'; }
     async function saveEdit(btn){
-      const box=btn.closest('.si-result'); const id=box.dataset.id; const ta=box.querySelector('textarea');
-      let parsed; try { parsed = JSON.parse(ta.value); } catch { alert('That is not valid JSON — fix it before saving.'); return; }
-      if (!confirm(`Save changes to record\n${id}?\n\nThe server must be stopped. The previous version is backed up.`)) return;
+      const card=btn.closest('.si-card'); const id=card.dataset.id; const ta=card.querySelector('textarea');
+      let parsed; try{ parsed=JSON.parse(ta.value); }catch{ alert('That is not valid JSON — fix it before saving.'); return; }
+      if (!confirm(`Save changes to\n${id}?\n\nThe server must be stopped. The previous version is backed up.`)) return;
       btn.textContent='Saving…';
       try {
-        const r = await (await fetch('/api/shop/admin/save-update', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ server: curServer(), id, json: JSON.stringify(parsed) }) })).json();
+        const r = await (await fetch('/api/shop/admin/save-update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),id,json:JSON.stringify(parsed)})})).json();
         if (r.error){ alert('Save failed: '+r.error); btn.textContent='Save changes'; return; }
-        const pre=box.querySelector('pre'); pre.textContent = JSON.stringify(parsed, null, 2); pre.style.display='block';
-        ta.remove(); btn.parentNode.remove();
+        const pre=card.querySelector('pre'); pre.textContent=JSON.stringify(parsed,null,2); pre.style.display='block';
+        ta.remove(); btn.closest('.si-editbar').remove();
       } catch { alert('Save failed.'); btn.textContent='Save changes'; }
     }
-
     async function dropRecord(btn){
-      const box=btn.closest('.si-result'); const id=box.dataset.id;
-      if (!canWrite()) { alert('Stop the server first — a delete on a running server can reappear.'); return; }
-      if (!confirm(`⚠️ ARE YOU SURE?\n\nDrop this record as a LAST RESORT:\n${id}\n\nIt will be moved to a recoverable trash folder on the server. Continue?`)) return;
+      const card=btn.closest('.si-card'); const id=card.dataset.id;
+      if (!canWrite()){ alert('Stop the server first — a delete on a running server can reappear.'); return; }
+      if (!confirm(`⚠️ ARE YOU SURE?\n\nDrop this record as a LAST RESORT:\n${id}\n\nIt moves to a recoverable trash folder on the server. Continue?`)) return;
       try {
-        const r = await (await fetch('/api/shop/admin/save-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ server: curServer(), ids: [id] }) })).json();
+        const r = await (await fetch('/api/shop/admin/save-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),ids:[id]})})).json();
         if (r.error){ alert('Drop failed: '+r.error); return; }
-        box.style.opacity='.4'; box.querySelector('.si-result-meta').innerHTML = `<span class="si-note">Dropped (${r.moved}) → trash</span>`;
+        card.style.opacity='.4'; card.querySelector('.si-acts').innerHTML=`<span class="si-note">Dropped → trash</span>`;
       } catch { alert('Drop failed.'); }
     }
-
+    function copyRecord(btn){
+      const card=btn.closest('.si-card'); const ta=card.querySelector('textarea');
+      const text = ta ? ta.value : (card.querySelector('pre') ? card.querySelector('pre').textContent : '');
+      const done=()=>{ const o=btn.textContent; btn.textContent='Copied!'; setTimeout(()=>btn.textContent=o,1200); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(()=>fallbackCopy(text,done));
+      else fallbackCopy(text,done);
+    }
+    function fallbackCopy(text, done){ const t=document.createElement('textarea'); t.value=text; t.style.position='fixed'; t.style.opacity='0'; document.body.appendChild(t); t.select(); try{document.execCommand('copy');done();}catch{} t.remove(); }
     async function loadLinked(btn, entityId){
-      const box = btn.closest('.si-result').querySelector('.si-linked');
-      box.innerHTML = '<div class="si-note" style="padding:10px 14px">Loading linked character…</div>';
+      const box=btn.closest('.si-card').querySelector('.si-linked');
+      box.innerHTML='<div class="si-note" style="padding:10px 14px">Loading linked character…</div>';
       try {
         const rec = await (await fetch(`/api/shop/admin/save-record?server=${encodeURIComponent(curServer())}&id=${encodeURIComponent(entityId)}`)).json();
         if (rec.error){ box.innerHTML=`<div class="si-err" style="padding:10px 14px">${esc(rec.error)}</div>`; return; }
-        if (!rec.found){ box.innerHTML=`<div class="si-note" style="padding:10px 14px">No character record for <span class="si-result-id">${esc(entityId)}</span> — likely a dead / cleaned-up character.</div>`; return; }
-        box.innerHTML = resultHtml(rec, true).replace('si-result"', 'si-result" style="margin:8px 14px 12px;border-color:#3a3a44"');
+        if (!rec.found){ box.innerHTML=`<div class="si-note" style="padding:10px 14px">No character record for <span class="si-id">${esc(entityId)}</span> — likely a dead / cleaned-up character.</div>`; return; }
+        box.innerHTML = `<div style="padding:0 8px 10px">${resultCard(rec, true)}</div>`;
       } catch { box.innerHTML='<div class="si-err" style="padding:10px 14px">Lookup failed.</div>'; }
     }
 
     // ---- Orphans ----
     function selectedOrphans(){ return Array.from(document.querySelectorAll('.orph-cb:checked')).map(c=>c.dataset.id); }
-    function updateOrphBtn(){ const n=selectedOrphans().length; $('orphDelete').disabled = !canWrite() || !n; $('orphDelete').textContent = n?`Drop selected (${n})`:'Drop selected'; }
+    function updateOrphBtn(){ const n=selectedOrphans().length; $('orphDelete').disabled=!canWrite()||!n; $('orphDelete').textContent=n?`Drop selected (${n})`:'Drop selected'; }
     async function doScan(){
       $('orphErr').textContent=''; $('orphList').innerHTML=''; $('orphNote').textContent='Scanning… (greps every save file once — a few seconds)';
       try {
         const data = await (await fetch(`/api/shop/admin/save-orphans?server=${encodeURIComponent(curServer())}`)).json();
         if (data.error){ $('orphErr').textContent=data.error; $('orphNote').textContent=''; return; }
-        $('orphNote').textContent = `${data.orphanCount} orphaned of ${data.totalItems} items${data.orphanCount>data.shown?` — showing first ${data.shown}`:''}. Tick the ones to drop.`;
+        $('orphNote').textContent=`${data.orphanCount} orphaned of ${data.totalItems} items${data.orphanCount>data.shown?` (showing ${data.shown})`:''}. Tick the ones to drop.`;
         if (!data.orphans.length){ $('orphList').innerHTML='<div class="si-note">No orphaned items — nothing to clean.</div>'; return; }
         $('orphList').innerHTML = data.orphans.map(o=>`<div class="si-orph-row">
           <input type="checkbox" class="orph-cb" data-id="${esc(o.id)}" onchange="updateOrphBtn()">
           <code>${esc(o.id)}</code>
-          <span class="si-cat-tag">prefab ${esc(o.prefab||'?')}</span>
-          <span style="color:#7a7a82">${o.coords?('@ '+o.coords.map(n=>Math.round(n)).join(', ')):''}</span>
+          <span class="si-badge" style="background:#3fa85f22;color:#3fa85f">prefab ${esc(o.prefab||'?')}</span>
+          <span style="color:var(--si-mut)">${o.coords?('@ '+o.coords.map(n=>Math.round(n)).join(', ')):''}</span>
         </div>`).join('');
         updateOrphBtn();
       } catch { $('orphErr').textContent='Scan failed.'; $('orphNote').textContent=''; }
     }
     async function bulkDropOrphans(){
-      const ids = selectedOrphans();
-      if (!ids.length) return;
-      if (!canWrite()) { alert('Stop the server first.'); return; }
-      if (!confirm(`⚠️ LAST RESORT — drop ${ids.length} orphaned item${ids.length===1?'':'s'}?\n\nThis is a deliberate, last-resort cleanup. They move to a recoverable trash folder on the server (the server must be stopped). Continue?`)) return;
-      if (ids.length > 50 && !confirm(`Confirm again: you are dropping ${ids.length} items. Proceed?`)) return;
+      const ids=selectedOrphans(); if(!ids.length) return;
+      if (!canWrite()){ alert('Stop the server first.'); return; }
+      if (!confirm(`⚠️ LAST RESORT — drop ${ids.length} orphaned item${ids.length===1?'':'s'}?\n\nThey move to a recoverable trash folder (server must be stopped). Continue?`)) return;
+      if (ids.length>50 && !confirm(`Confirm again: dropping ${ids.length} items. Proceed?`)) return;
       $('orphDelete').disabled=true; $('orphDelete').textContent='Dropping…';
       try {
-        const r = await (await fetch('/api/shop/admin/save-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ server: curServer(), ids }) })).json();
+        const r = await (await fetch('/api/shop/admin/save-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),ids})})).json();
         if (r.error){ alert('Drop failed: '+r.error); updateOrphBtn(); return; }
-        $('orphNote').innerHTML = `<span class="si-ok">Dropped ${r.moved} of ${r.requested} → trash (${esc(r.trash||'')})</span>`;
-        ids.forEach(id => document.querySelector(`.orph-cb[data-id="${id}"]`)?.closest('.si-orph-row')?.remove());
+        $('orphNote').innerHTML=`<span class="si-ok">Dropped ${r.moved} of ${r.requested} → trash</span>`;
+        ids.forEach(id=>document.querySelector(`.orph-cb[data-id="${id}"]`)?.closest('.si-orph-row')?.remove());
         updateOrphBtn();
       } catch { alert('Drop failed.'); updateOrphBtn(); }
     }
 
-    function copyRecord(btn){
-      const box = btn.closest('.si-result');
-      const ta = box.querySelector('textarea');
-      const text = ta ? ta.value : (box.querySelector('pre') ? box.querySelector('pre').textContent : '');
-      const done = () => { const o = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = o, 1200); };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
-      } else { fallbackCopy(text, done); }
-    }
-    function fallbackCopy(text, done){
-      const t = document.createElement('textarea'); t.value = text; t.style.position='fixed'; t.style.opacity='0';
-      document.body.appendChild(t); t.select();
-      try { document.execCommand('copy'); done(); } catch {}
-      t.remove();
-    }
-    window.copyRecord=copyRecord;
-    window.download=download; window.loadLinked=loadLinked; window.togglePre=togglePre;
-    window.toggleEdit=toggleEdit; window.saveEdit=saveEdit; window.cancelEdit=cancelEdit; window.dropRecord=dropRecord;
-    window.updateOrphBtn=updateOrphBtn;
+    window.download=download; window.copyRecord=copyRecord; window.loadLinked=loadLinked; window.toggleJson=toggleJson;
+    window.toggleEdit=toggleEdit; window.saveEdit=saveEdit; window.cancelEdit=cancelEdit; window.dropRecord=dropRecord; window.updateOrphBtn=updateOrphBtn;
     init();
   </script>
 </body>
