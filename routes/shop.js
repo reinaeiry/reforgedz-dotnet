@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphanItems } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -1210,13 +1210,26 @@ router.post('/api/shop/admin/save-delete', requireAdmin, async (req, res) => {
 });
 
 router.get('/api/shop/admin/save-orphans', requireAdmin, async (req, res) => {
-  const { server } = req.query;
+  const { server, category } = req.query;
   if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
-    res.json(await scanOrphanItems(server));
+    res.json(await scanOrphans(server, category || 'Item'));
   } catch (e) {
     console.error('[save-orphans]', e.message);
     res.status(500).json({ error: e.message || 'Scan failed' });
+  }
+});
+
+router.post('/api/shop/admin/save-purge-orphans', requireAdmin, async (req, res) => {
+  const { server, category } = req.body || {};
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    const r = await purgeOrphans(server, category || 'Item');
+    if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
+    res.json(r);
+  } catch (e) {
+    console.error('[save-purge-orphans]', e.message);
+    res.status(500).json({ error: e.message || 'Purge failed' });
   }
 });
 

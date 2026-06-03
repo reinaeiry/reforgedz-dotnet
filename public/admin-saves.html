@@ -119,11 +119,13 @@
 
       <div id="tab-orphans" style="display:none">
         <div class="si-row">
-          <button class="si-btn" id="scanBtn">Scan items for orphans</button>
-          <button class="si-btn ghost" id="orphSelectAll">Select all</button>
+          <select id="orphCat"><option value="Item">Item</option><option value="Character">Character (dead bodies)</option></select>
+          <button class="si-btn" id="scanBtn">Scan for orphans</button>
+          <button class="si-btn ghost" id="orphSelectAll">Select all shown</button>
           <button class="si-btn danger" id="orphDelete" disabled>Drop selected</button>
+          <button class="si-btn danger" id="orphPurge" disabled>Purge ALL orphans</button>
         </div>
-        <div id="orphNote" class="si-note">Unreferenced items = loose world items not held by any base/character/storage/vehicle. Review before dropping.</div>
+        <div id="orphNote" class="si-note">Orphans = records referenced by nothing else. Items = loose world loot; Characters = dead/old bodies no player points to. Review before dropping.</div>
         <div id="orphErr" class="si-err"></div>
         <div id="orphList"></div>
       </div>
@@ -144,7 +146,7 @@
       $('banner').className = 'si-banner ' + state;
       $('banner').innerHTML = `<span class="si-dot ${state}"></span><span>${esc(text)}</span>`;
       document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
-      $('orphDelete').disabled = !canWrite() || !selectedOrphans().length;
+      updateOrphBtn();
     }
     async function refreshStatus(){
       serverRunning=null; setBanner('unknown','Checking server status…');
@@ -176,6 +178,8 @@
       $('scanBtn').onclick = doScan;
       $('orphSelectAll').onclick = () => { document.querySelectorAll('.orph-cb').forEach(c=>c.checked=true); updateOrphBtn(); };
       $('orphDelete').onclick = bulkDropOrphans;
+      $('orphPurge').onclick = purgeAllOrphans;
+      $('orphCat').onchange = () => { $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphNote').textContent='Pick a category and scan.'; };
       document.querySelectorAll('.si-tab').forEach(t => t.onclick = () => {
         document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active')); t.classList.add('active');
         ['search','stats','orphans'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
@@ -340,22 +344,46 @@
 
     // ---- Orphans ----
     function selectedOrphans(){ return Array.from(document.querySelectorAll('.orph-cb:checked')).map(c=>c.dataset.id); }
-    function updateOrphBtn(){ const n=selectedOrphans().length; $('orphDelete').disabled=!canWrite()||!n; $('orphDelete').textContent=n?`Drop selected (${n})`:'Drop selected'; }
+    function updateOrphBtn(){
+      const n=selectedOrphans().length;
+      $('orphDelete').disabled=!canWrite()||!n; $('orphDelete').textContent=n?`Drop selected (${n})`:'Drop selected';
+      const p=$('orphPurge'); if(p){ p.disabled=!canWrite()|| !orphanCount; p.textContent=orphanCount?`Purge ALL orphans (${orphanCount.toLocaleString()})`:'Purge ALL orphans'; }
+    }
+    let orphanCount = 0;
     async function doScan(){
-      $('orphErr').textContent=''; $('orphList').innerHTML=''; $('orphNote').textContent='Scanning… (greps every save file once — a few seconds)';
+      const cat = $('orphCat').value;
+      $('orphErr').textContent=''; $('orphList').innerHTML=''; orphanCount = 0; updateOrphBtn();
+      $('orphNote').textContent=`Scanning ${cat}… (greps every save file once — a few seconds)`;
       try {
-        const data = await (await fetch(`/api/shop/admin/save-orphans?server=${encodeURIComponent(curServer())}`)).json();
+        const data = await (await fetch(`/api/shop/admin/save-orphans?server=${encodeURIComponent(curServer())}&category=${encodeURIComponent(cat)}`)).json();
         if (data.error){ $('orphErr').textContent=data.error; $('orphNote').textContent=''; return; }
-        $('orphNote').textContent=`${data.orphanCount} orphaned of ${data.totalItems} items${data.orphanCount>data.shown?` (showing ${data.shown})`:''}. Tick the ones to drop.`;
-        if (!data.orphans.length){ $('orphList').innerHTML='<div class="si-note">No orphaned items — nothing to clean.</div>'; return; }
+        orphanCount = data.orphanCount;
+        $('orphNote').textContent=`${data.orphanCount.toLocaleString()} orphaned of ${data.total.toLocaleString()} ${cat} records${data.orphanCount>data.shown?` (showing first ${data.shown})`:''}. Tick to drop a few, or "Purge ALL".`;
+        if (!data.orphans.length){ $('orphList').innerHTML=`<div class="si-note">No orphaned ${cat} records — nothing to clean.</div>`; updateOrphBtn(); return; }
+        const col = cat==='Character' ? '#8a5cd0' : '#3fa85f';
         $('orphList').innerHTML = data.orphans.map(o=>`<div class="si-orph-row">
           <input type="checkbox" class="orph-cb" data-id="${esc(o.id)}" onchange="updateOrphBtn()">
           <code>${esc(o.id)}</code>
-          <span class="si-badge" style="background:#3fa85f22;color:#3fa85f">prefab ${esc(o.prefab||'?')}</span>
+          ${o.name?`<span class="si-chip name">${esc(o.name)}</span>`:''}
+          <span class="si-badge" style="background:${col}22;color:${col}">prefab ${esc(o.prefab||'?')}</span>
           <span style="color:var(--si-mut)">${o.coords?('@ '+o.coords.map(n=>Math.round(n)).join(', ')):''}</span>
         </div>`).join('');
         updateOrphBtn();
       } catch { $('orphErr').textContent='Scan failed.'; $('orphNote').textContent=''; }
+    }
+    async function purgeAllOrphans(){
+      const cat = $('orphCat').value;
+      if (!canWrite()){ alert('Stop the server first.'); return; }
+      if (!orphanCount){ alert('Run a scan first.'); return; }
+      if (!confirm(`⚠️ LAST RESORT — PURGE ALL ${orphanCount.toLocaleString()} orphaned ${cat} records?\n\nThis drops every orphan of this type (server must be stopped). They move to a recoverable trash folder. Test on ONE server and start it back up to confirm it's healthy before doing the rest.\n\nContinue?`)) return;
+      if (!confirm(`Final confirm: purging ${orphanCount.toLocaleString()} ${cat} records on ${curServer().toUpperCase()}. Proceed?`)) return;
+      $('orphPurge').disabled=true; $('orphPurge').textContent='Purging…';
+      try {
+        const r = await (await fetch('/api/shop/admin/save-purge-orphans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),category:cat})})).json();
+        if (r.error){ alert('Purge failed: '+r.error); updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans'; return; }
+        $('orphNote').innerHTML=`<span class="si-ok">Purged ${r.moved.toLocaleString()} orphaned ${cat} records → trash. Start the server and verify it's healthy.</span>`;
+        $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans';
+      } catch { alert('Purge failed.'); updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans'; }
     }
     async function bulkDropOrphans(){
       const ids=selectedOrphans(); if(!ids.length) return;

@@ -560,35 +560,65 @@ async function deleteSaveRecords(serverId, ids) {
   return { ok: true, moved, requested: valid.length, trash };
 }
 
-// Items whose id is referenced by NO other (non-Item) save file = loose world
-// items that never got cleaned up. Returns the orphan list + totals.
-async function scanOrphanItems(serverId, limit = 1000) {
+const ORPHAN_UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+function safeCategory(c) {
+  const cat = String(c == null ? 'Item' : c).trim();
+  if (!/^[A-Za-z]+$/.test(cat)) throw new Error('Invalid category');
+  return cat;
+}
+
+// Records in a category whose id is referenced by NO file outside that category.
+// For Item = loose world loot; for Character = dead/old bodies no player points
+// to (Player.playerEntity is the "live" reference). Returns the list + totals.
+async function scanOrphans(serverId, category = 'Item', limit = 1000) {
+  const cat = safeCategory(category);
   const ctx = await saveOpContext(serverId);
   const cap = Math.min(Math.max(parseInt(limit, 10) || 1000, 1), 5000);
-  const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
   const inner = [
-    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "TOTAL:0"; echo "ITEMS:0"; exit 0; }`,
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "TOTAL:0"; echo "ALL:0"; exit 0; }`,
     `T=$(mktemp -d)`,
-    `find "$SB"/*/gamemode/Item -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/items"`,
-    `find "$SB" -name '*.json' -not -path '*/gamemode/Item/*' -print0 2>/dev/null | xargs -0 grep -hoE '${UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
-    `comm -23 "$T/items" "$T/refs" > "$T/orph"`,
-    `echo "ITEMS:$(wc -l < "$T/items")"; echo "TOTAL:$(wc -l < "$T/orph")"`,
-    `head -${cap} "$T/orph" | while IFS= read -r id; do f=$(find "$SB"/*/gamemode/Item -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && echo "ORPH:$id:$(jq -c '{prefab:.spawnData.prefab,coords:.spawnData.coords,store:.configuration.m_rStoreName}' "$f" 2>/dev/null | base64 -w0)"; done`,
+    `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/ids"`,
+    `find "$SB" -name '*.json' -not -path '*/gamemode/${cat}/*' -print0 2>/dev/null | xargs -0 grep -hoE '${ORPHAN_UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
+    `comm -23 "$T/ids" "$T/refs" > "$T/orph"`,
+    `echo "ALL:$(wc -l < "$T/ids")"; echo "TOTAL:$(wc -l < "$T/orph")"`,
+    `head -${cap} "$T/orph" | while IFS= read -r id; do f=$(find "$SB"/*/gamemode/${cat} -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && echo "ORPH:$id:$(jq -c '{prefab:.spawnData.prefab,coords:.spawnData.coords,name:(.components|to_entries|map(.value.name)|map(select(.))|first)}' "$f" 2>/dev/null | base64 -w0)"; done`,
     `rm -rf "$T"`,
   ].join('; ');
   const out = await runOn(ctx, inner);
-  let total = 0, items = 0;
+  let total = 0, all = 0;
   const orphans = [];
   for (const line of String(out).split('\n')) {
     if (line.startsWith('TOTAL:')) { total = parseInt(line.slice(6), 10) || 0; continue; }
-    if (line.startsWith('ITEMS:')) { items = parseInt(line.slice(6), 10) || 0; continue; }
+    if (line.startsWith('ALL:')) { all = parseInt(line.slice(4), 10) || 0; continue; }
     const m = line.match(/^ORPH:([0-9a-fA-F-]+):([A-Za-z0-9+/=]+)$/);
     if (!m) continue;
     let info = {};
     try { info = JSON.parse(Buffer.from(m[2], 'base64').toString('utf8')); } catch {}
-    orphans.push({ id: m[1], prefab: info.prefab, coords: info.coords, store: info.store });
+    orphans.push({ id: m[1], prefab: info.prefab, coords: info.coords, name: info.name });
   }
-  return { totalItems: items, orphanCount: total, shown: orphans.length, orphans };
+  return { category: cat, total: all, orphanCount: total, shown: orphans.length, orphans };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphanItems };
+// Move ALL orphans of a category to the recoverable trash in one pass (server
+// must be stopped). Efficient (glob mv, no per-id find) for large cleanups.
+async function purgeOrphans(serverId, category) {
+  const cat = safeCategory(category);
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    RUNNING_GUARD(ctx.uuid),
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
+    `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/orphans-${cat}-$TS"; mkdir -p "$TRASH"`,
+    `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/ids"`,
+    `find "$SB" -name '*.json' -not -path '*/gamemode/${cat}/*' -print0 2>/dev/null | xargs -0 grep -hoE '${ORPHAN_UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
+    `comm -23 "$T/ids" "$T/refs" | while IFS= read -r id; do mv "$SB"/*/gamemode/${cat}/"$id".json "$TRASH/" 2>/dev/null; done`,
+    `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
+    `rm -rf "$T"`,
+  ].join('; ');
+  const out = (await runOn(ctx, inner)).trim();
+  if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
+  const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
+  const trash = (out.match(/TRASH:(\S+)/) || [])[1] || '';
+  return { ok: true, moved, trash };
+}
+
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans };
