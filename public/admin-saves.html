@@ -46,6 +46,11 @@
     .si-act:hover { background:#26262f; }
     .si-act.dl{ color:#86b9ff; } .si-act.del{ color:#ff8a8a; } .si-act.save{ color:#8fe0a8; border-color:#1f5a30; }
     .si-act.disabled{ opacity:.3; pointer-events:none; }
+    .si-prow{ display:grid; grid-template-columns:1.6fr .8fr .8fr .7fr .7fr 1.4fr 2fr; gap:10px; align-items:center; padding:9px 12px; border:1px solid var(--si-line); border-radius:8px; margin-bottom:5px; cursor:pointer; font-size:.82rem; }
+    .si-prow:hover{ background:#1c1c23; }
+    .si-phead{ cursor:default; color:var(--si-mut); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-color:transparent; }
+    .si-phead:hover{ background:transparent; }
+    .si-pname{ font-weight:600; color:#cfe0ff; }
     /* player summary */
     .si-summary { display:flex; flex-wrap:wrap; gap:7px; padding:0 14px 12px; }
     .si-chip { font-size:.74rem; background:#1b1b22; border:1px solid var(--si-line); border-radius:7px; padding:4px 9px; color:#cfd0d6; }
@@ -96,6 +101,7 @@
 
       <div class="si-tabs">
         <div class="si-tab active" data-tab="search">Search</div>
+        <div class="si-tab" data-tab="players">Players</div>
         <div class="si-tab" data-tab="stats">Stats</div>
         <div class="si-tab" data-tab="orphans">Orphan items</div>
         <div class="si-tab" data-tab="dead">Dead chars</div>
@@ -109,6 +115,16 @@
         <div id="err" class="si-err"></div>
         <div id="note" class="si-note"></div>
         <div id="results"></div>
+      </div>
+
+      <div id="tab-players" style="display:none">
+        <div class="si-row">
+          <input type="text" id="playerFilter" placeholder="Filter players by name or UID…" />
+          <button class="si-btn ghost" id="playersReload">Reload</button>
+        </div>
+        <div id="playersNote" class="si-note">Every player on this server. Click a row to open their file (drop / edit / download).</div>
+        <div id="playersErr" class="si-err"></div>
+        <div id="playersTable"></div>
       </div>
 
       <div id="tab-stats" style="display:none">
@@ -148,7 +164,7 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    let serverRunning = null, statsLoaded = false, deadCount = 0;
+    let serverRunning = null, statsLoaded = false, deadCount = 0, playersLoaded = false, playersData = [];
     const CAT_COLORS = { Player:'#3b6fd4', Character:'#8a5cd0', BaseBuilding:'#c77b2a', Item:'#3fa85f', Vehicle:'#2a9fa8', Storage:'#a8902a', Stashes:'#a8902a', Turret:'#a84a2a', Farming:'#5fa83f', ModMarketplace:'#9a5cd0', PlayerDataCache:'#555', Misc:'#5a5a64', Structure:'#777', VehicleCovers:'#2a9fa8' };
     const catColor = (c) => CAT_COLORS[c] || '#5a5a64';
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -190,9 +206,11 @@
         $('server').innerHTML = servers.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
       } catch { $('err').textContent='Could not load servers.'; }
 
-      $('server').onchange = () => { statsLoaded=false; refreshStatus(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('note').textContent=''; };
+      $('server').onchange = () => { statsLoaded=false; playersLoaded=false; refreshStatus(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('playersTable').innerHTML=''; $('note').textContent=''; };
       $('refreshStatus').onclick = refreshStatus;
       $('forceWrite').onchange = applyWriteState;
+      $('playersReload').onclick = () => loadPlayers(true);
+      $('playerFilter').oninput = renderPlayers;
       $('searchBtn').onclick = doSearch;
       $('q').addEventListener('keydown', e => { if (e.key==='Enter') doSearch(); });
       $('statsRefresh').onclick = () => loadStats(true);
@@ -206,11 +224,50 @@
       $('orphCat').onchange = () => { $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphNote').textContent='Pick a category and scan.'; };
       document.querySelectorAll('.si-tab').forEach(t => t.onclick = () => {
         document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active')); t.classList.add('active');
-        ['search','stats','orphans','dead'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
+        ['search','players','stats','orphans','dead'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
         if (t.dataset.tab==='stats' && !statsLoaded) loadStats();
+        if (t.dataset.tab==='players' && !playersLoaded) loadPlayers();
       });
       refreshStatus();
     }
+
+    // ---- Players ----
+    async function loadPlayers(force){
+      if (!force && playersLoaded) return;
+      $('playersErr').textContent=''; $('playersNote').textContent='Loading players…'; $('playersTable').innerHTML='';
+      try {
+        const r = await (await fetch(`/api/shop/admin/save-players?server=${encodeURIComponent(curServer())}`)).json();
+        if (r.error){ $('playersErr').textContent=r.error; $('playersNote').textContent=''; return; }
+        playersLoaded=true; playersData=r.players||[];
+        $('playersNote').innerHTML=`<b>${(r.count||0).toLocaleString()}</b> player${r.count===1?'':'s'} on ${curServer().toUpperCase()}. Click a row to open their file (drop / edit / download).`;
+        renderPlayers();
+      } catch { $('playersErr').textContent='Could not load players.'; $('playersNote').textContent=''; }
+    }
+    function renderPlayers(){
+      const q=($('playerFilter').value||'').toLowerCase().trim();
+      const rows=playersData.filter(p=> !q || String(p.name).toLowerCase().includes(q) || String(p.uid).toLowerCase().includes(q));
+      if (!rows.length){ $('playersTable').innerHTML='<div class="si-note">No players match.</div>'; return; }
+      const head=`<div class="si-prow si-phead"><span>Name</span><span>Status</span><span>Humanity</span><span>Deaths</span><span>Logins</span><span>Last login</span><span>UID</span></div>`;
+      $('playersTable').innerHTML=head+rows.map(p=>{
+        const dead=(p.isDead && p.isDead!=0);
+        const st=dead?'<span class="si-badge" style="background:#c0392b22;color:#c0392b">DEAD</span>':'<span class="si-badge" style="background:#1f5a3022;color:#8fe0a8">ALIVE</span>';
+        return `<div class="si-prow" onclick="openPlayer('${esc(p.uid)}')" title="Open ${esc(p.name)}'s records">
+          <span class="si-pname">${esc(p.name)}</span>
+          <span>${st}</span>
+          <span>${esc(String(p.humanity))}</span>
+          <span>${esc(String(p.deaths))}</span>
+          <span>${esc(String(p.logins))}</span>
+          <span class="si-mut">${esc(p.lastLogin||'')}</span>
+          <span class="si-mut" style="font-size:.7rem;overflow:hidden;text-overflow:ellipsis">${esc(p.uid)}</span>
+        </div>`;
+      }).join('');
+    }
+    function openPlayer(uid){
+      $('q').value=uid;
+      const tab=document.querySelector('.si-tab[data-tab="search"]'); if (tab) tab.click();
+      doSearch();
+    }
+    window.openPlayer=openPlayer;
 
     // ---- Stats ----
     async function loadStats(force){

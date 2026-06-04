@@ -704,4 +704,23 @@ async function purgeDeadCharacters(serverId, force = false) {
   return { ok: true, moved, trash };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters };
+// List every player (from Player records) with name, uid, linked character id, and
+// key stats — powers the player-name dropdown / DB table. One jq pass over Player/.
+async function listPlayers(serverId) {
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || exit 0`,
+    `find "$SB"/*/gamemode/Player -name '*.json' -print0 2>/dev/null | xargs -0 -r jq -c '([.components[]?|objects|select(.name!=null and .uid!=null)]|first) as $d | {rec:.id, char:(.entity.playerEntity//""), name:($d.name//""), uid:($d.uid//""), humanity:($d.humanity//0), deaths:($d.totalDeaths//0), kills:($d.playerKills//0), zkills:($d.zombieKills//0), playtime:($d.totalPlaytime//0), logins:($d.loginCount//0), lastLogin:($d.lastLogin//""), isDead:($d.isDead//0), fresh:($d.isFreshSpawn//0)}' 2>/dev/null`,
+  ].join('; ');
+  const out = await runOn(ctx, inner);
+  const players = [];
+  for (const line of String(out).split('\n')) {
+    const t = line.trim();
+    if (!t || t[0] !== '{') continue;
+    try { const p = JSON.parse(t); if (p.name) players.push(p); } catch {}
+  }
+  players.sort((a, b) => String(a.name).toLowerCase().localeCompare(String(b.name).toLowerCase()));
+  return { players, count: players.length };
+}
+
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers };
