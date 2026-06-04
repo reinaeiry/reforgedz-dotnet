@@ -575,7 +575,7 @@ async function deleteSaveRecords(serverId, ids, force = false) {
   const inner = [
     force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; TS=$(date +%s); TRASH="${ctx.trashBase}/deleted/$TS"; mkdir -p "$TRASH" 2>&1 | sed 's/^/MKDIRERR:/'`,
-    `printf %s '${idsB64}' | base64 -d | while IFS= read -r id; do [ -z "$id" ] && continue; f=$(find "$SB" -name "$id.json" 2>/dev/null | head -1); if [ -z "$f" ]; then echo "NOTFOUND:$id"; else e=$(mv "$f" "$TRASH/" 2>&1) && echo "OK:$id" || echo "FAIL:$id:$e"; fi; done`,
+    `printf %s '${idsB64}' | base64 -d | while IFS= read -r id || [ -n "$id" ]; do [ -z "$id" ] && continue; f=$(find "$SB" -name "$id.json" 2>/dev/null | head -1); if [ -z "$f" ]; then echo "NOTFOUND:$id"; else e=$(mv "$f" "$TRASH/" 2>&1) && echo "OK:$id" || echo "FAIL:$id:$e"; fi; done`,
     `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
   ].filter(Boolean).join('; ');
   const out = (await runOn(ctx, inner)).trim();
