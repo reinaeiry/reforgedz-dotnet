@@ -46,6 +46,14 @@
     .si-act:hover { background:#26262f; }
     .si-act.dl{ color:#86b9ff; } .si-act.del{ color:#ff8a8a; } .si-act.save{ color:#8fe0a8; border-color:#1f5a30; }
     .si-act.disabled{ opacity:.3; pointer-events:none; }
+    .si-statrow{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin:0 0 16px; }
+    .si-statcard{ background:linear-gradient(180deg,#17171f,#111116); border:1px solid var(--si-line); border-radius:11px; padding:12px 16px; }
+    .si-statcard .l{ color:var(--si-mut); font-size:.66rem; text-transform:uppercase; letter-spacing:.06em; }
+    .si-statcard .n{ font-family:'Oswald',sans-serif; font-size:1.75rem; font-weight:600; line-height:1.1; margin-top:4px; }
+    .si-statcard.alive .n{ color:#7fe0a0; } .si-statcard.dead .n{ color:#ff8a8a; } .si-statcard.accent .n{ color:#7fb4ff; }
+    .si-jump{ display:flex; align-items:center; gap:12px; background:#121218; border:1px solid var(--si-line); border-radius:11px; padding:10px 16px; margin:0 0 18px; flex-wrap:wrap; }
+    .si-jump-label{ color:#cfe0ff; font-size:.86rem; font-weight:600; white-space:nowrap; }
+    .si-jump input{ flex:1; min-width:240px; max-width:520px; }
     .si-ptable{ border:1px solid var(--si-line); border-radius:10px; overflow:hidden; }
     .si-prow{ display:grid; grid-template-columns:2fr .9fr .9fr .7fr .8fr 1.6fr 2.4fr; gap:14px; align-items:center; padding:11px 16px; border-bottom:1px solid #1c1c22; cursor:pointer; font-size:.9rem; }
     .si-prow:nth-child(even){ background:#0f0f13; }
@@ -101,6 +109,15 @@
       <label id="forceWrap" style="display:none;align-items:center;gap:8px;margin:-8px 0 16px;font-size:.82rem;color:var(--si-mut);cursor:pointer">
         <input type="checkbox" id="forceWrite"> <span>Allow edits while the server is running — dead bodies &amp; orphaned records drop and stay (they're not in the server's memory). Anything still live — your current character, occupied vehicles, active bases — gets re-saved by the server and reappears.</span>
       </label>
+
+      <div id="topStats" class="si-statrow"></div>
+
+      <div class="si-jump">
+        <span class="si-jump-label">⚡ Jump to player</span>
+        <input type="text" id="playerJump" list="playerNames" placeholder="Start typing a player name…" autocomplete="off" />
+        <datalist id="playerNames"></datalist>
+        <span id="jumpHint" class="si-mut" style="font-size:.76rem"></span>
+      </div>
 
       <div class="si-tabs">
         <div class="si-tab active" data-tab="search">Search</div>
@@ -209,11 +226,13 @@
         $('server').innerHTML = servers.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
       } catch { $('err').textContent='Could not load servers.'; }
 
-      $('server').onchange = () => { statsLoaded=false; playersLoaded=false; refreshStatus(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('playersTable').innerHTML=''; $('note').textContent=''; };
+      $('server').onchange = () => { statsLoaded=false; playersLoaded=false; refreshStatus(); loadTopBar(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('playersTable').innerHTML=''; $('note').textContent=''; };
       $('refreshStatus').onclick = refreshStatus;
       $('forceWrite').onchange = applyWriteState;
       $('playersReload').onclick = () => loadPlayers(true);
       $('playerFilter').oninput = renderPlayers;
+      $('playerJump').onchange = jumpToPlayer;
+      $('playerJump').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); jumpToPlayer(); } });
       $('searchBtn').onclick = doSearch;
       $('q').addEventListener('keydown', e => { if (e.key==='Enter') doSearch(); });
       $('statsRefresh').onclick = () => loadStats(true);
@@ -232,6 +251,7 @@
         if (t.dataset.tab==='players' && !playersLoaded) loadPlayers();
       });
       refreshStatus();
+      loadTopBar();
     }
 
     // ---- Players ----
@@ -271,6 +291,40 @@
       doSearch();
     }
     window.openPlayer=openPlayer;
+
+    // ---- Top bar: always-on stats + player jump dropdown ----
+    async function loadTopBar(){
+      $('topStats').innerHTML='<div class="si-statcard"><div class="l">Loading…</div><div class="n">—</div></div>';
+      try {
+        const [pj, cj] = await Promise.all([
+          fetch(`/api/shop/admin/save-players?server=${encodeURIComponent(curServer())}`).then(r=>r.json()).catch(()=>({})),
+          fetch(`/api/shop/admin/save-categories?server=${encodeURIComponent(curServer())}`).then(r=>r.json()).catch(()=>({})),
+        ]);
+        const players = pj.players||[];
+        playersData = players; playersLoaded = true;
+        const alive = players.filter(p=>!(p.isDead&&p.isDead!=0)).length;
+        const cats = cj.categories||[];
+        const catCount = (n)=> cats.filter(c=>c.category===n).reduce((a,c)=>a+c.count,0);
+        const total = cats.reduce((a,c)=>a+c.count,0);
+        const cards = [
+          ['Players', players.length, 'accent'], ['Alive', alive, 'alive'], ['Dead', players.length-alive, 'dead'],
+          ['Characters', catCount('Character'), ''], ['Vehicles', catCount('Vehicle'), ''],
+          ['Bases', catCount('BaseBuilding'), ''], ['Total records', total, ''],
+        ];
+        $('topStats').innerHTML = cards.map(([l,n,cls])=>`<div class="si-statcard ${cls}"><div class="l">${esc(l)}</div><div class="n">${Number(n||0).toLocaleString()}</div></div>`).join('');
+        $('playerNames').innerHTML = players.map(p=>`<option value="${esc(p.name)}"></option>`).join('');
+        $('jumpHint').textContent = players.length ? `${players.length} players` : '';
+        if ($('tab-players') && $('tab-players').style.display!=='none') renderPlayers();
+      } catch { $('topStats').innerHTML=''; }
+    }
+    function jumpToPlayer(){
+      const raw=($('playerJump').value||'').trim(); const v=raw.toLowerCase();
+      if(!v) return;
+      const list=playersData||[];
+      const p = list.find(x=>String(x.name).toLowerCase()===v) || list.find(x=>String(x.name).toLowerCase().includes(v));
+      if(p){ $('playerJump').value=''; $('jumpHint').textContent=`${list.length} players`; openPlayer(p.uid); }
+      else { $('jumpHint').textContent='No player matches “'+raw+'”'; }
+    }
 
     // ---- Stats ----
     async function loadStats(force){
