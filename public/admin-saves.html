@@ -10,13 +10,13 @@
   <link rel="stylesheet" href="/style.css">
   <style>
     :root { --si-bg:#0b0b0e; --si-card:#15151b; --si-card2:#101015; --si-line:#26262e; --si-mut:#8e8e98; --si-red:#cc1f1f; }
-    .si-page { padding: 100px 20px 80px; min-height: 100vh; background: var(--si-bg); color: #e9e9ec; max-width: 1140px; margin: 0 auto; font-family: 'Inter', system-ui, sans-serif; }
+    .si-page { padding: 84px 30px 60px; min-height: 100vh; background: var(--si-bg); color: #e9e9ec; max-width: none; margin: 0; font-family: 'Inter', system-ui, sans-serif; }
     .si-top { display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:6px; }
-    .si-page h1 { font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 1.9rem; margin: 0; }
+    .si-page h1 { font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 2.2rem; margin: 0; }
     .si-sub { color: var(--si-mut); font-size: .82rem; margin-bottom: 18px; }
     a.back { color: var(--si-mut); text-decoration: none; font-size: .82rem; }
     .si-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    select, input[type=text] { background:#16161c; border:1px solid var(--si-line); color:#fff; padding:10px 12px; border-radius:9px; font-size:.9rem; }
+    select, input[type=text] { background:#16161c; border:1px solid var(--si-line); color:#fff; padding:11px 14px; border-radius:9px; font-size:.95rem; }
     input[type=text]{ flex:1; min-width:240px; }
     .si-btn { background:var(--si-red); color:#fff; border:none; padding:10px 16px; border-radius:9px; font-weight:600; cursor:pointer; font-size:.88rem; }
     .si-btn.ghost { background:#222229; } .si-btn.danger { background:#7e1414; } .si-btn:disabled { opacity:.4; cursor:not-allowed; }
@@ -46,11 +46,14 @@
     .si-act:hover { background:#26262f; }
     .si-act.dl{ color:#86b9ff; } .si-act.del{ color:#ff8a8a; } .si-act.save{ color:#8fe0a8; border-color:#1f5a30; }
     .si-act.disabled{ opacity:.3; pointer-events:none; }
-    .si-prow{ display:grid; grid-template-columns:1.6fr .8fr .8fr .7fr .7fr 1.4fr 2fr; gap:10px; align-items:center; padding:9px 12px; border:1px solid var(--si-line); border-radius:8px; margin-bottom:5px; cursor:pointer; font-size:.82rem; }
-    .si-prow:hover{ background:#1c1c23; }
-    .si-phead{ cursor:default; color:var(--si-mut); font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; border-color:transparent; }
-    .si-phead:hover{ background:transparent; }
-    .si-pname{ font-weight:600; color:#cfe0ff; }
+    .si-ptable{ border:1px solid var(--si-line); border-radius:10px; overflow:hidden; }
+    .si-prow{ display:grid; grid-template-columns:2fr .9fr .9fr .7fr .8fr 1.6fr 2.4fr; gap:14px; align-items:center; padding:11px 16px; border-bottom:1px solid #1c1c22; cursor:pointer; font-size:.9rem; }
+    .si-prow:nth-child(even){ background:#0f0f13; }
+    .si-prow:hover{ background:#1d2230; }
+    .si-prow:last-child{ border-bottom:none; }
+    .si-phead{ position:sticky; top:0; z-index:2; cursor:default; color:#9a9aa6; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; background:#17171d; border-bottom:1px solid var(--si-line); }
+    .si-phead:hover{ background:#17171d; }
+    .si-pname{ font-weight:600; color:#cfe0ff; font-size:.95rem; }
     /* player summary */
     .si-summary { display:flex; flex-wrap:wrap; gap:7px; padding:0 14px 12px; }
     .si-chip { font-size:.74rem; background:#1b1b22; border:1px solid var(--si-line); border-radius:7px; padding:4px 9px; color:#cfd0d6; }
@@ -248,7 +251,7 @@
       const rows=playersData.filter(p=> !q || String(p.name).toLowerCase().includes(q) || String(p.uid).toLowerCase().includes(q));
       if (!rows.length){ $('playersTable').innerHTML='<div class="si-note">No players match.</div>'; return; }
       const head=`<div class="si-prow si-phead"><span>Name</span><span>Status</span><span>Humanity</span><span>Deaths</span><span>Logins</span><span>Last login</span><span>UID</span></div>`;
-      $('playersTable').innerHTML=head+rows.map(p=>{
+      $('playersTable').innerHTML=`<div class="si-ptable">`+head+rows.map(p=>{
         const dead=(p.isDead && p.isDead!=0);
         const st=dead?'<span class="si-badge" style="background:#c0392b22;color:#c0392b">DEAD</span>':'<span class="si-badge" style="background:#1f5a3022;color:#8fe0a8">ALIVE</span>';
         return `<div class="si-prow" onclick="openPlayer('${esc(p.uid)}')" title="Open ${esc(p.name)}'s records">
@@ -258,9 +261,9 @@
           <span>${esc(String(p.deaths))}</span>
           <span>${esc(String(p.logins))}</span>
           <span class="si-mut">${esc(p.lastLogin||'')}</span>
-          <span class="si-mut" style="font-size:.7rem;overflow:hidden;text-overflow:ellipsis">${esc(p.uid)}</span>
+          <span class="si-mut" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis">${esc(p.uid)}</span>
         </div>`;
-      }).join('');
+      }).join('')+`</div>`;
     }
     function openPlayer(uid){
       $('q').value=uid;
