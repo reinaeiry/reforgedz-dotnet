@@ -101,6 +101,7 @@
         <div class="si-row">
           <select id="server"></select>
           <button class="si-btn ghost" id="refreshStatus">Refresh</button>
+          <button class="si-btn ghost" id="clearAll">✕ Clear</button>
         </div>
       </div>
       <div class="si-sub">Search, edit, drop & clean the ReforgedZ persistence. Edits/drops need the server stopped and are backed up to a recoverable trash folder.</div>
@@ -122,7 +123,7 @@
       <div class="si-tabs">
         <div class="si-tab active" data-tab="search">Search</div>
         <div class="si-tab" data-tab="players">Players</div>
-        <div class="si-tab" data-tab="stats">Stats</div>
+        <div class="si-tab" data-tab="stats">Collections</div>
         <div class="si-tab" data-tab="orphans">Orphan items</div>
         <div class="si-tab" data-tab="dead">Dead chars</div>
       </div>
@@ -233,6 +234,7 @@
       $('playerFilter').oninput = renderPlayers;
       $('playerJump').onchange = jumpToPlayer;
       $('playerJump').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); jumpToPlayer(); } });
+      $('clearAll').onclick = clearAll;
       $('searchBtn').onclick = doSearch;
       $('q').addEventListener('keydown', e => { if (e.key==='Enter') doSearch(); });
       $('statsRefresh').onclick = () => loadStats(true);
@@ -296,9 +298,10 @@
     async function loadTopBar(){
       $('topStats').innerHTML='<div class="si-statcard"><div class="l">Loading…</div><div class="n">—</div></div>';
       try {
-        const [pj, cj] = await Promise.all([
+        const [pj, cj, ej] = await Promise.all([
           fetch(`/api/shop/admin/save-players?server=${encodeURIComponent(curServer())}`).then(r=>r.json()).catch(()=>({})),
           fetch(`/api/shop/admin/save-categories?server=${encodeURIComponent(curServer())}`).then(r=>r.json()).catch(()=>({})),
+          fetch(`/api/shop/admin/save-extra-stats?server=${encodeURIComponent(curServer())}`).then(r=>r.json()).catch(()=>({})),
         ]);
         const players = pj.players||[];
         playersData = players; playersLoaded = true;
@@ -309,7 +312,7 @@
         const cards = [
           ['Players', players.length, 'accent'], ['Alive', alive, 'alive'], ['Dead', players.length-alive, 'dead'],
           ['Characters', catCount('Character'), ''], ['Vehicles', catCount('Vehicle'), ''],
-          ['Bases', catCount('BaseBuilding'), ''], ['Total records', total, ''],
+          ['Bases (flags)', (ej.flags||0), 'accent'], ['Base parts', (ej.baseParts||0), ''], ['Total records', total, ''],
         ];
         $('topStats').innerHTML = cards.map(([l,n,cls])=>`<div class="si-statcard ${cls}"><div class="l">${esc(l)}</div><div class="n">${Number(n||0).toLocaleString()}</div></div>`).join('');
         $('playerNames').innerHTML = players.map(p=>`<option value="${esc(p.name)}"></option>`).join('');
@@ -325,6 +328,17 @@
       if(p){ $('playerJump').value=''; $('jumpHint').textContent=`${list.length} players`; openPlayer(p.uid); }
       else { $('jumpHint').textContent='No player matches “'+raw+'”'; }
     }
+    function clearAll(){
+      $('q').value=''; $('results').innerHTML=''; $('note').textContent=''; $('err').textContent='';
+      $('playerFilter').value=''; $('playerJump').value=''; $('jumpHint').textContent=(playersData&&playersData.length)?`${playersData.length} players`:'';
+      $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn();
+      $('deadList').innerHTML=''; deadCount=0; updateDeadBtn();
+      renderPlayers();
+      document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active'));
+      const t=document.querySelector('.si-tab[data-tab="search"]'); if(t) t.classList.add('active');
+      ['search','players','stats','orphans','dead'].forEach(n=>$('tab-'+n).style.display = n==='search'?'block':'none');
+    }
+    window.clearAll=clearAll;
 
     // ---- Stats ----
     async function loadStats(force){
@@ -337,11 +351,7 @@
         const cats=(data.categories||[]).slice().sort((a,b)=>b.count-a.count);
         const total=cats.reduce((a,c)=>a+c.count,0);
         const max=Math.max(1,...cats.map(c=>c.count));
-        const worlds=new Set(cats.map(c=>c.world));
-        $('statBar').innerHTML = `
-          <div class="si-stat-big"><div class="n">${total.toLocaleString()}</div><div class="l">Total records</div></div>
-          <div class="si-stat-big"><div class="n">${cats.length}</div><div class="l">Categories</div></div>
-          <div class="si-stat-big"><div class="n">${worlds.size}</div><div class="l">World${worlds.size===1?'':'s'}</div></div>`;
+        $('statBar').innerHTML = `<div class="si-note"><b>${cats.length}</b> collections · <b>${total.toLocaleString()}</b> total records on ${curServer().toUpperCase()} — click ↓ to download a collection.</div>`;
         $('statCats').innerHTML = cats.map(c=>`
           <div class="si-catcard">
             <span class="si-badge" style="background:${catColor(c.category)}22;color:${catColor(c.category)}">${esc(c.category)}</span>

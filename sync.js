@@ -354,8 +354,8 @@ async function searchSaveFiles(serverId, query, limit = 50) {
     `SB='${saveBase}'`,
     `Q=$(printf %s '${qb64}' | base64 -d)`,
     `[ -d "$SB" ] || { echo "COUNT:0"; exit 0; }`,
-    `echo "COUNT:$(grep -rlF --include='*.json' -- "$Q" "$SB" 2>/dev/null | wc -l)"`,
-    `grep -rlF --include='*.json' -- "$Q" "$SB" 2>/dev/null | head -${cap} | while IFS= read -r f; do echo "FILE:$f:$(base64 -w0 "$f")"; done`,
+    `echo "COUNT:$(grep -rlF --include='*.json' -- "$Q" "$SB" 2>/dev/null | grep -v '/playthrough' | wc -l)"`,
+    `grep -rlF --include='*.json' -- "$Q" "$SB" 2>/dev/null | grep -v '/playthrough' | head -${cap} | while IFS= read -r f; do echo "FILE:$f:$(base64 -w0 "$f")"; done`,
   ].join('; ');
   const cmd = wrapForRegion(server, inner);
 
@@ -726,4 +726,21 @@ async function listPlayers(serverId) {
   return { players, count: players.length };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers };
+// Custom counts for the stat bar. A "base" (territory) = a placed Fortify FlagPole;
+// "base parts" = the rest of the BaseBuilding collection (walls, floors, etc).
+const FLAG_PREFAB = 'EFFA90623A05EB25'; // ReforgedZ_Fortify FlagPole.et
+async function getExtraStats(serverId) {
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    `SB='${ctx.saveBase}'`,
+    `BB=$(find "$SB"/*/gamemode/BaseBuilding -name '*.json' 2>/dev/null | wc -l)`,
+    `FL=$(find "$SB"/*/gamemode/BaseBuilding -name '*.json' -print0 2>/dev/null | xargs -0 -r jq -r 'select(.spawnData.prefab=="${FLAG_PREFAB}") | input_filename' 2>/dev/null | wc -l)`,
+    `echo "BB:$BB"; echo "FLAGS:$FL"`,
+  ].join('; ');
+  const out = await runOn(ctx, inner);
+  const bb = parseInt((out.match(/BB:(\d+)/) || [])[1], 10) || 0;
+  const flags = parseInt((out.match(/FLAGS:(\d+)/) || [])[1], 10) || 0;
+  return { flags, baseBuilding: bb, baseParts: Math.max(0, bb - flags) };
+}
+
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats };
