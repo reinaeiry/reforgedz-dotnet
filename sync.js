@@ -574,15 +574,18 @@ async function deleteSaveRecords(serverId, ids, force = false) {
   const idsB64 = Buffer.from(valid.join('\n'), 'utf8').toString('base64');
   const inner = [
     force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
-    `SB='${ctx.saveBase}'; TS=$(date +%s); TRASH="${ctx.trashBase}/deleted/$TS"; mkdir -p "$TRASH"`,
-    `printf %s '${idsB64}' | base64 -d | while IFS= read -r id; do [ -z "$id" ] && continue; f=$(find "$SB" -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && mv "$f" "$TRASH/"; done`,
-    `echo "MOVED:$(ls "$TRASH" 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
+    `SB='${ctx.saveBase}'; TS=$(date +%s); TRASH="${ctx.trashBase}/deleted/$TS"; mkdir -p "$TRASH" 2>&1 | sed 's/^/MKDIRERR:/'`,
+    `printf %s '${idsB64}' | base64 -d | while IFS= read -r id; do [ -z "$id" ] && continue; f=$(find "$SB" -name "$id.json" 2>/dev/null | head -1); if [ -z "$f" ]; then echo "NOTFOUND:$id"; else e=$(mv "$f" "$TRASH/" 2>&1) && echo "OK:$id" || echo "FAIL:$id:$e"; fi; done`,
+    `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
   ].filter(Boolean).join('; ');
   const out = (await runOn(ctx, inner)).trim();
   if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
   const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
   const trash = (out.match(/TRASH:(\S+)/) || [])[1] || '';
-  return { ok: true, moved, requested: valid.length, trash };
+  const notFound = (out.match(/NOTFOUND:/g) || []).length;
+  const failLines = (String(out).split('\n').filter(l => l.startsWith('FAIL:') || l.startsWith('MKDIRERR:')));
+  const reason = failLines.length ? failLines.slice(0, 3).join(' | ') : (notFound ? `not found on ${serverId} (wrong server?)` : '');
+  return { ok: true, moved, requested: valid.length, trash, notFound, failed: failLines.length, reason };
 }
 
 const ORPHAN_UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';

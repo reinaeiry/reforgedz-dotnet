@@ -401,7 +401,11 @@
       try {
         const r = await (await fetch('/api/shop/admin/save-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),ids:[id],force:forceWrite()})})).json();
         if (r.error){ alert('Drop failed: '+r.error); return; }
-        card.style.opacity='.4'; card.querySelector('.si-acts').innerHTML=`<span class="si-note">Dropped → trash</span>`;
+        if (!r.moved){
+          alert(`⚠️ NOTHING was dropped — 0 of 1 files moved.\n\nThe record is NOT gone.\n\nReason: ${r.reason || 'unknown'}\n\nChecklist:\n• Server dropdown = where this player actually is? (you're on "${curServer().toUpperCase()}")\n• Player still connected? (a live character re-saves itself)\n• A write error above means the server couldn't move the file.`);
+          return;
+        }
+        card.style.opacity='.4'; card.querySelector('.si-acts').innerHTML=`<span class="si-note">Dropped → trash ✓ (${r.moved})</span>`;
       } catch { alert('Drop failed.'); }
     }
     function copyRecord(btn){
