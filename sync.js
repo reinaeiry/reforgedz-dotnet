@@ -726,6 +726,26 @@ async function listPlayers(serverId) {
   return { players, count: players.length };
 }
 
+// List records inside one collection (category) — compact summary per record for
+// the collection browser. Capped; returns total so the UI can show "X of Y".
+async function listCollectionRecords(serverId, category, limit = 1000) {
+  const cat = safeCategory(category);
+  const ctx = await saveOpContext(serverId);
+  const cap = Math.min(Math.max(parseInt(limit, 10) || 1000, 1), 3000);
+  const inner = [
+    `SB='${ctx.saveBase}'`,
+    `echo "TOTAL:$(find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | wc -l)"`,
+    `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | head -${cap} | while IFS= read -r f; do j=$(jq -c '{id:(.id // (input_filename|sub(".*/";"")|rtrimstr(".json"))), prefab:(.spawnData.prefab//""), coords:(.spawnData.coords//null), store:(.configuration.m_rStoreName//""), name:([.components[]?|objects|.name//empty]|first // ""), health:([.components[]?|objects|.hitzones?//empty|.[]?|select(.name=="Health")|.health]|first)}' "$f" 2>/dev/null); [ -n "$j" ] && echo "R:$(printf %s "$j" | base64 -w0)"; done`,
+  ].join('; ');
+  const out = await runOn(ctx, inner);
+  let total = 0; const records = [];
+  for (const line of String(out).split('\n')) {
+    if (line.startsWith('TOTAL:')) { total = parseInt(line.slice(6), 10) || 0; continue; }
+    if (line.startsWith('R:')) { try { records.push(JSON.parse(Buffer.from(line.slice(2), 'base64').toString('utf8'))); } catch {} }
+  }
+  return { category: cat, total, shown: records.length, records };
+}
+
 // Custom counts for the stat bar. A "base" (territory) = a placed Fortify FlagPole;
 // "base parts" = the rest of the BaseBuilding collection (walls, floors, etc).
 const FLAG_PREFAB = 'EFFA90623A05EB25'; // ReforgedZ_Fortify FlagPole.et
@@ -743,4 +763,4 @@ async function getExtraStats(serverId) {
   return { flags, baseBuilding: bb, baseParts: Math.max(0, bb - flags) };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats };
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords };

@@ -54,6 +54,12 @@
     .si-jump{ display:flex; align-items:center; gap:12px; background:#121218; border:1px solid var(--si-line); border-radius:11px; padding:10px 16px; margin:0 0 18px; flex-wrap:wrap; }
     .si-jump-label{ color:#cfe0ff; font-size:.86rem; font-weight:600; white-space:nowrap; }
     .si-jump input{ flex:1; min-width:240px; max-width:520px; }
+    .si-catcard{ cursor:pointer; } .si-catcard:hover{ border-color:#3a3a46; background:#191920; }
+    .si-crow{ display:grid; grid-template-columns:1.5fr 1.4fr 1fr 1.7fr .9fr; gap:12px; align-items:center; padding:9px 14px; border-bottom:1px solid #1c1c22; font-size:.82rem; }
+    .si-crow:hover{ background:#16161d; }
+    .si-crow:last-child{ border-bottom:none; }
+    .si-chead{ position:sticky; top:0; z-index:2; color:#9a9aa6; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; background:#17171d; border-bottom:1px solid var(--si-line); }
+    .si-chead:hover{ background:#17171d; }
     .si-ptable{ border:1px solid var(--si-line); border-radius:10px; overflow:hidden; }
     .si-prow{ display:grid; grid-template-columns:2fr .9fr .9fr .7fr .8fr 1.6fr 2.4fr; gap:14px; align-items:center; padding:11px 16px; border-bottom:1px solid #1c1c22; cursor:pointer; font-size:.9rem; }
     .si-prow:nth-child(even){ background:#0f0f13; }
@@ -122,7 +128,6 @@
 
       <div class="si-tabs">
         <div class="si-tab active" data-tab="search">Search</div>
-        <div class="si-tab" data-tab="players">Players</div>
         <div class="si-tab" data-tab="stats">Collections</div>
         <div class="si-tab" data-tab="orphans">Orphan items</div>
         <div class="si-tab" data-tab="dead">Dead chars</div>
@@ -136,16 +141,6 @@
         <div id="err" class="si-err"></div>
         <div id="note" class="si-note"></div>
         <div id="results"></div>
-      </div>
-
-      <div id="tab-players" style="display:none">
-        <div class="si-row">
-          <input type="text" id="playerFilter" placeholder="Filter players by name or UID…" />
-          <button class="si-btn ghost" id="playersReload">Reload</button>
-        </div>
-        <div id="playersNote" class="si-note">Every player on this server. Click a row to open their file (drop / edit / download).</div>
-        <div id="playersErr" class="si-err"></div>
-        <div id="playersTable"></div>
       </div>
 
       <div id="tab-stats" style="display:none">
@@ -227,11 +222,9 @@
         $('server').innerHTML = servers.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
       } catch { $('err').textContent='Could not load servers.'; }
 
-      $('server').onchange = () => { statsLoaded=false; playersLoaded=false; refreshStatus(); loadTopBar(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('playersTable').innerHTML=''; $('note').textContent=''; };
+      $('server').onchange = () => { statsLoaded=false; playersLoaded=false; refreshStatus(); loadTopBar(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('note').textContent=''; };
       $('refreshStatus').onclick = refreshStatus;
       $('forceWrite').onchange = applyWriteState;
-      $('playersReload').onclick = () => loadPlayers(true);
-      $('playerFilter').oninput = renderPlayers;
       $('playerJump').onchange = jumpToPlayer;
       $('playerJump').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); jumpToPlayer(); } });
       $('clearAll').onclick = clearAll;
@@ -248,9 +241,8 @@
       $('orphCat').onchange = () => { $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphNote').textContent='Pick a category and scan.'; };
       document.querySelectorAll('.si-tab').forEach(t => t.onclick = () => {
         document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active')); t.classList.add('active');
-        ['search','players','stats','orphans','dead'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
+        ['search','stats','orphans','dead'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
         if (t.dataset.tab==='stats' && !statsLoaded) loadStats();
-        if (t.dataset.tab==='players' && !playersLoaded) loadPlayers();
       });
       refreshStatus();
       loadTopBar();
@@ -269,6 +261,7 @@
       } catch { $('playersErr').textContent='Could not load players.'; $('playersNote').textContent=''; }
     }
     function renderPlayers(){
+      if(!document.getElementById('playersTable')||!document.getElementById('playerFilter')) return;
       const q=($('playerFilter').value||'').toLowerCase().trim();
       const rows=playersData.filter(p=> !q || String(p.name).toLowerCase().includes(q) || String(p.uid).toLowerCase().includes(q));
       if (!rows.length){ $('playersTable').innerHTML='<div class="si-note">No players match.</div>'; return; }
@@ -330,13 +323,12 @@
     }
     function clearAll(){
       $('q').value=''; $('results').innerHTML=''; $('note').textContent=''; $('err').textContent='';
-      $('playerFilter').value=''; $('playerJump').value=''; $('jumpHint').textContent=(playersData&&playersData.length)?`${playersData.length} players`:'';
+      $('playerJump').value=''; $('jumpHint').textContent=(playersData&&playersData.length)?`${playersData.length} players`:'';
       $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn();
       $('deadList').innerHTML=''; deadCount=0; updateDeadBtn();
-      renderPlayers();
       document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active'));
       const t=document.querySelector('.si-tab[data-tab="search"]'); if(t) t.classList.add('active');
-      ['search','players','stats','orphans','dead'].forEach(n=>$('tab-'+n).style.display = n==='search'?'block':'none');
+      ['search','stats','orphans','dead'].forEach(n=>$('tab-'+n).style.display = n==='search'?'block':'none');
     }
     window.clearAll=clearAll;
 
@@ -353,16 +345,53 @@
         const max=Math.max(1,...cats.map(c=>c.count));
         $('statBar').innerHTML = `<div class="si-note"><b>${cats.length}</b> collections · <b>${total.toLocaleString()}</b> total records on ${curServer().toUpperCase()} — click ↓ to download a collection.</div>`;
         $('statCats').innerHTML = cats.map(c=>`
-          <div class="si-catcard">
+          <div class="si-catcard" onclick="openCollection('${esc(c.category)}')" title="Click to browse ${esc(c.category)}">
             <span class="si-badge" style="background:${catColor(c.category)}22;color:${catColor(c.category)}">${esc(c.category)}</span>
             <div class="meta">
               <div class="cc">${c.count.toLocaleString()} record${c.count===1?'':'s'}</div>
               <div class="bar"><i style="width:${Math.round(c.count/max*100)}%;background:${catColor(c.category)}"></i></div>
             </div>
-            <span class="si-act dl" onclick="download('${esc(c.rel)}')">↓</span>
+            <span class="si-act dl" onclick="event.stopPropagation();download('${esc(c.rel)}')">↓</span>
           </div>`).join('');
       } catch { $('statErr').textContent='Stats failed.'; $('statBar').innerHTML=''; }
     }
+    async function openCollection(cat){
+      $('statErr').textContent='';
+      $('statBar').innerHTML=`<div class="si-row"><button class="si-btn ghost" onclick="loadStats(true)">← Collections</button><span class="si-note" style="margin:0">Browsing <b>${esc(cat)}</b></span></div>`;
+      $('statCats').innerHTML='<div class="si-note">Loading '+esc(cat)+'…</div>';
+      try {
+        const r=await (await fetch(`/api/shop/admin/save-collection?server=${encodeURIComponent(curServer())}&category=${encodeURIComponent(cat)}`)).json();
+        if(r.error){ $('statCats').innerHTML='<div class="si-err">'+esc(r.error)+'</div>'; return; }
+        const recs=r.records||[];
+        if(!recs.length){ $('statCats').innerHTML='<div class="si-note">Empty collection.</div>'; return; }
+        const head=`<div class="si-crow si-chead"><span>Prefab</span><span>Name / HP</span><span>Coords</span><span>ID</span><span>Actions</span></div>`;
+        $('statCats').innerHTML=`<div class="si-note"><b>${recs.length.toLocaleString()}</b> of <b>${r.total.toLocaleString()}</b> ${esc(cat)} records${r.total>r.shown?` — showing first ${r.shown}`:''}.</div><div class="si-ptable">`+head+recs.map(o=>{
+          const coords=o.coords?o.coords.map(n=>Math.round(n)).join(', '):'';
+          const hp=(o.health!=null)?`<span class="si-mut">hp ${o.health}</span>`:'';
+          return `<div class="si-crow">
+            <code class="si-mut">${esc(o.prefab||'?')}</code>
+            <span>${o.name?esc(o.name):''} ${hp}</span>
+            <span class="si-mut">${esc(coords)}</span>
+            <code class="si-mut" style="font-size:.7rem;overflow:hidden;text-overflow:ellipsis">${esc(o.id)}</code>
+            <span class="si-acts">
+              <span class="si-act" onclick="openRecord('${esc(o.id)}')">View</span>
+              <span class="si-act del" onclick="dropById('${esc(o.id)}',this)">Drop</span>
+            </span>
+          </div>`;
+        }).join('')+`</div>`;
+      } catch { $('statCats').innerHTML='<div class="si-err">Failed to load collection.</div>'; }
+    }
+    function openRecord(id){ $('q').value=id; const t=document.querySelector('.si-tab[data-tab="search"]'); if(t) t.click(); doSearch(); }
+    async function dropById(id, el){
+      if(!confirm(`Drop record ${id}?\n\nIt moves to a recoverable trash folder.`)) return;
+      try {
+        const r=await (await fetch('/api/shop/admin/save-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),ids:[id],force:forceWrite()})})).json();
+        if(r.error){ alert('Drop failed: '+r.error); return; }
+        if(!r.moved){ alert('Nothing dropped (0 moved). Reason: '+(r.reason||'unknown')); return; }
+        const row=el.closest('.si-crow'); if(row){ row.style.opacity='.35'; el.closest('.si-acts').innerHTML='<span class="si-note" style="margin:0">dropped ✓</span>'; }
+      } catch { alert('Drop failed.'); }
+    }
+    window.openCollection=openCollection; window.openRecord=openRecord; window.dropById=dropById;
 
     // ---- Search ----
     const ROLE_RANK = (r) => /^This /.test(r)?0 : /Killed by/.test(r)?1 : /Owner/.test(r)?2 : 3;
