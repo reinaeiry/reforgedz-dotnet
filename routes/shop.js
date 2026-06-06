@@ -1470,31 +1470,55 @@ router.delete('/api/shop/admin/priority-queue/:guid', requireAdmin, (req, res) =
 // Permanent grants (NULL expiry) are intentionally left permanent.
 router.post('/api/shop/admin/priority-queue/extend', requireAdmin, (req, res) => {
   const guid = cleanGuid(req.body && req.body.guid);
-  const days = Number(req.body && req.body.days);
   if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
-  if (!Number.isFinite(days) || days === 0) return res.status(400).json({ error: 'days must be a non-zero number' });
-  const secs = Math.round(days * 86400);
 
+  const hasUntil = req.body && req.body.until !== undefined && req.body.until !== null && req.body.until !== '';
   const pqIds = db.prepare('SELECT id FROM products WHERE grants_priority_queue = 1').all().map(r => r.id);
+  const inList = pqIds.length ? pqIds.join(',') : '0';
   let purchaseChanges = 0;
-  if (pqIds.length) {
-    purchaseChanges = db.prepare(`
-      UPDATE orders SET effective_until = effective_until + ?
-      WHERE status = 'completed' AND effective_until IS NOT NULL
-        AND product_id IN (${pqIds.join(',')})
-        AND steam_id IN (SELECT steam_id FROM users WHERE bi_uid = ?)
+  let manualChanges = 0;
+  let until = null;
+
+  if (hasUntil) {
+    // Set the holder's PQ expiry to an absolute date (from the calendar picker).
+    until = Math.round(Number(req.body.until));
+    if (!Number.isFinite(until) || until <= 0) return res.status(400).json({ error: 'invalid until timestamp' });
+    if (pqIds.length) {
+      purchaseChanges = db.prepare(`
+        UPDATE orders SET effective_until = ?
+        WHERE status = 'completed' AND product_id IN (${inList})
+          AND steam_id IN (SELECT steam_id FROM users WHERE bi_uid = ?)
+          AND (effective_until IS NULL OR effective_until > unixepoch())
+      `).run(until, guid).changes;
+    }
+    manualChanges = db.prepare(`
+      UPDATE priority_queue_grants SET expires_at = ?
+      WHERE guid = ? AND removed = 0
+    `).run(until, guid).changes;
+  } else {
+    // Relative bump by N days.
+    const days = Number(req.body && req.body.days);
+    if (!Number.isFinite(days) || days === 0) return res.status(400).json({ error: 'days must be a non-zero number, or pass until' });
+    const secs = Math.round(days * 86400);
+    if (pqIds.length) {
+      purchaseChanges = db.prepare(`
+        UPDATE orders SET effective_until = effective_until + ?
+        WHERE status = 'completed' AND effective_until IS NOT NULL
+          AND product_id IN (${inList})
+          AND steam_id IN (SELECT steam_id FROM users WHERE bi_uid = ?)
+      `).run(secs, guid).changes;
+    }
+    manualChanges = db.prepare(`
+      UPDATE priority_queue_grants SET expires_at = expires_at + ?
+      WHERE guid = ? AND expires_at IS NOT NULL
     `).run(secs, guid).changes;
   }
-  const manualChanges = db.prepare(`
-    UPDATE priority_queue_grants SET expires_at = expires_at + ?
-    WHERE guid = ? AND expires_at IS NOT NULL
-  `).run(secs, guid).changes;
 
   if (purchaseChanges || manualChanges) {
     syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
   }
   const entry = buildPriorityQueueList().find(e => e.guid === guid) || null;
-  res.json({ ok: true, days, purchaseChanges, manualChanges, entry });
+  res.json({ ok: true, until, purchaseChanges, manualChanges, entry });
 });
 
 // ============================================================
