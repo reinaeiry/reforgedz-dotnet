@@ -184,6 +184,13 @@ db.exec(`
   )
 `);
 
+// Manual PQ grants gain an optional expiry (NULL = permanent). Lets the admin page
+// show "expires on X" and extend it, instead of the old hack of typing a
+// "Remove DD/MM/YYYY" reminder into display_name. Sync honours it (expired = removed).
+if (!db.prepare("PRAGMA table_info(priority_queue_grants)").all().some(c => c.name === 'expires_at')) {
+  db.exec("ALTER TABLE priority_queue_grants ADD COLUMN expires_at INTEGER");
+}
+
 // Tracks the set of GUIDs the shop last wrote into each server's
 // config.json game.admins array. Used so the shop only ever
 // adds/removes its OWN contributed GUIDs — real GMs added via the

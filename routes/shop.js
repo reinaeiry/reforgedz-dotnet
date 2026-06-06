@@ -1087,30 +1087,34 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
 // ============================================================
 
 function buildPriorityQueueList() {
+  // Only current holders (expired purchases/manual grants are excluded, matching sync).
   const orderRows = db.prepare(`
     SELECT
       u.bi_uid AS guid,
       COALESCE(u.gamertag, u.persona) AS display_name,
       p.server_specific,
-      o.server_id
+      o.server_id,
+      o.effective_until
     FROM orders o
     JOIN users u ON o.steam_id = u.steam_id
     JOIN products p ON o.product_id = p.id
     WHERE o.status = 'completed'
       AND p.grants_priority_queue = 1
       AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
+      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
   `).all();
 
-  const manualRows = db.prepare(`SELECT guid, server_id, display_name FROM priority_queue_grants`).all();
+  const manualRows = db.prepare(`SELECT guid, server_id, display_name, expires_at FROM priority_queue_grants WHERE expires_at IS NULL OR expires_at > unixepoch()`).all();
 
   const byGuid = new Map();
   const blank = () => Object.fromEntries(SERVER_IDS.map(id => [id, false]));
   const blankSrc = () => Object.fromEntries(SERVER_IDS.map(id => [id, null]));
+  const blankExp = () => Object.fromEntries(SERVER_IDS.map(id => [id, -Infinity]));
 
   function ensureEntry(guid, displayName) {
     let e = byGuid.get(guid);
     if (!e) {
-      e = { guid, displayName: displayName || '', presence: blank(), sources: blankSrc() };
+      e = { guid, displayName: displayName || '', presence: blank(), sources: blankSrc(), _exp: blankExp() };
       byGuid.set(guid, e);
     } else if (!e.displayName && displayName) {
       e.displayName = displayName;
@@ -1118,28 +1122,44 @@ function buildPriorityQueueList() {
     return e;
   }
 
-  function mark(entry, serverId, source) {
+  // expiry: null = permanent (always wins). Otherwise keep the LATEST date the
+  // holder keeps access on that server (so they only drop when the last source lapses).
+  function mark(entry, serverId, source, expiry) {
     if (!SERVER_IDS.includes(serverId)) return;
     entry.presence[serverId] = true;
     const cur = entry.sources[serverId];
     entry.sources[serverId] = cur && cur !== source ? 'both' : source;
+    const d = (expiry == null) ? Infinity : Number(expiry);
+    if (d > entry._exp[serverId]) entry._exp[serverId] = d;
   }
 
   for (const r of orderRows) {
     const e = ensureEntry(r.guid, r.display_name);
     if (!r.server_specific) {
-      for (const id of SERVER_IDS) mark(e, id, 'purchase');
+      for (const id of SERVER_IDS) mark(e, id, 'purchase', r.effective_until);
     } else if (r.server_id) {
-      mark(e, r.server_id, 'purchase');
+      mark(e, r.server_id, 'purchase', r.effective_until);
     }
   }
 
   for (const r of manualRows) {
     const e = ensureEntry(r.guid, r.display_name);
-    if (r.server_id) mark(e, r.server_id, 'manual');
+    if (r.server_id) mark(e, r.server_id, 'manual', r.expires_at);
   }
 
-  return Array.from(byGuid.values()).sort((a, b) =>
+  const out = Array.from(byGuid.values()).map(e => {
+    const expiry = {};        // per-server: unix ts, or null = permanent / not present
+    let expiresAt = null;     // soonest dated expiry across servers held (null = all permanent)
+    for (const id of SERVER_IDS) {
+      if (!e.presence[id]) { expiry[id] = null; continue; }
+      const v = e._exp[id];
+      if (!isFinite(v)) { expiry[id] = null; }
+      else { expiry[id] = v; expiresAt = (expiresAt == null || v < expiresAt) ? v : expiresAt; }
+    }
+    return { guid: e.guid, displayName: e.displayName, presence: e.presence, sources: e.sources, expiry, expiresAt };
+  });
+
+  return out.sort((a, b) =>
     (a.displayName || '').toLowerCase().localeCompare((b.displayName || '').toLowerCase())
   );
 }
@@ -1352,7 +1372,7 @@ router.get('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
 
 // Manual add: create or rename a manual grant for a guid (without setting any server yet)
 router.post('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
-  const { guid: rawGuid, displayName, serverId } = req.body || {};
+  const { guid: rawGuid, displayName, serverId, expiresAt } = req.body || {};
   const guid = cleanGuid(rawGuid);
   if (!guid) return res.status(400).json({ error: 'Invalid GUID format' });
   const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
@@ -1373,10 +1393,19 @@ router.post('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
     db.prepare(`UPDATE priority_queue_grants SET display_name = ? WHERE guid = ? AND (display_name IS NULL OR display_name = '')`).run(name, guid);
   }
 
+  // Optional expiry. Provide a unix timestamp to set one, or null to make it permanent.
+  // Omit the field entirely to leave any existing expiry untouched.
+  if (expiresAt !== undefined) {
+    const n = (expiresAt === null || expiresAt === '') ? null : Math.round(Number(expiresAt));
+    const expVal = Number.isFinite(n) ? n : null;
+    if (serverId) db.prepare('UPDATE priority_queue_grants SET expires_at = ? WHERE guid = ? AND server_id = ?').run(expVal, guid, serverId);
+    else db.prepare('UPDATE priority_queue_grants SET expires_at = ? WHERE guid = ?').run(expVal, guid);
+  }
+
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
 
   const entries = buildPriorityQueueList();
-  const entry = entries.find(e => e.guid === guid) || { guid, displayName: name || '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])) };
+  const entry = entries.find(e => e.guid === guid) || { guid, displayName: name || '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])), expiry: Object.fromEntries(SERVER_IDS.map(id => [id, null])), expiresAt: null };
   res.json({ ok: true, entry });
 });
 
@@ -1415,6 +1444,38 @@ router.delete('/api/shop/admin/priority-queue/:guid', requireAdmin, (req, res) =
   const result = db.prepare('DELETE FROM priority_queue_grants WHERE guid = ?').run(guid);
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
   res.json({ ok: true, removed: result.changes });
+});
+
+// Extend a holder's priority-queue expiry by N days. Bumps expiring purchase
+// subscriptions (orders.effective_until) and any DATED manual grants for this guid.
+// Permanent grants (NULL expiry) are intentionally left permanent.
+router.post('/api/shop/admin/priority-queue/extend', requireAdmin, (req, res) => {
+  const guid = cleanGuid(req.body && req.body.guid);
+  const days = Number(req.body && req.body.days);
+  if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
+  if (!Number.isFinite(days) || days === 0) return res.status(400).json({ error: 'days must be a non-zero number' });
+  const secs = Math.round(days * 86400);
+
+  const pqIds = db.prepare('SELECT id FROM products WHERE grants_priority_queue = 1').all().map(r => r.id);
+  let purchaseChanges = 0;
+  if (pqIds.length) {
+    purchaseChanges = db.prepare(`
+      UPDATE orders SET effective_until = effective_until + ?
+      WHERE status = 'completed' AND effective_until IS NOT NULL
+        AND product_id IN (${pqIds.join(',')})
+        AND steam_id IN (SELECT steam_id FROM users WHERE bi_uid = ?)
+    `).run(secs, guid).changes;
+  }
+  const manualChanges = db.prepare(`
+    UPDATE priority_queue_grants SET expires_at = expires_at + ?
+    WHERE guid = ? AND expires_at IS NOT NULL
+  `).run(secs, guid).changes;
+
+  if (purchaseChanges || manualChanges) {
+    syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+  }
+  const entry = buildPriorityQueueList().find(e => e.guid === guid) || null;
+  res.json({ ok: true, days, purchaseChanges, manualChanges, entry });
 });
 
 // ============================================================

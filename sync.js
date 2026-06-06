@@ -67,7 +67,7 @@ function buildPerServerPurchaseBuckets() {
   `).get();
   const pqItemTitle = (pqProduct && pqProduct.title) || 'Priority Queue';
 
-  const manualGrants = db.prepare(`SELECT guid, server_id, display_name FROM priority_queue_grants`).all();
+  const manualGrants = db.prepare(`SELECT guid, server_id, display_name FROM priority_queue_grants WHERE expires_at IS NULL OR expires_at > unixepoch()`).all();
 
   const buckets = Object.fromEntries(SERVER_IDS.map(id => [id, []]));
 
@@ -122,7 +122,7 @@ function buildPriorityQueueGuidsPerServer() {
       AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
   `).all();
 
-  const manualRows = db.prepare(`SELECT guid, server_id FROM priority_queue_grants`).all();
+  const manualRows = db.prepare(`SELECT guid, server_id FROM priority_queue_grants WHERE expires_at IS NULL OR expires_at > unixepoch()`).all();
 
   const out = Object.fromEntries(SERVER_IDS.map(id => [id, new Set()]));
 
