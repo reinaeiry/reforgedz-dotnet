@@ -67,7 +67,7 @@ function buildPerServerPurchaseBuckets() {
   `).get();
   const pqItemTitle = (pqProduct && pqProduct.title) || 'Priority Queue';
 
-  const manualGrants = db.prepare(`SELECT guid, server_id, display_name FROM priority_queue_grants WHERE expires_at IS NULL OR expires_at > unixepoch()`).all();
+  const manualGrants = db.prepare(`SELECT guid, server_id, display_name, removed FROM priority_queue_grants WHERE removed = 1 OR expires_at IS NULL OR expires_at > unixepoch()`).all();
 
   const buckets = Object.fromEntries(SERVER_IDS.map(id => [id, []]));
 
@@ -80,8 +80,10 @@ function buildPerServerPurchaseBuckets() {
     }
   }
 
+  const denied = new Set();   // "guid|server" — hidden by a deny row (removed=1)
   for (const g of manualGrants) {
     if (!g.guid || !buckets[g.server_id]) continue;
+    if (g.removed) { denied.add(`${g.guid}|${g.server_id}`); continue; }
     buckets[g.server_id].push({
       name: g.display_name || '',
       guid: g.guid,
@@ -92,9 +94,11 @@ function buildPerServerPurchaseBuckets() {
   // Dedupe per bucket on (guid|item) — keeps the first occurrence, so a
   // purchase entry's `name` (which comes from the user's persona/gamertag)
   // wins over a manual grant's display_name if both exist for the same guid.
+  // Also drop any (guid, server) hidden by a deny row.
   for (const id of SERVER_IDS) {
     const seen = new Set();
     buckets[id] = buckets[id].filter(e => {
+      if (denied.has(`${e.guid}|${id}`)) return false;
       const k = `${e.guid}|${e.item}`;
       if (seen.has(k)) return false;
       seen.add(k);
@@ -122,7 +126,7 @@ function buildPriorityQueueGuidsPerServer() {
       AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
   `).all();
 
-  const manualRows = db.prepare(`SELECT guid, server_id FROM priority_queue_grants WHERE expires_at IS NULL OR expires_at > unixepoch()`).all();
+  const manualRows = db.prepare(`SELECT guid, server_id, removed FROM priority_queue_grants WHERE removed = 1 OR expires_at IS NULL OR expires_at > unixepoch()`).all();
 
   const out = Object.fromEntries(SERVER_IDS.map(id => [id, new Set()]));
 
@@ -134,8 +138,12 @@ function buildPriorityQueueGuidsPerServer() {
     }
   }
 
+  // Manual layer: grants add, denies (removed=1) remove — so an admin can toggle a
+  // purchase-driven server off, exactly like a manual grant.
   for (const r of manualRows) {
-    if (out[r.server_id]) out[r.server_id].add(r.guid);
+    if (!out[r.server_id]) continue;
+    if (r.removed) out[r.server_id].delete(r.guid);
+    else out[r.server_id].add(r.guid);
   }
 
   return out;

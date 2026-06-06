@@ -191,6 +191,13 @@ if (!db.prepare("PRAGMA table_info(priority_queue_grants)").all().some(c => c.na
   db.exec("ALTER TABLE priority_queue_grants ADD COLUMN expires_at INTEGER");
 }
 
+// A "deny" row (removed=1) hides a server for a guid even when a PURCHASE grants it — lets
+// admins toggle purchase-driven servers off / switch them, exactly like manual grants,
+// WITHOUT touching the order. removed=0 (default) = a normal grant.
+if (!db.prepare("PRAGMA table_info(priority_queue_grants)").all().some(c => c.name === 'removed')) {
+  db.exec("ALTER TABLE priority_queue_grants ADD COLUMN removed INTEGER NOT NULL DEFAULT 0");
+}
+
 // Tracks the set of GUIDs the shop last wrote into each server's
 // config.json game.admins array. Used so the shop only ever
 // adds/removes its OWN contributed GUIDs — real GMs added via the

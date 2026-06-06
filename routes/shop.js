@@ -1104,7 +1104,7 @@ function buildPriorityQueueList() {
       AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
   `).all();
 
-  const manualRows = db.prepare(`SELECT guid, server_id, display_name, expires_at FROM priority_queue_grants WHERE expires_at IS NULL OR expires_at > unixepoch()`).all();
+  const manualRows = db.prepare(`SELECT guid, server_id, display_name, expires_at, removed FROM priority_queue_grants WHERE removed = 1 OR expires_at IS NULL OR expires_at > unixepoch()`).all();
 
   const byGuid = new Map();
   const blank = () => Object.fromEntries(SERVER_IDS.map(id => [id, false]));
@@ -1143,8 +1143,18 @@ function buildPriorityQueueList() {
   }
 
   for (const r of manualRows) {
-    const e = ensureEntry(r.guid, r.display_name);
-    if (r.server_id) mark(e, r.server_id, 'manual', r.expires_at);
+    if (!r.server_id || !SERVER_IDS.includes(r.server_id)) continue;
+    if (r.removed) {
+      // Deny: hide this server even if purchased. Only affects an existing holder.
+      const e = byGuid.get(r.guid);
+      if (!e) continue;
+      e.presence[r.server_id] = false;
+      e.sources[r.server_id] = null;
+      e._exp[r.server_id] = -Infinity;
+    } else {
+      const e = ensureEntry(r.guid, r.display_name);
+      mark(e, r.server_id, 'manual', r.expires_at);
+    }
   }
 
   const out = Array.from(byGuid.values()).map(e => {
@@ -1383,9 +1393,10 @@ router.post('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
 
   if (serverId) {
     db.prepare(`
-      INSERT INTO priority_queue_grants (guid, server_id, display_name, granted_by, granted_at)
-      VALUES (?, ?, ?, ?, unixepoch())
+      INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
+      VALUES (?, ?, ?, 0, ?, unixepoch())
       ON CONFLICT(guid, server_id) DO UPDATE SET
+        removed = 0,
         display_name = COALESCE(excluded.display_name, display_name)
     `).run(guid, serverId, name, req.user && req.user.steam_id ? req.user.steam_id : 'api');
   } else if (name) {
@@ -1418,15 +1429,23 @@ router.post('/api/shop/admin/priority-queue/toggle', requireAdmin, (req, res) =>
   if (!SERVER_IDS.includes(serverId)) return res.status(400).json({ error: 'Invalid server ID' });
 
   if (present) {
+    // Grant this server (and clear any deny on it).
     const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
     db.prepare(`
-      INSERT INTO priority_queue_grants (guid, server_id, display_name, granted_by, granted_at)
-      VALUES (?, ?, ?, ?, unixepoch())
+      INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
+      VALUES (?, ?, ?, 0, ?, unixepoch())
       ON CONFLICT(guid, server_id) DO UPDATE SET
+        removed = 0,
         display_name = COALESCE(excluded.display_name, display_name)
     `).run(guid, serverId, name, req.user && req.user.steam_id ? req.user.steam_id : 'api');
   } else {
-    db.prepare('DELETE FROM priority_queue_grants WHERE guid = ? AND server_id = ?').run(guid, serverId);
+    // Hide this server. A deny row (removed=1) keeps a PURCHASE-driven server off too,
+    // and turns a plain manual grant off — sync ignores denied rows.
+    db.prepare(`
+      INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
+      VALUES (?, ?, NULL, 1, ?, unixepoch())
+      ON CONFLICT(guid, server_id) DO UPDATE SET removed = 1
+    `).run(guid, serverId, req.user && req.user.steam_id ? req.user.steam_id : 'api');
   }
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
