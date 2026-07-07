@@ -1423,11 +1423,15 @@
         allOrders.forEach(o => { if (o.id === orderId) o.status = 'refunded'; });
         renderStats();
         renderOrders();
-        if (refund && data.refundedCents) {
-          alert(`Revoked. Refunded $${(data.refundedCents / 100).toFixed(2)} via PayPal.`);
-        } else {
-          alert('Revoked. No refund issued.');
+        let msg = refund && data.refundedCents
+          ? `Revoked. Refunded $${(data.refundedCents / 100).toFixed(2)} via PayPal.`
+          : 'Revoked. No refund issued.';
+        if (data.subscriptionCancelError) {
+          msg += `\n\nWARNING: this was a recurring subscription and PayPal cancellation FAILED (${data.subscriptionCancelError}). The buyer's next billing cycle will still go through — cancel it manually in the PayPal dashboard.`;
+        } else if (data.subscriptionCancelled) {
+          msg += '\n\nRecurring PayPal subscription cancelled — future billing stopped.';
         }
+        alert(msg);
       } catch (e) {
         alert(e.message || 'Failed to revoke order');
       }

@@ -1388,10 +1388,24 @@ function renderOrders(orders, container) {
     return;
   }
 
+  // Renewals insert a new order row per billing cycle, so several rows can
+  // share the same paypal_subscription_id. Only the most recent one gets a
+  // cancel button — cancelling any of them would cancel the same PayPal
+  // subscription, so showing it on every past cycle would just be clutter.
+  const latestSubOrderId = new Map();
+  for (const o of visible) {
+    if (!o.paypal_subscription_id) continue;
+    const prev = latestSubOrderId.get(o.paypal_subscription_id);
+    if (prev === undefined || o.id > prev) latestSubOrderId.set(o.paypal_subscription_id, o.id);
+  }
+
   container.innerHTML = visible.map(o => {
-    // Subscriptions are retired — no self-serve cancel button. Legacy
-    // subscription orders still appear in history but can't be managed here.
-    const cancelBtn = '';
+    const isActiveSub = o.paypal_subscription_id
+      && o.status === 'completed'
+      && latestSubOrderId.get(o.paypal_subscription_id) === o.id;
+    const cancelBtn = isActiveSub
+      ? `<button class="cancel-sub-btn" onclick="cancelSubscription(${o.id}, event)">Cancel</button>`
+      : '';
     const serverTag = o.server_id ? ` <span style="color:var(--text-ghost);font-weight:500"> · ${escHtml(SERVER_LABELS[o.server_id] || o.server_id)}</span>` : '';
 
     return `

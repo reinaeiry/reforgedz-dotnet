@@ -569,7 +569,7 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
 router.get('/api/shop/orders', requireAuth, (req, res) => {
   const orders = db.prepare(`
     SELECT o.id, o.product_id, o.status, o.amount_cents, o.created_at, o.completed_at,
-           o.stripe_subscription_id, o.server_id, p.title, p.type, p.currency, p.server_specific
+           o.stripe_subscription_id, o.paypal_subscription_id, o.server_id, p.title, p.type, p.currency, p.server_specific
     FROM orders o JOIN products p ON o.product_id = p.id
     WHERE o.steam_id = ? ORDER BY o.created_at DESC
   `).all(req.user.steam_id);
@@ -642,13 +642,57 @@ router.post('/api/shop/verify-session', requireAuth, async (req, res) => {
   }
 });
 
-// Subscriptions are retired (PayPal swap = one-time purchases only). These
-// endpoints stay so old clients fail cleanly instead of 404-crashing.
-router.get('/api/shop/subscription-info/:orderId', requireAuth, (_req, res) => {
-  res.status(410).json({ error: 'Subscriptions are no longer offered.' });
+// Billing period end (+ live PayPal status) for the cancel-subscription
+// confirmation modal. Only the order's own owner can look it up.
+router.get('/api/shop/subscription-info/:orderId', requireAuth, async (req, res) => {
+  const orderId = parseInt(req.params.orderId, 10);
+  const order = db.prepare('SELECT * FROM orders WHERE id = ? AND steam_id = ?').get(orderId, req.user.steam_id);
+  if (!order || !order.paypal_subscription_id) {
+    return res.status(404).json({ error: 'Subscription not found' });
+  }
+
+  const useTest = !!order.test_mode;
+  let periodEnd = order.effective_until || null;
+  let status = null;
+  try {
+    const sub = await paypal.getSubscription(useTest, order.paypal_subscription_id);
+    status = (sub?.status || '').toUpperCase();
+    const next = sub?.billing_info?.next_billing_time;
+    if (next) {
+      const u = Math.floor(new Date(next).getTime() / 1000);
+      if (isFinite(u) && u > 0) periodEnd = u;
+    }
+  } catch (e) {
+    console.warn('[subscription-info] PayPal lookup failed:', e.message);
+  }
+
+  res.json({ periodEnd, status, active: status === 'ACTIVE' });
 });
-router.post('/api/shop/cancel-subscription', requireAuth, (_req, res) => {
-  res.status(410).json({ error: 'Subscriptions are no longer offered.' });
+
+// Player-initiated cancellation — turns off auto-renew. Access is kept
+// through the period already paid for; PayPal's BILLING.SUBSCRIPTION.CANCELLED
+// webhook (below) pins effective_until and emails the confirmation once it
+// lands, same as an admin- or PayPal-initiated cancellation.
+router.post('/api/shop/cancel-subscription', requireAuth, async (req, res) => {
+  const orderId = parseInt(req.body.orderId, 10);
+  const order = db.prepare('SELECT * FROM orders WHERE id = ? AND steam_id = ?').get(orderId, req.user.steam_id);
+  if (!order || !order.paypal_subscription_id) {
+    return res.status(404).json({ error: 'Subscription not found' });
+  }
+
+  const useTest = !!order.test_mode;
+  try {
+    const sub = await paypal.getSubscription(useTest, order.paypal_subscription_id);
+    const status = (sub?.status || '').toUpperCase();
+    if (status === 'CANCELLED' || status === 'SUSPENDED' || status === 'EXPIRED') {
+      return res.json({ ok: true, alreadyCancelled: true });
+    }
+    await paypal.cancelSubscription(useTest, order.paypal_subscription_id, 'Cancelled by customer');
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[cancel-subscription] PayPal cancel failed:', e.message);
+    res.status(502).json({ error: 'Failed to cancel subscription: ' + e.message });
+  }
 });
 
 // ============================================================
@@ -956,14 +1000,29 @@ router.delete('/api/shop/admin/products/:id/permanent', requireAdmin, (req, res)
   res.json({ ok: true });
 });
 
-// Hard delete: nukes the product and its orders. (Subscriptions are retired,
-// so there's nothing recurring to cancel — one-time PayPal captures need no
-// teardown. Legacy Stripe subs, if any remain, are handled in the dashboard.)
+// Hard delete: nukes the product and its orders. Any orders tied to a live
+// PayPal subscription must be cancelled with PayPal first — once the order
+// rows are gone we lose the paypal_subscription_id link and PayPal would
+// keep auto-billing the buyer forever with no local record of it.
 router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res) => {
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
-  const cancelledSubs = 0;
+  const subsToCancel = db.prepare(`
+    SELECT DISTINCT paypal_subscription_id AS subId, test_mode
+    FROM orders
+    WHERE product_id = ? AND paypal_subscription_id IS NOT NULL AND status = 'completed'
+  `).all(req.params.id);
+
+  let cancelledSubs = 0;
+  for (const s of subsToCancel) {
+    try {
+      await paypal.cancelSubscription(!!s.test_mode, s.subId, 'Product deleted by admin');
+      cancelledSubs++;
+    } catch (e) {
+      console.error('[hard-delete] Failed to cancel PayPal subscription %s: %s', s.subId, e.message);
+    }
+  }
 
   // Snapshot (user, role) pairs before the rows disappear — we'll need them
   // to remove Discord roles after deletion (the helper queries by order id,
@@ -1049,6 +1108,22 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
 
   db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(orderId);
 
+  // If this order came from a recurring PayPal subscription, cancel the
+  // billing agreement too — otherwise PayPal keeps auto-billing the buyer
+  // on the next cycle even though we've already pulled their access.
+  let subscriptionCancelled = false;
+  let subscriptionCancelError = null;
+  if (order.paypal_subscription_id) {
+    try {
+      await paypal.cancelSubscription(!!order.test_mode, order.paypal_subscription_id,
+        refund ? 'Revoked with refund by admin' : 'Revoked by admin');
+      subscriptionCancelled = true;
+    } catch (e) {
+      subscriptionCancelError = e.message;
+      console.error('[revoke] Failed to cancel PayPal subscription %s: %s', order.paypal_subscription_id, e.message);
+    }
+  }
+
   sendDiscordNotification({
     eventType: 'order_revoked',
     user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
@@ -1079,7 +1154,7 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
   tryRemoveDiscordRoleForOrder(orderId);
 
-  res.json({ ok: true, refundedCents });
+  res.json({ ok: true, refundedCents, subscriptionCancelled, subscriptionCancelError });
 });
 
 // ============================================================
