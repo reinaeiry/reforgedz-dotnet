@@ -228,9 +228,18 @@
       display: flex;
       gap: 8px;
       align-items: center;
-      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .dropdown-order-meta-text {
       overflow: hidden;
       text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .dropdown-order-meta-text .per {
+      margin-left: 3px;
     }
 
     .dropdown-order-meta .status-dot {
@@ -238,6 +247,7 @@
       height: 6px;
       border-radius: 50%;
       display: inline-block;
+      flex-shrink: 0;
     }
 
     .status-dot.completed { background: #4ade80; }

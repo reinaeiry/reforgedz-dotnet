@@ -1414,7 +1414,7 @@ function renderOrders(orders, container) {
           <div class="dropdown-order-title">${escHtml(o.title)}${serverTag}</div>
           <div class="dropdown-order-meta">
             <span class="status-dot ${o.status}"></span>
-            ${o.status} &middot; ${formatDate(o.created_at)} &middot; ${formatPrice(o.amount_cents, o.currency || 'usd', o.type)}
+            <span class="dropdown-order-meta-text">${o.status} &middot; ${formatDate(o.created_at)} &middot; ${formatPrice(o.amount_cents, o.currency || 'usd', o.type)}</span>
           </div>
         </div>
         ${cancelBtn}
