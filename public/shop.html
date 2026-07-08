@@ -900,12 +900,12 @@
       <h3>Custom Flag Details</h3>
       <p>Tell us who this flag is for and upload your design. Our team reviews every submission before it goes up at your base.</p>
       <label class="custom-flag-label" for="customFlagName">Player Name</label>
-      <input type="text" class="biuid-input" id="customFlagName" placeholder="Your in-game name" autocomplete="off">
-      <label class="custom-flag-label" for="customFlagAlias">Player Alias</label>
-      <input type="text" class="biuid-input" id="customFlagAlias" placeholder="Your alias / callsign" autocomplete="off">
+      <input type="text" class="biuid-input" id="customFlagName" placeholder="Your name" autocomplete="off">
+      <label class="custom-flag-label" for="customFlagIgn">In Game Name</label>
+      <input type="text" class="biuid-input" id="customFlagIgn" placeholder="Your in-game name" autocomplete="off">
       <label class="custom-flag-label" for="customFlagGuid">Arma Reforger GUID</label>
       <input type="text" class="biuid-input" id="customFlagGuid" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellcheck="false" autocomplete="off">
-      <label class="custom-flag-label" for="customFlagDiscordId">Discord ID <span style="font-weight:400;color:var(--text-ghost)">(optional, recommended)</span></label>
+      <label class="custom-flag-label" for="customFlagDiscordId">Discord ID <span id="customFlagDiscordHint" style="font-weight:400;color:var(--text-ghost)">(required)</span></label>
       <input type="text" class="biuid-input" id="customFlagDiscordId" placeholder="123456789012345678" spellcheck="false" autocomplete="off" inputmode="numeric">
       <label class="custom-flag-label" for="customFlagImage">Flag Image <span style="font-weight:400;color:var(--text-ghost)">(PNG or JPG, max 16MB)</span></label>
       <input type="file" class="biuid-input" id="customFlagImage" accept="image/png,image/jpeg">
@@ -1053,6 +1053,7 @@
     }
 
     .biuid-input:focus { outline: none; border-color: rgba(204,31,31,0.4); }
+    .biuid-input:disabled { opacity: 0.6; cursor: not-allowed; }
 
     .biuid-error {
       font-size: 0.78rem;

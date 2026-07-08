@@ -1042,10 +1042,25 @@ function showCustomFlagModal(productId) {
   const error = document.getElementById('customFlagError');
   error.textContent = '';
   document.getElementById('customFlagName').value = currentUser.persona || currentUser.gamertag || '';
-  document.getElementById('customFlagAlias').value = '';
+  document.getElementById('customFlagIgn').value = '';
   document.getElementById('customFlagGuid').value = currentUser.bi_uid || '';
-  document.getElementById('customFlagDiscordId').value = currentUser.discord_id || '';
   document.getElementById('customFlagImage').value = '';
+
+  // Discord ID: if the account already has one linked, it's the source of
+  // truth — pre-fill and lock it. Otherwise the buyer must supply one so
+  // staff have a way to reach them about the order.
+  const discordInput = document.getElementById('customFlagDiscordId');
+  const discordHint = document.getElementById('customFlagDiscordHint');
+  if (currentUser.discord_id) {
+    discordInput.value = currentUser.discord_id;
+    discordInput.disabled = true;
+    discordHint.textContent = '(linked to your account)';
+  } else {
+    discordInput.value = '';
+    discordInput.disabled = false;
+    discordHint.textContent = '(required)';
+  }
+
   const submitBtn = document.getElementById('customFlagSubmit');
   submitBtn.disabled = false;
   submitBtn.textContent = 'Submit & Continue';
@@ -1063,21 +1078,27 @@ document.getElementById('customFlagSubmit').addEventListener('click', async () =
   const error = document.getElementById('customFlagError');
   const submitBtn = document.getElementById('customFlagSubmit');
   const name = document.getElementById('customFlagName').value.trim();
-  const alias = document.getElementById('customFlagAlias').value.trim();
+  const ign = document.getElementById('customFlagIgn').value.trim();
   const guid = document.getElementById('customFlagGuid').value.trim().toLowerCase();
   const discordId = document.getElementById('customFlagDiscordId').value.trim();
   const fileInput = document.getElementById('customFlagImage');
   const file = fileInput.files[0];
 
   if (!name) { error.textContent = 'Player Name is required.'; return; }
-  if (!alias) { error.textContent = 'Player Alias is required.'; return; }
+  if (!ign) { error.textContent = 'In Game Name is required.'; return; }
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(guid)) {
     error.textContent = 'Enter a valid Arma Reforger GUID (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).';
     return;
   }
-  if (discordId && !/^\d{15,25}$/.test(discordId)) {
-    error.textContent = 'Discord ID should be a numeric Discord user ID (or leave it blank).';
-    return;
+  // Only enforce format/required-ness for a Discord ID the buyer typed in —
+  // one already linked to the account is pre-filled and locked, so it's
+  // always valid.
+  if (!currentUser.discord_id) {
+    if (!discordId) { error.textContent = 'Discord ID is required.'; return; }
+    if (!/^\d{15,25}$/.test(discordId)) {
+      error.textContent = 'Discord ID should be a numeric Discord user ID.';
+      return;
+    }
   }
   if (!file) { error.textContent = 'Please upload your flag image (PNG or JPG).'; return; }
   if (!['image/png', 'image/jpeg'].includes(file.type)) {
@@ -1097,7 +1118,7 @@ document.getElementById('customFlagSubmit').addEventListener('click', async () =
   form.append('productId', pendingFlagProductId);
   form.append('testMode', isTestMode ? '1' : '0');
   form.append('playerName', name);
-  form.append('playerAlias', alias);
+  form.append('inGameName', ign);
   form.append('guid', guid);
   form.append('discordId', discordId);
   form.append('flagImage', file);
@@ -1594,13 +1615,18 @@ async function checkAlerts() {
         if (order && order.type === 'custom_flag') {
           const cfg = await api('/api/shop/config').catch(() => ({}));
           const tutorial = cfg.customFlagTutorialUrl
-            ? `<a href="${escHtml(cfg.customFlagTutorialUrl)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline">this tutorial</a>`
+            ? `<a href="${escHtml(cfg.customFlagTutorialUrl)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;font-weight:600">Watch the tutorial</a>`
             : '[YOUTUBE_TUTORIAL_LINK_HERE]';
+          const receiptNo = `RFGZ-${String(orderId).padStart(6, '0')}`;
+          const ticketLink = cfg.customFlagTicketUrl
+            ? `<a href="${escHtml(cfg.customFlagTicketUrl)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;font-weight:600">our Discord ticket channel</a>`
+            : 'our Discord ticket channel';
           alertSuccess.innerHTML = `
             <strong>Thanks for your Custom Flag order!</strong>
-            Our team will review your submitted design and get it set up at your in-game base — this usually takes 1-3 days.
-            If your image needs resizing or cleanup first, ${tutorial} walks through preparing it.
-            You'll be contacted via Discord (if linked) once it's live. A receipt with your details is on its way to your inbox.
+            The same steps below were also emailed to the address you used at checkout (PayPal).<br><br>
+            1. ${tutorial} on preparing your flag design.<br>
+            2. Open a ticket at ${ticketLink} — click <strong>Open Support Ticket</strong> and choose <strong>Shop</strong> from the dropdown.<br>
+            3. In the ticket, include your receipt number <strong>${escHtml(receiptNo)}</strong> and attach your flag design.
           `;
         }
       } catch (e) {}

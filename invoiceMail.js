@@ -425,9 +425,13 @@ async function sendRefundConfirmation({ to, displayName, productTitle, amountCen
 // Combined receipt + "what happens next" email for a completed Custom Flag
 // order — replaces the plain sendInvoice for this product type since the
 // buyer needs the submission details + instructions alongside the receipt,
-// not two separate emails. tutorialUrl is never hardcoded: pass null to
-// show the placeholder string until a real video link is set.
-async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCents, currency, customFields, tutorialUrl, dateMs }) {
+// not two separate emails. Styled to match reforgedz.net itself (dark,
+// Oswald/Inter, red accent) rather than the light "invoice" look the other
+// templates use, per how this one gets read: it's a to-do list before the
+// buyer's next step (watch tutorial → open ticket), not just a receipt.
+// tutorialUrl is never hardcoded: pass null to show the placeholder string
+// until a real video link is set.
+async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCents, currency, customFields, tutorialUrl, ticketUrl, dateMs }) {
   const tx = getTransport();
   if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
   if (!to) return { ok: false, skipped: 'no_recipient' };
@@ -438,62 +442,94 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
   const invoiceNo = `RFGZ-${String(orderId).padStart(6, '0')}`;
   const dateStr = new Date(dateMs || Date.now()).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC';
   const tutorialHtml = tutorialUrl
-    ? `<a href="${esc(tutorialUrl)}" style="color:#2563eb;text-decoration:none">Watch the flag-prep tutorial</a>`
-    : esc(YOUTUBE_PLACEHOLDER);
+    ? `<a href="${esc(tutorialUrl)}" style="color:#e02525;text-decoration:none;font-weight:600">Watch the tutorial</a>`
+    : `<span style="color:#777">${esc(YOUTUBE_PLACEHOLDER)}</span>`;
   const tutorialText = tutorialUrl || YOUTUBE_PLACEHOLDER;
   const cf = customFields || {};
+  const ticketMessage = "Hello, I'm looking to get started on my Custom Flag! I have watched the tutorial video and here is my custom flag request:";
 
   const detailRow = (label, value) => `
     <tr>
-      <td style="padding:6px 0;color:#9ca3af;font-size:12px;text-transform:uppercase;letter-spacing:.5px;width:140px">${esc(label)}</td>
-      <td style="padding:6px 0;color:#1a1a1a;font-size:14px">${esc(value || '-')}</td>
+      <td style="padding:6px 0;color:#777;font-size:11px;text-transform:uppercase;letter-spacing:.5px;width:130px;vertical-align:top">${esc(label)}</td>
+      <td style="padding:6px 0;color:#f0f0f0;font-size:14px">${esc(value || '-')}</td>
+    </tr>`;
+
+  const stepRow = (n, title, bodyHtml) => `
+    <tr>
+      <td style="padding:14px 0;border-top:1px solid rgba(255,255,255,0.07)">
+        <table role="presentation" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="width:28px;height:28px;background:#cc1f1f;border-radius:50%;text-align:center;vertical-align:middle;font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-weight:700;color:#fff;font-size:13px">${n}</td>
+            <td style="padding-left:12px">
+              <div style="font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-weight:600;letter-spacing:0.5px;color:#fff;font-size:14px;text-transform:uppercase">${esc(title)}</div>
+              <div style="color:#aaa;font-size:13px;line-height:1.6;margin-top:4px">${bodyHtml}</div>
+            </td>
+          </tr>
+        </table>
+      </td>
     </tr>`;
 
   const html = `<!doctype html>
 <html>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+<head>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#0c0c0c;font-family:'Inter',-apple-system,Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0c0c0c;padding:32px 12px">
     <tr><td align="center">
-      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
-        <tr><td style="background:#0d0f12;padding:28px 24px">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#181818;border:1px solid rgba(255,255,255,0.07);border-radius:10px;overflow:hidden">
+
+        <!-- Brand header -->
+        <tr><td style="background:#0c0c0c;padding:26px 24px;border-bottom:2px solid #cc1f1f">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <td style="font-size:20px;font-weight:700;color:#ffffff;letter-spacing:.5px">ReforgedZ</td>
+              <td style="font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-size:20px;font-weight:700;letter-spacing:2px;color:#f0f0f0;text-transform:uppercase">REFORGED<span style="color:#cc1f1f">Z</span></td>
               <td style="text-align:right">
-                <div style="font-size:18px;font-weight:600;color:#ffffff;letter-spacing:2px">RECEIPT</div>
-                <div style="font-size:12px;color:#9aa0a6;margin-top:2px">${esc(invoiceNo)}</div>
+                <div style="font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-size:16px;font-weight:600;color:#f0f0f0;letter-spacing:2px">RECEIPT</div>
+                <div style="font-size:12px;color:#777;margin-top:2px">${esc(invoiceNo)}</div>
               </td>
             </tr>
           </table>
         </td></tr>
-        <tr><td style="padding:24px 24px 8px;font-size:15px;color:#1a1a1a;line-height:1.55">
-          <p style="margin:0 0 12px">Thanks for your <strong>${esc(item)}</strong> order!</p>
-          <p style="margin:0 0 12px">Our team will review your submitted design and get it set up at your in-game base.</p>
+
+        <tr><td style="padding:24px 24px 8px">
+          <p style="margin:0 0 10px;font-size:15px;color:#f0f0f0;line-height:1.55">Thanks for your <strong>${esc(item)}</strong> order!</p>
+          <p style="margin:0 0 4px;font-size:13px;color:#aaa;line-height:1.55">Follow the steps below to get your design in front of the team — this was also sent to the email you used at checkout, so it's safe to keep for reference.</p>
         </td></tr>
+
         <tr><td style="padding:8px 24px 16px">
-          <span style="display:inline-block;background:#dcfce7;color:#15803d;font-size:12px;font-weight:700;letter-spacing:1px;padding:4px 12px;border-radius:999px">PAID</span>
-          <span style="color:#6b7280;font-size:12px;margin-left:8px">${esc(amount)} &middot; ${esc(dateStr)}</span>
+          <span style="display:inline-block;background:rgba(74,222,128,0.12);color:#4ade80;font-size:11px;font-weight:700;letter-spacing:1px;padding:4px 12px;border-radius:999px;text-transform:uppercase">Paid</span>
+          <span style="color:#777;font-size:12px;margin-left:8px">${esc(amount)} &middot; ${esc(dateStr)}</span>
         </td></tr>
+
         <tr><td style="padding:0 24px 8px">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #ecedf0;padding-top:8px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid rgba(255,255,255,0.07);padding-top:8px">
             ${detailRow('Player Name', cf.playerName)}
-            ${detailRow('Player Alias', cf.playerAlias)}
+            ${detailRow('In-Game Name', cf.inGameName)}
             ${detailRow('GUID', cf.guid)}
             ${detailRow('Discord ID', cf.discordId || 'Not provided')}
           </table>
         </td></tr>
-        <tr><td style="padding:8px 24px 24px">
-          <div style="font-size:13px;color:#4b5563;line-height:1.6;border-top:1px solid #ecedf0;padding-top:16px">
-            <strong style="color:#1a1a1a">What happens next</strong><br>
-            Staff review submitted flag designs and apply them to your base — this usually takes 1-3 days.
-            If your image needs resizing or cleanup first, ${tutorialHtml} walks through preparing it.
-            You'll be contacted via Discord (if linked) once it's live.
-          </div>
+
+        <!-- Next steps -->
+        <tr><td style="padding:8px 24px 8px">
+          <div style="font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-size:13px;font-weight:600;letter-spacing:1.5px;color:#cc1f1f;text-transform:uppercase;margin-top:8px">Next Steps</div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            ${stepRow(1, 'Watch the tutorial', `${tutorialHtml} covers how to prepare your flag design.`)}
+            ${stepRow(2, 'Open a support ticket', `Head to <a href="${esc(ticketUrl)}" style="color:#e02525;text-decoration:none;font-weight:600">our Discord ticket channel</a>, click <strong style="color:#f0f0f0">Open Support Ticket</strong>, and choose <strong style="color:#f0f0f0">Shop</strong> from the dropdown.`)}
+            ${stepRow(3, 'Send us your request', `In the ticket, include your receipt number <strong style="color:#f0f0f0">${esc(invoiceNo)}</strong> and this message (attach your flag design to it):`)}
+          </table>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 4px 40px;width:calc(100% - 40px)">
+            <tr><td style="background:#0c0c0c;border:1px solid rgba(255,255,255,0.07);border-left:3px solid #cc1f1f;border-radius:4px;padding:12px 14px;color:#ccc;font-size:13px;font-style:italic;line-height:1.6">${esc(ticketMessage)}</td></tr>
+          </table>
         </td></tr>
-        <tr><td style="background:#f9fafb;padding:20px 24px;border-top:1px solid #ecedf0">
-          <div style="font-size:12px;color:#6b7280;line-height:1.6">
-            Questions? Email <a href="mailto:contact@reforgedz.net" style="color:#2563eb;text-decoration:none">contact@reforgedz.net</a> or open a ticket in our Discord.<br>
-            ReforgedZ &middot; <a href="${esc(base)}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+
+        <tr><td style="background:#0c0c0c;padding:20px 24px;border-top:1px solid rgba(255,255,255,0.07)">
+          <div style="font-size:12px;color:#777;line-height:1.6">
+            Questions? Email <a href="mailto:contact@reforgedz.net" style="color:#e02525;text-decoration:none">contact@reforgedz.net</a> or open a ticket in our Discord.<br>
+            ReforgedZ &middot; <a href="${esc(base)}/shop" style="color:#e02525;text-decoration:none">reforgedz.net/shop</a>
           </div>
         </td></tr>
       </table>
@@ -505,21 +541,23 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
   const text = [
     `Thanks for your ${item} order!`,
     '',
-    `Order: ${invoiceNo}`,
+    `Receipt: ${invoiceNo}`,
     `Total paid: ${amount}`,
     `Date: ${dateStr}`,
     '',
     'Submitted details:',
     `  Player Name: ${cf.playerName || '-'}`,
-    `  Player Alias: ${cf.playerAlias || '-'}`,
+    `  In-Game Name: ${cf.inGameName || '-'}`,
     `  GUID: ${cf.guid || '-'}`,
     `  Discord ID: ${cf.discordId || 'Not provided'}`,
     '',
-    'What happens next:',
-    'Staff review submitted flag designs and apply them to your base - this',
-    'usually takes 1-3 days. If your image needs resizing or cleanup first,',
-    `here's a tutorial: ${tutorialText}`,
-    "You'll be contacted via Discord (if linked) once it's live.",
+    'Next steps:',
+    `1. Watch the tutorial: ${tutorialText}`,
+    `2. Open a support ticket in Discord (${ticketUrl}) - click "Open Support`,
+    '   Ticket" and choose "Shop" from the dropdown.',
+    `3. In the ticket, include your receipt number (${invoiceNo}) and this`,
+    '   message (attach your flag design to it):',
+    `   "${ticketMessage}"`,
     '',
     'Questions? Email contact@reforgedz.net',
     `${base}/shop`

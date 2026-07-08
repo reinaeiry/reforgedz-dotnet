@@ -293,7 +293,7 @@ if (!orderHasColumn('effective_until')) {
 
 // Generic slot for custom-checkout product types (currently just
 // custom_flag) to stash the extra fields a buyer submitted, as JSON —
-// e.g. { playerName, playerAlias, guid, discordId }. NULL for every
+// e.g. { playerName, inGameName, guid, discordId }. NULL for every
 // ordinary order. custom_file_path is the path (relative to the
 // uploads/ dir) of any file they submitted alongside it.
 if (!orderHasColumn('custom_fields_json')) {

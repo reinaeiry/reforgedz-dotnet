@@ -34,6 +34,9 @@ const CUSTOM_FLAG_UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'custom-fla
 fs.mkdirSync(CUSTOM_FLAG_UPLOAD_DIR, { recursive: true });
 const CUSTOM_FLAG_MAX_BYTES = 16 * 1024 * 1024;
 const CUSTOM_FLAG_MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg' };
+// The #shop support-ticket channel, linked from the confirmation email/
+// onscreen message so buyers know where to follow up with their design.
+const CUSTOM_FLAG_TICKET_URL = 'https://discord.com/channels/1352364195211120660/1361079415324410026';
 
 const customFlagUpload = multer({
   storage: multer.memoryStorage(),
@@ -313,7 +316,8 @@ router.get('/api/shop/config', (req, res) => {
     // Shown on the Custom Flag confirmation screen/email. Never hardcoded —
     // set CUSTOM_FLAG_TUTORIAL_URL when a real video exists; until then the
     // frontend shows the placeholder string as-is.
-    customFlagTutorialUrl: process.env.CUSTOM_FLAG_TUTORIAL_URL || null
+    customFlagTutorialUrl: process.env.CUSTOM_FLAG_TUTORIAL_URL || null,
+    customFlagTicketUrl: CUSTOM_FLAG_TICKET_URL
   });
 });
 
@@ -452,18 +456,26 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
 router.post('/api/shop/checkout-custom-flag', requireAuth, handleCustomFlagUpload, async (req, res) => {
   const productId = parseInt(req.body.productId, 10);
   const playerName = String(req.body.playerName || '').trim();
-  const playerAlias = String(req.body.playerAlias || '').trim();
+  const inGameName = String(req.body.inGameName || '').trim();
   const guid = cleanGuid(req.body.guid);
-  const discordIdRaw = String(req.body.discordId || '').trim();
-  const discordId = discordIdRaw || null;
+
+  // If the buyer's account already has a Discord ID linked, that's the
+  // source of truth — trust it over anything submitted here. Otherwise
+  // they must supply one so staff can reach them about the order.
+  let discordId = req.user.discord_id || null;
+  if (!discordId) {
+    const raw = String(req.body.discordId || '').trim();
+    if (!raw) return res.status(400).json({ error: 'Discord ID is required — link your Discord from the account menu, or enter one below.' });
+    if (!/^\d{15,25}$/.test(raw)) {
+      return res.status(400).json({ error: 'Discord ID should be a numeric Discord user ID.' });
+    }
+    discordId = raw;
+  }
 
   if (!productId) return res.status(400).json({ error: 'Missing productId' });
   if (!playerName) return res.status(400).json({ error: 'Player Name is required.' });
-  if (!playerAlias) return res.status(400).json({ error: 'Player Alias is required.' });
+  if (!inGameName) return res.status(400).json({ error: 'In-Game Name is required.' });
   if (!guid) return res.status(400).json({ error: 'A valid Arma Reforger GUID is required.' });
-  if (discordId && !/^\d{15,25}$/.test(discordId)) {
-    return res.status(400).json({ error: 'Discord ID should be a numeric Discord user ID (or leave it blank).' });
-  }
   if (!req.file) return res.status(400).json({ error: 'Please upload your flag image (PNG or JPG).' });
 
   const useTest = (req.body.testMode === '1' || req.body.testMode === 'true') && req.user.role === 'admin';
@@ -487,7 +499,7 @@ router.post('/api/shop/checkout-custom-flag', requireAuth, handleCustomFlagUploa
     VALUES (?, ?, 'pending', ?, ?, ?, ?)
   `).run(
     req.user.steam_id, product.id, amountCents, useTest ? 1 : 0,
-    JSON.stringify({ playerName, playerAlias, guid, discordId }),
+    JSON.stringify({ playerName, inGameName, guid, discordId }),
     fileName
   );
   const orderId = orderInfo.lastInsertRowid;
@@ -616,6 +628,7 @@ function fulfillOrder(orderId, cap) {
         currency: order.currency,
         customFields,
         tutorialUrl: process.env.CUSTOM_FLAG_TUTORIAL_URL || null,
+        ticketUrl: CUSTOM_FLAG_TICKET_URL,
         dateMs: Date.now()
       }).catch(() => {});
     }
@@ -649,10 +662,10 @@ async function sendCustomFlagDiscordNotification({ orderId, order, customFields 
     color: 0x4ade80,
     fields: [
       { name: 'Player Name', value: customFields.playerName || 'Unknown', inline: true },
-      { name: 'Player Alias', value: customFields.playerAlias || 'Unknown', inline: true },
+      { name: 'In-Game Name', value: customFields.inGameName || 'Unknown', inline: true },
       { name: 'GUID', value: customFields.guid || 'Unknown', inline: false },
       { name: 'Discord ID', value: customFields.discordId || 'Not provided', inline: true },
-      { name: 'Order ID', value: String(orderId), inline: true },
+      { name: 'Receipt', value: `RFGZ-${String(orderId).padStart(6, '0')}`, inline: true },
       { name: 'Amount', value: `$${(order.amount_cents / 100).toFixed(2)} ${(order.currency || 'usd').toUpperCase()}`, inline: true }
     ],
     timestamp: new Date().toISOString(),

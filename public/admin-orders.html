@@ -1360,7 +1360,7 @@
       try { cf = JSON.parse(o.custom_fields_json || '{}'); } catch {}
       const parts = [
         cf.playerName ? `Name: ${escHtml(cf.playerName)}` : null,
-        cf.playerAlias ? `Alias: ${escHtml(cf.playerAlias)}` : null,
+        cf.inGameName ? `IGN: ${escHtml(cf.inGameName)}` : null,
         cf.guid ? `GUID: ${escHtml(cf.guid)}` : null,
         cf.discordId ? `Discord: ${escHtml(cf.discordId)}` : null
       ].filter(Boolean);
