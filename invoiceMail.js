@@ -454,17 +454,25 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
       <td style="padding:6px 0;color:#f0f0f0;font-size:14px">${esc(value || '-')}</td>
     </tr>`;
 
-  // Fixed-size table cell (HTML width/height attrs, not just CSS) with
-  // line-height pinned to the same value as height — the standard trick to
-  // get a true circle instead of an oval "pill" out of border-radius:50% on
-  // a table cell, since clients like Gmail otherwise expand cell height to
-  // fit the line box rather than respecting the CSS height.
+  // The badge is its own nested table (not just a sized <td> sharing the
+  // row with the taller title+body column) — a shared table row stretches
+  // every cell to the row's tallest content regardless of width/height
+  // attrs, which is what turned this into an oval "pill" before. A nested
+  // table's box is independent of the parent row, so it actually stays
+  // 24x24 — a plain square, not fighting border-radius against a stretched
+  // box.
   const stepRow = (n, title, bodyHtml) => `
     <tr>
       <td style="padding:14px 0;border-top:1px solid rgba(255,255,255,0.07)">
         <table role="presentation" cellpadding="0" cellspacing="0">
           <tr>
-            <td width="26" height="26" align="center" valign="middle" style="width:26px;height:26px;line-height:26px;mso-line-height-rule:exactly;background:#cc1f1f;border-radius:50%;font-family:Arial,Helvetica,sans-serif;font-weight:700;color:#fff;font-size:12px">${n}</td>
+            <td valign="top">
+              <table role="presentation" cellpadding="0" cellspacing="0" style="width:24px">
+                <tr>
+                  <td width="24" height="24" align="center" valign="middle" style="width:24px;height:24px;line-height:24px;mso-line-height-rule:exactly;background:#cc1f1f;border-radius:4px;font-family:Arial,Helvetica,sans-serif;font-weight:700;color:#fff;font-size:12px">${n}</td>
+                </tr>
+              </table>
+            </td>
             <td style="padding-left:12px">
               <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-weight:700;letter-spacing:0.5px;color:#fff;font-size:14px;text-transform:uppercase">${esc(title)}</div>
               <div style="color:#aaa;font-size:13px;line-height:1.6;margin-top:4px">${bodyHtml}</div>
