@@ -509,7 +509,7 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
 
         <tr><td style="padding:24px 24px 8px">
           <p style="margin:0 0 10px;font-size:15px;color:#f0f0f0;line-height:1.55">Thanks for your <strong>${esc(item)}</strong> order!</p>
-          <p style="margin:0 0 4px;font-size:13px;color:#aaa;line-height:1.55">Follow the steps below to get your design in front of the team — this was also sent to the email you used at checkout, so it's safe to keep for reference.</p>
+          <p style="margin:0 0 4px;font-size:13px;color:#aaa;line-height:1.55">Follow the steps below to get your design in front of the team.</p>
         </td></tr>
 
         <tr><td style="padding:8px 24px 16px">
