@@ -454,14 +454,19 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
       <td style="padding:6px 0;color:#f0f0f0;font-size:14px">${esc(value || '-')}</td>
     </tr>`;
 
+  // Fixed-size table cell (HTML width/height attrs, not just CSS) with
+  // line-height pinned to the same value as height — the standard trick to
+  // get a true circle instead of an oval "pill" out of border-radius:50% on
+  // a table cell, since clients like Gmail otherwise expand cell height to
+  // fit the line box rather than respecting the CSS height.
   const stepRow = (n, title, bodyHtml) => `
     <tr>
       <td style="padding:14px 0;border-top:1px solid rgba(255,255,255,0.07)">
         <table role="presentation" cellpadding="0" cellspacing="0">
           <tr>
-            <td style="width:28px;height:28px;background:#cc1f1f;border-radius:50%;text-align:center;vertical-align:middle;font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-weight:700;color:#fff;font-size:13px">${n}</td>
+            <td width="26" height="26" align="center" valign="middle" style="width:26px;height:26px;line-height:26px;mso-line-height-rule:exactly;background:#cc1f1f;border-radius:50%;font-family:Arial,Helvetica,sans-serif;font-weight:700;color:#fff;font-size:12px">${n}</td>
             <td style="padding-left:12px">
-              <div style="font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-weight:600;letter-spacing:0.5px;color:#fff;font-size:14px;text-transform:uppercase">${esc(title)}</div>
+              <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-weight:700;letter-spacing:0.5px;color:#fff;font-size:14px;text-transform:uppercase">${esc(title)}</div>
               <div style="color:#aaa;font-size:13px;line-height:1.6;margin-top:4px">${bodyHtml}</div>
             </td>
           </tr>
@@ -485,9 +490,9 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
         <tr><td style="background:#0c0c0c;padding:26px 24px;border-bottom:2px solid #cc1f1f">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <td style="font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-size:20px;font-weight:700;letter-spacing:2px;color:#f0f0f0;text-transform:uppercase">REFORGED<span style="color:#cc1f1f">Z</span></td>
+              <td style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:20px;font-weight:700;letter-spacing:2px;color:#f0f0f0;text-transform:uppercase">REFORGED<span style="color:#cc1f1f">Z</span></td>
               <td style="text-align:right">
-                <div style="font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-size:16px;font-weight:600;color:#f0f0f0;letter-spacing:2px">RECEIPT</div>
+                <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:16px;font-weight:600;color:#f0f0f0;letter-spacing:2px">RECEIPT</div>
                 <div style="font-size:12px;color:#777;margin-top:2px">${esc(invoiceNo)}</div>
               </td>
             </tr>
@@ -515,14 +520,17 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
 
         <!-- Next steps -->
         <tr><td style="padding:8px 24px 8px">
-          <div style="font-family:'Oswald',Impact,'Arial Narrow',sans-serif;font-size:13px;font-weight:600;letter-spacing:1.5px;color:#cc1f1f;text-transform:uppercase;margin-top:8px">Next Steps</div>
+          <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:13px;font-weight:600;letter-spacing:1.5px;color:#cc1f1f;text-transform:uppercase;margin-top:8px">Next Steps</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             ${stepRow(1, 'Watch the tutorial', `${tutorialHtml} covers how to prepare your flag design.`)}
             ${stepRow(2, 'Open a support ticket', `Head to <a href="${esc(ticketUrl)}" style="color:#e02525;text-decoration:none;font-weight:600">our Discord ticket channel</a>, click <strong style="color:#f0f0f0">Open Support Ticket</strong>, and choose <strong style="color:#f0f0f0">Shop</strong> from the dropdown.`)}
             ${stepRow(3, 'Send us your request', `In the ticket, include your receipt number <strong style="color:#f0f0f0">${esc(invoiceNo)}</strong> and this message (attach your flag design to it):`)}
           </table>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 4px 40px;width:calc(100% - 40px)">
-            <tr><td style="background:#0c0c0c;border:1px solid rgba(255,255,255,0.07);border-left:3px solid #cc1f1f;border-radius:4px;padding:12px 14px;color:#ccc;font-size:13px;font-style:italic;line-height:1.6">${esc(ticketMessage)}</td></tr>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0">
+            <tr>
+              <td width="38">&nbsp;</td>
+              <td style="background:#0c0c0c;border:1px solid rgba(255,255,255,0.07);border-left:3px solid #cc1f1f;border-radius:4px;padding:12px 14px;color:#ccc;font-size:13px;font-style:italic;line-height:1.6">${esc(ticketMessage)}</td>
+            </tr>
           </table>
         </td></tr>
 
