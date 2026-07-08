@@ -291,6 +291,18 @@ if (!orderHasColumn('effective_until')) {
   db.exec("ALTER TABLE orders ADD COLUMN effective_until INTEGER");
 }
 
+// Generic slot for custom-checkout product types (currently just
+// custom_flag) to stash the extra fields a buyer submitted, as JSON —
+// e.g. { playerName, playerAlias, guid, discordId }. NULL for every
+// ordinary order. custom_file_path is the path (relative to the
+// uploads/ dir) of any file they submitted alongside it.
+if (!orderHasColumn('custom_fields_json')) {
+  db.exec("ALTER TABLE orders ADD COLUMN custom_fields_json TEXT");
+}
+if (!orderHasColumn('custom_file_path')) {
+  db.exec("ALTER TABLE orders ADD COLUMN custom_file_path TEXT");
+}
+
 // Self-healing backfill: Stripe session IDs encode their environment in
 // the prefix (cs_test_* vs cs_live_*), so any order still flagged as live
 // with a cs_test_ session is sandbox pollution that should be hidden from

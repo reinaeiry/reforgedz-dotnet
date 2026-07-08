@@ -288,6 +288,7 @@
 
     .type-badge.subscription { color: var(--accent); }
     .type-badge.one_time { color: var(--text-ghost); }
+    .type-badge.custom_flag { color: #4ade80; }
 
     .amount-cell {
       font-family: var(--display);
@@ -1324,8 +1325,11 @@
               </div>
             </div>
           </td>
-          <td>${escHtml(o.title)}</td>
-          <td><span class="type-badge ${o.type}">${o.type === 'subscription' ? 'Sub' : 'One-Time'}</span></td>
+          <td>
+            ${escHtml(o.title)}
+            ${o.type === 'custom_flag' ? renderCustomFlagMeta(o) : ''}
+          </td>
+          <td><span class="type-badge ${o.type}">${o.type === 'subscription' ? 'Sub' : (o.type === 'custom_flag' ? 'Flag' : 'One-Time')}</span></td>
           <td><span class="amount-cell">${formatPrice(o.amount_cents, o.currency || 'usd')}</span></td>
           <td>
             <span class="status-badge ${o.status}">${o.status}</span>
@@ -1343,9 +1347,25 @@
               </div>
             ` : ''}
             <button class="test-toggle-btn" style="margin-left:6px;vertical-align:middle" onclick="toggleOrderTestMode(${o.id}, ${o.test_mode ? 'false' : 'true'})">${o.test_mode ? 'Mark live' : 'Mark test'}</button>
+            ${o.type === 'custom_flag' && o.custom_file_path ? `<a href="/api/shop/admin/orders/${o.id}/flag-image" target="_blank" rel="noopener noreferrer" class="test-toggle-btn" style="margin-left:6px;vertical-align:middle;text-decoration:none;display:inline-block">View Flag</a>` : ''}
           </td>
         </tr>
       `).join('');
+    }
+
+    // Small submitted-details line under a Custom Flag order's title, for
+    // staff reviewing the queue without opening Discord.
+    function renderCustomFlagMeta(o) {
+      let cf = {};
+      try { cf = JSON.parse(o.custom_fields_json || '{}'); } catch {}
+      const parts = [
+        cf.playerName ? `Name: ${escHtml(cf.playerName)}` : null,
+        cf.playerAlias ? `Alias: ${escHtml(cf.playerAlias)}` : null,
+        cf.guid ? `GUID: ${escHtml(cf.guid)}` : null,
+        cf.discordId ? `Discord: ${escHtml(cf.discordId)}` : null
+      ].filter(Boolean);
+      if (!parts.length) return '';
+      return `<div style="font-size:0.72rem;color:var(--text-ghost);margin-top:3px">${parts.join(' &middot; ')}</div>`;
     }
 
     function bindFilters() {

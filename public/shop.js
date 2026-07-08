@@ -119,6 +119,7 @@ function formatPriceRange(p) {
 function formatTypeLabel(type, intervalDays) {
   if (type === 'subscription') return 'Subscription';
   if (type === 'recurring_custom') return `Renewable · every ${intervalDays || '?'} day${intervalDays === 1 ? '' : 's'}`;
+  if (type === 'custom_flag') return 'Custom Flag';
   return 'One-Time';
 }
 
@@ -1032,11 +1033,103 @@ async function saveDiscordIdFromDropdown() {
   }
 }
 
+// ---- Custom Flag checkout (player details + image upload) ----
+let pendingFlagProductId = null;
+
+function showCustomFlagModal(productId) {
+  pendingFlagProductId = productId;
+  const overlay = document.getElementById('customFlagOverlay');
+  const error = document.getElementById('customFlagError');
+  error.textContent = '';
+  document.getElementById('customFlagName').value = currentUser.persona || currentUser.gamertag || '';
+  document.getElementById('customFlagAlias').value = '';
+  document.getElementById('customFlagGuid').value = currentUser.bi_uid || '';
+  document.getElementById('customFlagDiscordId').value = currentUser.discord_id || '';
+  document.getElementById('customFlagImage').value = '';
+  const submitBtn = document.getElementById('customFlagSubmit');
+  submitBtn.disabled = false;
+  submitBtn.textContent = 'Submit & Continue';
+  overlay.classList.add('open');
+}
+
+function hideCustomFlagModal() {
+  document.getElementById('customFlagOverlay').classList.remove('open');
+  pendingFlagProductId = null;
+}
+
+document.getElementById('customFlagCancel').addEventListener('click', hideCustomFlagModal);
+
+document.getElementById('customFlagSubmit').addEventListener('click', async () => {
+  const error = document.getElementById('customFlagError');
+  const submitBtn = document.getElementById('customFlagSubmit');
+  const name = document.getElementById('customFlagName').value.trim();
+  const alias = document.getElementById('customFlagAlias').value.trim();
+  const guid = document.getElementById('customFlagGuid').value.trim().toLowerCase();
+  const discordId = document.getElementById('customFlagDiscordId').value.trim();
+  const fileInput = document.getElementById('customFlagImage');
+  const file = fileInput.files[0];
+
+  if (!name) { error.textContent = 'Player Name is required.'; return; }
+  if (!alias) { error.textContent = 'Player Alias is required.'; return; }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(guid)) {
+    error.textContent = 'Enter a valid Arma Reforger GUID (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).';
+    return;
+  }
+  if (discordId && !/^\d{15,25}$/.test(discordId)) {
+    error.textContent = 'Discord ID should be a numeric Discord user ID (or leave it blank).';
+    return;
+  }
+  if (!file) { error.textContent = 'Please upload your flag image (PNG or JPG).'; return; }
+  if (!['image/png', 'image/jpeg'].includes(file.type)) {
+    error.textContent = 'Flag image must be a PNG or JPG.';
+    return;
+  }
+  if (file.size > 16 * 1024 * 1024) {
+    error.textContent = 'Flag image is too large (max 16MB).';
+    return;
+  }
+
+  error.textContent = '';
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Submitting...';
+
+  const form = new FormData();
+  form.append('productId', pendingFlagProductId);
+  form.append('testMode', isTestMode ? '1' : '0');
+  form.append('playerName', name);
+  form.append('playerAlias', alias);
+  form.append('guid', guid);
+  form.append('discordId', discordId);
+  form.append('flagImage', file);
+
+  try {
+    // Raw fetch (not the api() helper) — it must NOT set a JSON Content-Type
+    // so the browser can attach its own multipart boundary.
+    const res = await fetch('/api/shop/checkout-custom-flag', { method: 'POST', body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if (data.url) window.location.href = data.url;
+  } catch (e) {
+    error.textContent = e.message || 'Checkout failed';
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Submit & Continue';
+  }
+});
+
 // ---- Buy flow ----
 async function buyProduct(productId, serverId, customAmountCents) {
   if (!currentUser) return;
 
   const product = currentProducts.find(p => p.id === productId);
+
+  // Custom Flag always needs its own form (player details + image upload)
+  // instead of the plain checkout — it has its own submission + PayPal
+  // kickoff, so it skips the generic bi_uid/Discord gates below entirely.
+  if (product && product.type === 'custom_flag') {
+    showCustomFlagModal(productId);
+    return;
+  }
+
   // Server-specific or custom-priced products need a picker → route through
   // the detail modal whenever the caller didn't already collect the inputs.
   const needsServer = product && product.server_specific && !serverId;
@@ -1492,6 +1585,24 @@ async function checkAlerts() {
           method: 'POST',
           body: JSON.stringify({ orderId })
         });
+      } catch (e) {}
+      // Custom Flag orders get richer instructions in place of the generic
+      // "thanks" line — look up the order's product type to tell.
+      try {
+        const orders = await api('/api/shop/orders');
+        const order = orders.find(o => String(o.id) === String(orderId));
+        if (order && order.type === 'custom_flag') {
+          const cfg = await api('/api/shop/config').catch(() => ({}));
+          const tutorial = cfg.customFlagTutorialUrl
+            ? `<a href="${escHtml(cfg.customFlagTutorialUrl)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline">this tutorial</a>`
+            : '[YOUTUBE_TUTORIAL_LINK_HERE]';
+          alertSuccess.innerHTML = `
+            <strong>Thanks for your Custom Flag order!</strong>
+            Our team will review your submitted design and get it set up at your in-game base — this usually takes 1-3 days.
+            If your image needs resizing or cleanup first, ${tutorial} walks through preparing it.
+            You'll be contacted via Discord (if linked) once it's live. A receipt with your details is on its way to your inbox.
+          `;
+        }
       } catch (e) {}
     }
     window.history.replaceState({}, '', '/shop');

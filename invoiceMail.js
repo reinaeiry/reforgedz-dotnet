@@ -8,6 +8,10 @@
 
 const nodemailer = require('nodemailer');
 
+// Shown in the Custom Flag confirmation email whenever CUSTOM_FLAG_TUTORIAL_URL
+// isn't set — never hardcode a real link here.
+const YOUTUBE_PLACEHOLDER = '[YOUTUBE_TUTORIAL_LINK_HERE]';
+
 let transporter = null;
 function getTransport() {
   if (transporter) return transporter;
@@ -418,4 +422,123 @@ async function sendRefundConfirmation({ to, displayName, productTitle, amountCen
   }
 }
 
-module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation };
+// Combined receipt + "what happens next" email for a completed Custom Flag
+// order — replaces the plain sendInvoice for this product type since the
+// buyer needs the submission details + instructions alongside the receipt,
+// not two separate emails. tutorialUrl is never hardcoded: pass null to
+// show the placeholder string until a real video link is set.
+async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCents, currency, customFields, tutorialUrl, dateMs }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to) return { ok: false, skipped: 'no_recipient' };
+
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const item = productTitle || 'Custom Flag';
+  const amount = money(amountCents, currency);
+  const invoiceNo = `RFGZ-${String(orderId).padStart(6, '0')}`;
+  const dateStr = new Date(dateMs || Date.now()).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC';
+  const tutorialHtml = tutorialUrl
+    ? `<a href="${esc(tutorialUrl)}" style="color:#2563eb;text-decoration:none">Watch the flag-prep tutorial</a>`
+    : esc(YOUTUBE_PLACEHOLDER);
+  const tutorialText = tutorialUrl || YOUTUBE_PLACEHOLDER;
+  const cf = customFields || {};
+
+  const detailRow = (label, value) => `
+    <tr>
+      <td style="padding:6px 0;color:#9ca3af;font-size:12px;text-transform:uppercase;letter-spacing:.5px;width:140px">${esc(label)}</td>
+      <td style="padding:6px 0;color:#1a1a1a;font-size:14px">${esc(value || '-')}</td>
+    </tr>`;
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <tr><td style="background:#0d0f12;padding:28px 24px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="font-size:20px;font-weight:700;color:#ffffff;letter-spacing:.5px">ReforgedZ</td>
+              <td style="text-align:right">
+                <div style="font-size:18px;font-weight:600;color:#ffffff;letter-spacing:2px">RECEIPT</div>
+                <div style="font-size:12px;color:#9aa0a6;margin-top:2px">${esc(invoiceNo)}</div>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:24px 24px 8px;font-size:15px;color:#1a1a1a;line-height:1.55">
+          <p style="margin:0 0 12px">Thanks for your <strong>${esc(item)}</strong> order!</p>
+          <p style="margin:0 0 12px">Our team will review your submitted design and get it set up at your in-game base.</p>
+        </td></tr>
+        <tr><td style="padding:8px 24px 16px">
+          <span style="display:inline-block;background:#dcfce7;color:#15803d;font-size:12px;font-weight:700;letter-spacing:1px;padding:4px 12px;border-radius:999px">PAID</span>
+          <span style="color:#6b7280;font-size:12px;margin-left:8px">${esc(amount)} &middot; ${esc(dateStr)}</span>
+        </td></tr>
+        <tr><td style="padding:0 24px 8px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #ecedf0;padding-top:8px">
+            ${detailRow('Player Name', cf.playerName)}
+            ${detailRow('Player Alias', cf.playerAlias)}
+            ${detailRow('GUID', cf.guid)}
+            ${detailRow('Discord ID', cf.discordId || 'Not provided')}
+          </table>
+        </td></tr>
+        <tr><td style="padding:8px 24px 24px">
+          <div style="font-size:13px;color:#4b5563;line-height:1.6;border-top:1px solid #ecedf0;padding-top:16px">
+            <strong style="color:#1a1a1a">What happens next</strong><br>
+            Staff review submitted flag designs and apply them to your base — this usually takes 1-3 days.
+            If your image needs resizing or cleanup first, ${tutorialHtml} walks through preparing it.
+            You'll be contacted via Discord (if linked) once it's live.
+          </div>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:20px 24px;border-top:1px solid #ecedf0">
+          <div style="font-size:12px;color:#6b7280;line-height:1.6">
+            Questions? Email <a href="mailto:contact@reforgedz.net" style="color:#2563eb;text-decoration:none">contact@reforgedz.net</a> or open a ticket in our Discord.<br>
+            ReforgedZ &middot; <a href="${esc(base)}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+          </div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    `Thanks for your ${item} order!`,
+    '',
+    `Order: ${invoiceNo}`,
+    `Total paid: ${amount}`,
+    `Date: ${dateStr}`,
+    '',
+    'Submitted details:',
+    `  Player Name: ${cf.playerName || '-'}`,
+    `  Player Alias: ${cf.playerAlias || '-'}`,
+    `  GUID: ${cf.guid || '-'}`,
+    `  Discord ID: ${cf.discordId || 'Not provided'}`,
+    '',
+    'What happens next:',
+    'Staff review submitted flag designs and apply them to your base - this',
+    'usually takes 1-3 days. If your image needs resizing or cleanup first,',
+    `here's a tutorial: ${tutorialText}`,
+    "You'll be contacted via Discord (if linked) once it's live.",
+    '',
+    'Questions? Email contact@reforgedz.net',
+    `${base}/shop`
+  ].join('\n');
+
+  try {
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject: `ReforgedZ receipt ${invoiceNo} - ${item}`,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] custom flag confirmation send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation, sendCustomFlagConfirmation };

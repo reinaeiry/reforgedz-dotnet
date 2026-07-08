@@ -1,5 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const multer = require('multer');
 const db = require('../db');
 const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
@@ -7,7 +11,7 @@ const discord = require('../discord');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
-const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation } = require('../invoiceMail');
+const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation, sendCustomFlagConfirmation } = require('../invoiceMail');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 // Resolved on boot by server.js calling registerPayPalWebhooks(); read at
@@ -21,6 +25,41 @@ function getWebhookId(testMode) { return paypalWebhookIds[testMode ? 'sandbox' :
 
 // ---- Discord webhook ----
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+
+// ---- Custom Flag product (custom checkout: extra fields + an image) ----
+// Uploads live outside public/ (not statically servable) since flag
+// submissions aren't meant to be publicly browsable by URL guessing —
+// staff view them via the admin endpoint below or the Discord post.
+const CUSTOM_FLAG_UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'custom-flags');
+fs.mkdirSync(CUSTOM_FLAG_UPLOAD_DIR, { recursive: true });
+const CUSTOM_FLAG_MAX_BYTES = 16 * 1024 * 1024;
+const CUSTOM_FLAG_MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg' };
+
+const customFlagUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: CUSTOM_FLAG_MAX_BYTES },
+  fileFilter: (req, file, cb) => {
+    const ok = Object.prototype.hasOwnProperty.call(CUSTOM_FLAG_MIME_EXT, file.mimetype);
+    cb(ok ? null : new Error('INVALID_FILE_TYPE'), ok);
+  }
+}).single('flagImage');
+
+// Wraps multer so its errors come back as the same JSON error shape every
+// other checkout error uses, instead of falling through to Express's
+// default HTML error page.
+function handleCustomFlagUpload(req, res, next) {
+  customFlagUpload(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'Flag image is too large (max 16MB).' });
+    }
+    if (err.message === 'INVALID_FILE_TYPE') {
+      return res.status(400).json({ error: 'Flag image must be a PNG or JPG.' });
+    }
+    console.error('[custom-flag] upload error:', err.message);
+    return res.status(400).json({ error: 'Upload failed. Please try again.' });
+  });
+}
 
 const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
 
@@ -270,7 +309,11 @@ router.get('/api/shop/config', (req, res) => {
   res.json({
     provider: 'paypal',
     env: testMode ? 'sandbox' : 'live',
-    configured: paypal.isConfigured(testMode)
+    configured: paypal.isConfigured(testMode),
+    // Shown on the Custom Flag confirmation screen/email. Never hardcoded —
+    // set CUSTOM_FLAG_TUTORIAL_URL when a real video exists; until then the
+    // frontend shows the placeholder string as-is.
+    customFlagTutorialUrl: process.env.CUSTOM_FLAG_TUTORIAL_URL || null
   });
 });
 
@@ -287,6 +330,12 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
 
   const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId);
   if (!product) return res.status(404).json({ error: 'Product not found' });
+
+  // Custom Flag needs extra fields + an image upload that this plain-JSON
+  // endpoint can't carry — it has its own multipart checkout below.
+  if (product.type === 'custom_flag') {
+    return res.status(400).json({ error: 'This product needs additional details — use the Custom Flag checkout form.' });
+  }
 
   let orderServerId = null;
   if (product.server_specific) {
@@ -396,6 +445,84 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
   }
 });
 
+// Custom Flag checkout: a one-time purchase like any other, but it collects
+// player details + a flag image up front (multipart) instead of the plain
+// JSON body /checkout takes. Payment itself still rides the same PayPal
+// Orders v2 one-time flow — only the pre-payment collection step differs.
+router.post('/api/shop/checkout-custom-flag', requireAuth, handleCustomFlagUpload, async (req, res) => {
+  const productId = parseInt(req.body.productId, 10);
+  const playerName = String(req.body.playerName || '').trim();
+  const playerAlias = String(req.body.playerAlias || '').trim();
+  const guid = cleanGuid(req.body.guid);
+  const discordIdRaw = String(req.body.discordId || '').trim();
+  const discordId = discordIdRaw || null;
+
+  if (!productId) return res.status(400).json({ error: 'Missing productId' });
+  if (!playerName) return res.status(400).json({ error: 'Player Name is required.' });
+  if (!playerAlias) return res.status(400).json({ error: 'Player Alias is required.' });
+  if (!guid) return res.status(400).json({ error: 'A valid Arma Reforger GUID is required.' });
+  if (discordId && !/^\d{15,25}$/.test(discordId)) {
+    return res.status(400).json({ error: 'Discord ID should be a numeric Discord user ID (or leave it blank).' });
+  }
+  if (!req.file) return res.status(400).json({ error: 'Please upload your flag image (PNG or JPG).' });
+
+  const useTest = (req.body.testMode === '1' || req.body.testMode === 'true') && req.user.role === 'admin';
+  if (!paypal.isConfigured(useTest)) {
+    return res.status(503).json({ error: `PayPal ${useTest ? 'sandbox' : 'live'} is not configured.` });
+  }
+
+  const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  if (product.type !== 'custom_flag') {
+    return res.status(400).json({ error: 'This product does not accept a Custom Flag checkout.' });
+  }
+
+  const amountCents = product.price_cents;
+  const ext = CUSTOM_FLAG_MIME_EXT[req.file.mimetype];
+  const fileName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
+  const diskPath = path.join(CUSTOM_FLAG_UPLOAD_DIR, fileName);
+
+  const orderInfo = db.prepare(`
+    INSERT INTO orders (steam_id, product_id, status, amount_cents, test_mode, custom_fields_json, custom_file_path)
+    VALUES (?, ?, 'pending', ?, ?, ?, ?)
+  `).run(
+    req.user.steam_id, product.id, amountCents, useTest ? 1 : 0,
+    JSON.stringify({ playerName, playerAlias, guid, discordId }),
+    fileName
+  );
+  const orderId = orderInfo.lastInsertRowid;
+
+  // Save the image before we ever talk to PayPal — an order shouldn't be
+  // payable if we can't actually store what they submitted.
+  try {
+    fs.writeFileSync(diskPath, req.file.buffer);
+  } catch (e) {
+    console.error('[custom-flag] failed to save upload:', e.message);
+    db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
+    return res.status(500).json({ error: 'Failed to save your uploaded image. Please try again.' });
+  }
+
+  try {
+    const { id: paypalOrderId, approveUrl } = await paypal.createOrder(useTest, {
+      amountCents,
+      currency: product.currency || 'USD',
+      description: product.title,
+      customId: orderId,
+      brandName: 'ReforgedZ',
+      returnUrl: `${BASE_URL}/api/shop/paypal/return?order=${orderId}`,
+      cancelUrl: `${BASE_URL}/shop?cancelled=1`
+    });
+    if (!approveUrl) throw new Error('PayPal did not return an approve URL');
+    db.prepare('UPDATE orders SET paypal_order_id = ? WHERE id = ?').run(paypalOrderId, orderId);
+    res.json({ url: approveUrl });
+  } catch (err) {
+    console.error('[custom-flag] PayPal checkout error:', err.message);
+    db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
+    fs.unlink(diskPath, () => {});
+    res.status(500).json({ error: 'Failed to create checkout' });
+  }
+});
+
 // Lazily provision (and cache on the product row) the PayPal catalog-product
 // + billing-plan ids for this product, per environment. The first checkout
 // for a subscription product pays the create cost; subsequent ones reuse.
@@ -473,7 +600,26 @@ function fulfillOrder(orderId, cap) {
   // Invoice email to the PayPal payer email (the only email we collect —
   // Steam login doesn't provide one). Fire-and-forget.
   const to = cap.payerEmail || null;
-  if (to) {
+  if (order.type === 'custom_flag') {
+    // Extra order-review post (with the submitted image attached) + a
+    // combined receipt-and-instructions email instead of the plain invoice.
+    let customFields = {};
+    try { customFields = JSON.parse(order.custom_fields_json || '{}'); } catch {}
+    sendCustomFlagDiscordNotification({ orderId, order, customFields })
+      .catch(e => console.error('[custom-flag] Discord notify failed:', e.message));
+    if (to) {
+      sendCustomFlagConfirmation({
+        to,
+        orderId,
+        productTitle: order.product_title,
+        amountCents: order.amount_cents,
+        currency: order.currency,
+        customFields,
+        tutorialUrl: process.env.CUSTOM_FLAG_TUTORIAL_URL || null,
+        dateMs: Date.now()
+      }).catch(() => {});
+    }
+  } else if (to) {
     sendInvoice({
       to,
       orderId,
@@ -488,6 +634,59 @@ function fulfillOrder(orderId, cap) {
     }).catch(() => {});
   }
   return true;
+}
+
+// Posts a Custom Flag order to the shop-orders Discord webhook with the
+// submitted details, attaching the flag image directly (no public URL
+// needed — Discord supports embedding a same-request file via the
+// attachment:// scheme). Falls back to a plain embed if the file can't be
+// read, per the "Discord failure shouldn't block the order" rule.
+async function sendCustomFlagDiscordNotification({ orderId, order, customFields }) {
+  if (!DISCORD_WEBHOOK_URL) return;
+
+  const embed = {
+    title: 'Custom Flag Order',
+    color: 0x4ade80,
+    fields: [
+      { name: 'Player Name', value: customFields.playerName || 'Unknown', inline: true },
+      { name: 'Player Alias', value: customFields.playerAlias || 'Unknown', inline: true },
+      { name: 'GUID', value: customFields.guid || 'Unknown', inline: false },
+      { name: 'Discord ID', value: customFields.discordId || 'Not provided', inline: true },
+      { name: 'Order ID', value: String(orderId), inline: true },
+      { name: 'Amount', value: `$${(order.amount_cents / 100).toFixed(2)} ${(order.currency || 'usd').toUpperCase()}`, inline: true }
+    ],
+    timestamp: new Date().toISOString(),
+    footer: { text: 'ReforgedZ Shop' }
+  };
+
+  let fileBuffer = null;
+  let fileName = null;
+  if (order.custom_file_path) {
+    try {
+      fileName = path.basename(order.custom_file_path);
+      fileBuffer = fs.readFileSync(path.join(CUSTOM_FLAG_UPLOAD_DIR, fileName));
+      embed.image = { url: `attachment://${fileName}` };
+    } catch (e) {
+      console.error('[custom-flag] could not read flag image for Discord:', e.message);
+    }
+  }
+
+  try {
+    if (fileBuffer) {
+      const form = new FormData();
+      form.append('payload_json', JSON.stringify({ embeds: [embed] }));
+      form.append('files[0]', new Blob([fileBuffer]), fileName);
+      await fetch(DISCORD_WEBHOOK_URL, { method: 'POST', body: form });
+    } else {
+      await fetch(DISCORD_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ embeds: [embed] })
+      });
+    }
+  } catch (e) {
+    console.error('[custom-flag] Discord webhook error:', e.message);
+  }
 }
 
 // PayPal returns the buyer here after they approve. We capture the order,
@@ -722,6 +921,7 @@ router.get('/api/shop/admin/orders', requireAdmin, (req, res) => {
   const orders = db.prepare(`
     SELECT o.id, o.status, o.amount_cents, o.created_at, o.completed_at, o.test_mode,
            o.stripe_session_id, o.stripe_subscription_id,
+           o.custom_fields_json, o.custom_file_path,
            o.steam_id, u.persona, u.avatar_url, u.bi_uid,
            u.platform, u.gamertag, u.bm_player_id,
            p.title, p.type, p.currency
@@ -731,6 +931,17 @@ router.get('/api/shop/admin/orders', requireAdmin, (req, res) => {
     ORDER BY o.created_at DESC
   `).all();
   res.json(orders);
+});
+
+// Stream a submitted flag image back to the admin page. Filenames are
+// server-generated (not user input) and re-basenamed here regardless, so
+// there's no path-traversal surface even though we control the value.
+router.get('/api/shop/admin/orders/:id/flag-image', requireAdmin, (req, res) => {
+  const order = db.prepare('SELECT custom_file_path FROM orders WHERE id = ?').get(req.params.id);
+  if (!order || !order.custom_file_path) return res.status(404).json({ error: 'No flag image for this order' });
+  const filePath = path.join(CUSTOM_FLAG_UPLOAD_DIR, path.basename(order.custom_file_path));
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Image file missing' });
+  res.sendFile(filePath);
 });
 
 // Set BI UID for a user (admin only)
@@ -744,7 +955,7 @@ router.put('/api/shop/admin/users/:steamId/bi-uid', requireAdmin, (req, res) => 
   res.json({ ok: true });
 });
 
-const VALID_PRODUCT_TYPES = ['one_time', 'subscription', 'recurring_custom'];
+const VALID_PRODUCT_TYPES = ['one_time', 'subscription', 'recurring_custom', 'custom_flag'];
 
 function normalizeImagesExtra(value) {
   if (value === undefined || value === null) return undefined;
@@ -827,7 +1038,7 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Price must be a positive number (in cents)' });
   }
   if (!type || !VALID_PRODUCT_TYPES.includes(type)) {
-    return res.status(400).json({ error: 'Type must be one_time, subscription, or recurring_custom' });
+    return res.status(400).json({ error: 'Type must be one_time, subscription, recurring_custom, or custom_flag' });
   }
 
   let intervalDaysVal = null;

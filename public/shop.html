@@ -720,6 +720,7 @@
               <option value="one_time">One-Time Purchase</option>
               <option value="subscription">Monthly Subscription</option>
               <option value="recurring_custom">Renewable (Custom)</option>
+              <option value="custom_flag">Custom Flag (checkout form + upload)</option>
             </select>
           </div>
           <div class="admin-field full">
@@ -893,6 +894,29 @@
     </div>
   </div>
 
+  <!-- Custom Flag Modal (player details + flag image upload before checkout) -->
+  <div class="biuid-overlay" id="customFlagOverlay">
+    <div class="biuid-modal">
+      <h3>Custom Flag Details</h3>
+      <p>Tell us who this flag is for and upload your design. Our team reviews every submission before it goes up at your base.</p>
+      <label class="custom-flag-label" for="customFlagName">Player Name</label>
+      <input type="text" class="biuid-input" id="customFlagName" placeholder="Your in-game name" autocomplete="off">
+      <label class="custom-flag-label" for="customFlagAlias">Player Alias</label>
+      <input type="text" class="biuid-input" id="customFlagAlias" placeholder="Your alias / callsign" autocomplete="off">
+      <label class="custom-flag-label" for="customFlagGuid">Arma Reforger GUID</label>
+      <input type="text" class="biuid-input" id="customFlagGuid" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellcheck="false" autocomplete="off">
+      <label class="custom-flag-label" for="customFlagDiscordId">Discord ID <span style="font-weight:400;color:var(--text-ghost)">(optional, recommended)</span></label>
+      <input type="text" class="biuid-input" id="customFlagDiscordId" placeholder="123456789012345678" spellcheck="false" autocomplete="off" inputmode="numeric">
+      <label class="custom-flag-label" for="customFlagImage">Flag Image <span style="font-weight:400;color:var(--text-ghost)">(PNG or JPG, max 16MB)</span></label>
+      <input type="file" class="biuid-input" id="customFlagImage" accept="image/png,image/jpeg">
+      <div class="biuid-error" id="customFlagError"></div>
+      <div class="biuid-actions">
+        <button class="biuid-cancel" id="customFlagCancel">Cancel</button>
+        <button class="biuid-submit" id="customFlagSubmit">Submit &amp; Continue</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Console Sign-in Modal -->
   <div class="console-overlay" id="consoleOverlay">
     <div class="console-modal">
@@ -968,8 +992,20 @@
       padding: 32px;
       max-width: 480px;
       width: 90%;
+      max-height: 90vh;
+      overflow-y: auto;
       animation: dropIn 0.15s ease;
     }
+
+    .custom-flag-label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin: 14px 0 6px;
+    }
+
+    .custom-flag-label:first-of-type { margin-top: 4px; }
 
     .biuid-modal h3 {
       font-family: var(--display);
