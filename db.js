@@ -303,6 +303,16 @@ if (!orderHasColumn('custom_file_path')) {
   db.exec("ALTER TABLE orders ADD COLUMN custom_file_path TEXT");
 }
 
+// Separate from `status` and `effective_until` on purpose: a cancelled
+// subscription's most recent order row correctly STAYS status='completed'
+// (the buyer keeps access through the period they already paid for, via
+// effective_until) — but the frontend needs to know the underlying PayPal
+// billing agreement is dead so it stops offering a Cancel button for it.
+// NULL = as far as we know, still an active PayPal subscription.
+if (!orderHasColumn('subscription_cancelled_at')) {
+  db.exec("ALTER TABLE orders ADD COLUMN subscription_cancelled_at INTEGER");
+}
+
 // Self-healing backfill: Stripe session IDs encode their environment in
 // the prefix (cs_test_* vs cs_live_*), so any order still flagged as live
 // with a cs_test_ session is sandbox pollution that should be hidden from

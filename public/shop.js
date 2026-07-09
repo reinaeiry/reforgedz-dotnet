@@ -1516,6 +1516,7 @@ function renderOrders(orders, container) {
   container.innerHTML = visible.map(o => {
     const isActiveSub = o.paypal_subscription_id
       && o.status === 'completed'
+      && !o.subscription_cancelled_at
       && latestSubOrderId.get(o.paypal_subscription_id) === o.id;
     const cancelBtn = isActiveSub
       ? `<button class="cancel-sub-btn" onclick="cancelSubscription(${o.id}, event)">Cancel</button>`

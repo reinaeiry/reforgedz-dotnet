@@ -781,7 +781,7 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
 router.get('/api/shop/orders', requireAuth, (req, res) => {
   const orders = db.prepare(`
     SELECT o.id, o.product_id, o.status, o.amount_cents, o.created_at, o.completed_at,
-           o.stripe_subscription_id, o.paypal_subscription_id, o.server_id, p.title, p.type, p.currency, p.server_specific
+           o.stripe_subscription_id, o.paypal_subscription_id, o.subscription_cancelled_at, o.server_id, p.title, p.type, p.currency, p.server_specific
     FROM orders o JOIN products p ON o.product_id = p.id
     WHERE o.steam_id = ? ORDER BY o.created_at DESC
   `).all(req.user.steam_id);
@@ -897,15 +897,34 @@ router.post('/api/shop/cancel-subscription', requireAuth, async (req, res) => {
     const sub = await paypal.getSubscription(useTest, order.paypal_subscription_id);
     const status = (sub?.status || '').toUpperCase();
     if (status === 'CANCELLED' || status === 'SUSPENDED' || status === 'EXPIRED') {
+      // Self-heal: PayPal already considers it dead (e.g. the cancellation
+      // webhook never landed, or it was cancelled from PayPal's own
+      // dashboard) — bring our record in line so the buyer stops seeing an
+      // active Cancel button for it.
+      markSubscriptionCancelledLocally(order.paypal_subscription_id);
       return res.json({ ok: true, alreadyCancelled: true });
     }
     await paypal.cancelSubscription(useTest, order.paypal_subscription_id, 'Cancelled by customer');
+    markSubscriptionCancelledLocally(order.paypal_subscription_id);
     res.json({ ok: true });
   } catch (e) {
     console.error('[cancel-subscription] PayPal cancel failed:', e.message);
     res.status(502).json({ error: 'Failed to cancel subscription: ' + e.message });
   }
 });
+
+// Every order row sharing a PayPal subscription id (one per billing cycle)
+// needs this cleared together, or an older cycle's row would surface as
+// "the latest cancellable order" once the true latest one gets marked.
+// COALESCE keeps the earliest-known cancellation time rather than
+// clobbering it on repeat calls (customer double-clicking, webhook arriving
+// after a self-heal already ran, etc).
+function markSubscriptionCancelledLocally(subscriptionId) {
+  db.prepare(`
+    UPDATE orders SET subscription_cancelled_at = COALESCE(subscription_cancelled_at, unixepoch())
+    WHERE paypal_subscription_id = ?
+  `).run(subscriptionId);
+}
 
 // ============================================================
 //  Admin endpoints
@@ -1341,6 +1360,7 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
     try {
       await paypal.cancelSubscription(!!order.test_mode, order.paypal_subscription_id,
         refund ? 'Revoked with refund by admin' : 'Revoked by admin');
+      markSubscriptionCancelledLocally(order.paypal_subscription_id);
       subscriptionCancelled = true;
     } catch (e) {
       subscriptionCancelError = e.message;
@@ -2737,6 +2757,13 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             AND (effective_until IS NULL OR effective_until > ?)
         `).run(until, subId, until);
       }
+      // This is the authoritative "PayPal says this billing agreement is
+      // dead" signal — separate from effective_until, which only tracks how
+      // long the buyer keeps access. Without this, the order row stays
+      // status='completed' forever (by design) and the frontend has no way
+      // to tell a still-active subscription from a cancelled one, so the
+      // Cancel button never goes away.
+      markSubscriptionCancelledLocally(subId);
       syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
 
       // Notify Discord + email the buyer.
