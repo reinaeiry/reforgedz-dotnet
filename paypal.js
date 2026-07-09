@@ -263,7 +263,6 @@ async function getBalance(testMode) {
   // feature on the app. Falls back gracefully.
   try {
     const res = await ppFetch(testMode, '/v1/reporting/balances?currency_code=USD');
-    const bal = res?.balances?.[0] || (res?.balances && res.balances) || null;
     return { mode: testMode ? 'sandbox' : 'live', raw: res, balances: res?.balances || [] };
   } catch (e) {
     return { mode: testMode ? 'sandbox' : 'live', error: e.message, balances: [] };

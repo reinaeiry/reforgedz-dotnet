@@ -579,13 +579,20 @@ async function ensurePlanForProduct(product, useTest) {
 // Transitions a pending order → completed exactly once and runs all the
 // side effects: Discord notification, game-server sync, role grant, invoice
 // email. Safe to call from both the return handler and the webhook.
-function fulfillOrder(orderId, cap) {
-  const order = db.prepare(`
+// Order + its buyer + product, joined — the shape every order-lifecycle
+// notification (fulfillment, payment-denied, refund) needs to build a
+// Discord/email payload from just an order id.
+function getOrderWithContext(orderId) {
+  return db.prepare(`
     SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
            p.title AS product_title, p.type, p.currency
     FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
     WHERE o.id = ?
   `).get(orderId);
+}
+
+function fulfillOrder(orderId, cap) {
+  const order = getOrderWithContext(orderId);
   if (!order) return false;
   if (order.status === 'completed' || order.status === 'refunded') return false; // already done
 
@@ -2143,10 +2150,10 @@ async function recentTransactions() {
   }));
 }
 
-function runway(stripeUsdCents, mrrCents, monthlyBurnCents) {
+function runway(paypalUsdCents, mrrCents, monthlyBurnCents) {
   const netMonthly = (mrrCents || 0) - (monthlyBurnCents || 0);
   if (netMonthly >= 0) return { profitable: true, monthsRemaining: null, netMonthlyCents: netMonthly };
-  const months = stripeUsdCents > 0 ? stripeUsdCents / Math.abs(netMonthly) : 0;
+  const months = paypalUsdCents > 0 ? paypalUsdCents / Math.abs(netMonthly) : 0;
   return { profitable: false, monthsRemaining: months, netMonthlyCents: netMonthly };
 }
 
@@ -2168,8 +2175,8 @@ router.get('/api/shop/admin/finances', requireAdmin, async (req, res) => {
   // (one-offs are one-time and don't recur, so they hit only this period).
   const usdAvailable = (balance.available || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
   const usdPending = (balance.pending || []).filter(e => e.currency === 'usd').reduce((s, e) => s + (e.amount || 0), 0);
-  const stripeUsdCents = usdAvailable + usdPending;
-  const run = runway(stripeUsdCents, mrr.mrrCents, monthlyTotal);
+  const paypalUsdCents = usdAvailable + usdPending;
+  const run = runway(paypalUsdCents, mrr.mrrCents, monthlyTotal);
 
   res.json({
     balance,
@@ -2542,12 +2549,7 @@ async function dispatchPayPalEvent(event, resource, orderId) {
     case 'PAYMENT.CAPTURE.DENIED': {
       if (orderId) {
         db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(orderId);
-        const order = db.prepare(`
-          SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
-                 p.title as product_title, p.currency
-          FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
-          WHERE o.id = ?
-        `).get(orderId);
+        const order = getOrderWithContext(orderId);
         if (order) {
           sendDiscordNotification({
             eventType: 'payment_failed',
@@ -2769,7 +2771,7 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       // Notify Discord + email the buyer.
       const ctx = db.prepare(`
         SELECT o.*, u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid,
-               p.title AS product_title, p.currency, p.price_cents
+               p.title AS product_title, p.currency
         FROM orders o
         JOIN users u    ON o.steam_id = u.steam_id
         JOIN products p ON o.product_id = p.id
@@ -2777,11 +2779,14 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         ORDER BY o.id DESC LIMIT 1
       `).get(subId);
       if (ctx) {
+        // Use what this order actually charged (o.amount_cents), not the
+        // product's current listed price — those can drift apart if the
+        // price changes after the order was placed.
         sendDiscordNotification({
           eventType: 'subscription_cancelled',
           user: { platform: ctx.platform, persona: ctx.persona, steam_id: ctx.steam_id, gamertag: ctx.gamertag, bm_player_id: ctx.bm_player_id },
           biUid: ctx.bi_uid, productTitle: ctx.product_title,
-          amountCents: ctx.price_cents, currency: ctx.currency,
+          amountCents: ctx.amount_cents, currency: ctx.currency,
           status: event.event_type.replace('BILLING.SUBSCRIPTION.', '').toLowerCase(),
           serverId: ctx.server_id
         });
@@ -2792,7 +2797,7 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             displayName: ctx.persona || ctx.gamertag || null,
             productTitle: ctx.product_title,
             accessEndsAtMs: until ? until * 1000 : null,
-            priceCents: ctx.price_cents,
+            priceCents: ctx.amount_cents,
             currency: ctx.currency
           }).catch(e => console.error('[cancel-mail] send failed:', e.message));
         }
@@ -2815,12 +2820,7 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(order.id);
         tryRemoveDiscordRoleForOrder(order.id);
         syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-        const full = db.prepare(`
-          SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
-                 p.title as product_title, p.currency
-          FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
-          WHERE o.id = ?
-        `).get(order.id);
+        const full = getOrderWithContext(order.id);
         if (full) {
           sendDiscordNotification({
             eventType: 'order_revoked',
