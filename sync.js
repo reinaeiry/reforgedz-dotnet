@@ -622,9 +622,13 @@ function safeCategory(c) {
   return cat;
 }
 
-// Records in a category whose id is referenced by NO file outside that category.
-// For Item = loose world loot; for Character = dead/old bodies no player points
-// to (Player.playerEntity is the "live" reference). Returns the list + totals.
+// Records in a category whose id is referenced by NO CURRENT record outside that
+// category. For Item = loose world loot (items stored in bases/inventories are
+// referenced by their BaseBuilding/Character record and kept); for Character =
+// dead/old bodies no player points to (Player.playerEntity is the "live" ref).
+// Savepoint journals (playthrough*/System) are excluded from the reference scan:
+// an id in a `removedLoaded` removal-journal is NOT a live reference and was
+// deflating the orphan count. Returns the list + totals.
 async function scanOrphans(serverId, category = 'Item', limit = 1000) {
   const cat = safeCategory(category);
   const ctx = await saveOpContext(serverId);
@@ -633,7 +637,7 @@ async function scanOrphans(serverId, category = 'Item', limit = 1000) {
     `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "TOTAL:0"; echo "ALL:0"; exit 0; }`,
     `T=$(mktemp -d)`,
     `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/ids"`,
-    `find "$SB" -name '*.json' -not -path '*/gamemode/${cat}/*' -print0 2>/dev/null | xargs -0 grep -hoE '${ORPHAN_UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
+    `find "$SB" -name '*.json' -not -path '*/gamemode/${cat}/*' -not -path '*/playthrough*' -print0 2>/dev/null | xargs -0 grep -hoE '${ORPHAN_UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
     protectStoresSnippet(ctx.saveBase, cat),
     `comm -23 "$T/ids" "$T/refs" > "$T/orph"`,
     `echo "ALL:$(wc -l < "$T/ids")"; echo "TOTAL:$(wc -l < "$T/orph")"; echo "PROTECTED:$(wc -l < "$T/protected")"`,
@@ -667,7 +671,7 @@ async function purgeOrphans(serverId, category, force = false) {
     `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
     `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/orphans-${cat}-$TS"; mkdir -p "$TRASH"`,
     `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/ids"`,
-    `find "$SB" -name '*.json' -not -path '*/gamemode/${cat}/*' -print0 2>/dev/null | xargs -0 grep -hoE '${ORPHAN_UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
+    `find "$SB" -name '*.json' -not -path '*/gamemode/${cat}/*' -not -path '*/playthrough*' -print0 2>/dev/null | xargs -0 grep -hoE '${ORPHAN_UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
     protectStoresSnippet(ctx.saveBase, cat),
     `comm -23 "$T/ids" "$T/refs" | while IFS= read -r id; do mv "$SB"/*/gamemode/${cat}/"$id".json "$TRASH/" 2>/dev/null; done`,
     `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"; echo "PROTECTED:$(wc -l < "$T/protected")"`,
