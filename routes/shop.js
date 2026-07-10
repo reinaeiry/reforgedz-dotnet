@@ -5,7 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -1585,6 +1585,22 @@ router.post('/api/shop/admin/save-purge-orphans', requireAdmin, async (req, res)
     res.json(r);
   } catch (e) {
     console.error('[save-purge-orphans]', e.message);
+    res.status(500).json({ error: e.message || 'Purge failed' });
+  }
+});
+
+// Purge ALL loose records in a category (Item) EXCEPT placed structures (protected
+// stores). Real stored loot nests inside Character/BaseBuilding/Storage records and
+// is never touched. Recoverable trash. Validated on DEV.
+router.post('/api/shop/admin/save-purge-loose', requireAdmin, async (req, res) => {
+  const { server, category, force } = req.body || {};
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    const r = await purgeLooseItems(server, category || 'Item', force === true);
+    if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
+    res.json(r);
+  } catch (e) {
+    console.error('[save-purge-loose]', e.message);
     res.status(500).json({ error: e.message || 'Purge failed' });
   }
 });

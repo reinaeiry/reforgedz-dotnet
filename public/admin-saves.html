@@ -394,7 +394,10 @@
               }).join('');
         }
 
-        if(!recs.length){ $('statCats').innerHTML=compHtml+'<div class="si-note">No records to list.</div>'; return; }
+        if(cat==='Item'){
+          compHtml += `<div style="margin-top:10px"><button class="si-btn" style="background:#c0392b;color:#fff;border:none" onclick="purgeLoose('${esc(cat)}')">🧹 Purge loose ${esc(cat)} — keep placed structures 🛡</button> <span class="si-mut" style="font-size:.72rem">player inventories &amp; base storage nest inside Character/BaseBuilding records and are NOT touched</span></div>`;
+        }
+        if(!recs.length){ $('statCats').innerHTML=compHtml+'<div class="si-note">No loose records to list.</div>'; return; }
         const head=`<div class="si-crow si-chead"><span>Prefab / Store</span><span>Name / HP</span><span>Coords</span><span>ID</span><span>Actions</span></div>`;
         $('statCats').innerHTML=compHtml+`<div class="si-note" style="margin-top:8px"><b>${recs.length.toLocaleString()}</b> of <b>${r.total.toLocaleString()}</b> ${esc(cat)} records${r.total>r.shown?` — showing first ${r.shown}`:''}.</div><div class="si-ptable">`+head+recs.map(o=>{
           const coords=o.coords?o.coords.map(n=>Math.round(n)).join(', '):'';
@@ -424,7 +427,18 @@
         const row=el.closest('.si-crow'); if(row){ row.style.opacity='.35'; el.closest('.si-acts').innerHTML='<span class="si-note" style="margin:0">dropped ✓</span>'; }
       } catch { alert('Drop failed.'); }
     }
-    window.openCollection=openCollection; window.openRecord=openRecord; window.dropById=dropById;
+    async function purgeLoose(cat){
+      if(!canWrite()){ alert('Stop the game server first (destructive edits are blocked while it runs).'); return; }
+      if(!confirm(`Purge ALL loose ${cat} records on ${curServer().toUpperCase()}, keeping only placed structures (workbench/salvage)?\n\nValidated safe: player inventories and base/vehicle storage are saved INSIDE the Character/BaseBuilding/Storage records — never as separate ${cat} files — so they are NOT touched. Everything moves to a recoverable trash folder.\n\nStop the server first. Continue?`)) return;
+      if(!confirm(`Final confirm: clearing the loose ${cat} folder on ${curServer().toUpperCase()}. Proceed?`)) return;
+      try{
+        const r=await (await fetch('/api/shop/admin/save-purge-loose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),category:cat,force:forceWrite()})})).json();
+        if(r.error){ alert('Purge failed: '+r.error); return; }
+        alert(`Moved ${r.moved.toLocaleString()} loose ${cat} records to trash. Kept ${r.kept} placed structure${r.kept===1?'':'s'} 🛡.\n\nStart the server and verify a base or two.`);
+        openCollection(cat);
+      }catch{ alert('Purge failed.'); }
+    }
+    window.openCollection=openCollection; window.openRecord=openRecord; window.dropById=dropById; window.purgeLoose=purgeLoose;
 
     // ---- Search ----
     const ROLE_RANK = (r) => /^This /.test(r)?0 : /Killed by/.test(r)?1 : /Owner/.test(r)?2 : 3;

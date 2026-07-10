@@ -685,6 +685,37 @@ async function purgeOrphans(serverId, category, force = false) {
   return { ok: true, moved, trash, protectedCount };
 }
 
+// Move EVERY record in a category to the recoverable trash EXCEPT those in a
+// PROTECTED_STORES store. For Item this clears loose world loot AND stray duplicate
+// files. Verified safe: real stored loot (player inventories, base/vehicle storage)
+// is saved NESTED inside the Character/BaseBuilding/Storage record — it is never a
+// separate file in this folder, so it is not touched. Server should be stopped;
+// everything moves to a recoverable trash folder. Matches only filenames, so a
+// malformed record can't hide from the sweep.
+async function purgeLooseItems(serverId, category, force = false) {
+  const cat = safeCategory(category);
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
+    `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/loose-${cat}-$TS"; mkdir -p "$TRASH"`,
+    // filenames of protected (placed-structure) records — never moved
+    `find "$SB"/*/gamemode/${cat} -maxdepth 1 -name '*.json' -print0 2>/dev/null | xargs -0 -r grep -lE '"m_rStoreName":[[:space:]]*"(${PROTECTED_STORES_GREP})"' 2>/dev/null | sed 's#.*/##' | sort -u > "$T/prot"`,
+    // all filenames in the category
+    `find "$SB"/*/gamemode/${cat} -maxdepth 1 -name '*.json' -printf '%f\\n' 2>/dev/null | sort -u > "$T/all"`,
+    // move everything that is not protected
+    `comm -23 "$T/all" "$T/prot" | while IFS= read -r fn; do [ -n "$fn" ] && mv "$SB"/*/gamemode/${cat}/"$fn" "$TRASH/" 2>/dev/null; done`,
+    `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "KEPT:$(wc -l < "$T/prot")"; echo "TRASH:$TRASH"`,
+    `rm -rf "$T"`,
+  ].filter(Boolean).join('; ');
+  const out = (await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT)).trim();
+  if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
+  const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
+  const kept = parseInt((out.match(/KEPT:(\d+)/) || [])[1], 10) || 0;
+  const trash = (out.match(/TRASH:(\S+)/) || [])[1] || '';
+  return { ok: true, moved, kept, trash };
+}
+
 // A character's damage component stores per-hitzone health; the "Health" hitzone
 // is the global one. <= 0 == dead body. This filter returns that value (or null
 // if the record has no such hitzone). We treat ONLY a positively-found value <= 0
@@ -848,4 +879,4 @@ async function getExtraStats(serverId) {
   return { flags, baseBuilding: bb, baseParts: Math.max(0, bb - flags) };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats };
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems };
