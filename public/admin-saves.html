@@ -355,28 +355,61 @@
           </div>`).join('');
       } catch { $('statErr').textContent='Stats failed.'; $('statBar').innerHTML=''; }
     }
+    // Friendly names for the persistence stores (m_rStoreName). Extend as needed.
+    const STORE_LABELS = {
+      '64CAFB94F1A3338C': 'Loose items',
+      '673F305B76CC7974': 'Workbench / Salvage (placed)',
+      '64D2A681B478B391': 'Weapons',
+      '64D2ADC0EDD0A1AE': 'Loose items',
+      '66E273028C819F2A': 'Food / drink',
+      '666523B130E0BB17': 'Loose items'
+    };
+    function storeLabel(s){ if(!s) return '—'; return STORE_LABELS[s] || s; }
     async function openCollection(cat){
       $('statErr').textContent='';
       $('statBar').innerHTML=`<div class="si-row"><button class="si-btn ghost" onclick="loadStats(true)">← Collections</button><span class="si-note" style="margin:0">Browsing <b>${esc(cat)}</b></span></div>`;
       $('statCats').innerHTML='<div class="si-note">Loading '+esc(cat)+'…</div>';
       try {
-        const r=await (await fetch(`/api/shop/admin/save-collection?server=${encodeURIComponent(curServer())}&category=${encodeURIComponent(cat)}`)).json();
+        const [rRes, cRes] = await Promise.all([
+          fetch(`/api/shop/admin/save-collection?server=${encodeURIComponent(curServer())}&category=${encodeURIComponent(cat)}`),
+          fetch(`/api/shop/admin/save-collection-stats?server=${encodeURIComponent(curServer())}&category=${encodeURIComponent(cat)}`)
+        ]);
+        const r=await rRes.json();
+        let comp=null; try { comp=await cRes.json(); } catch {}
         if(r.error){ $('statCats').innerHTML='<div class="si-err">'+esc(r.error)+'</div>'; return; }
         const recs=r.records||[];
-        if(!recs.length){ $('statCats').innerHTML='<div class="si-note">Empty collection.</div>'; return; }
-        const head=`<div class="si-crow si-chead"><span>Prefab</span><span>Name / HP</span><span>Coords</span><span>ID</span><span>Actions</span></div>`;
-        $('statCats').innerHTML=`<div class="si-note"><b>${recs.length.toLocaleString()}</b> of <b>${r.total.toLocaleString()}</b> ${esc(cat)} records${r.total>r.shown?` — showing first ${r.shown}`:''}.</div><div class="si-ptable">`+head+recs.map(o=>{
+
+        // Composition — what the collection is actually made of, by store.
+        let compHtml='';
+        if(comp && comp.stores && comp.stores.length){
+          const max=Math.max(1,...comp.stores.map(s=>s.total));
+          compHtml=`<div class="si-note" style="margin-top:6px">Composition — <b>${(comp.total||0).toLocaleString()}</b> records${comp.protectedTotal?`, <b>${comp.protectedTotal.toLocaleString()}</b> protected placed structures (never purged)`:''}:</div>`
+            + comp.stores.map(s=>{
+                const pct=Math.round(s.total/max*100), col=s.protected?'#38d39f':'#5b8def';
+                return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:.75rem">
+                  <span style="min-width:190px;color:${col}" title="${esc(s.store)}">${s.protected?'🛡 ':''}${esc(storeLabel(s.store))}</span>
+                  <span style="flex:1;height:8px;background:#ffffff12;border-radius:4px;overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:${col}"></span></span>
+                  <span style="min-width:120px;text-align:right" class="si-mut">${s.total.toLocaleString()} · ${s.withComponents.toLocaleString()} w/data</span>
+                </div>`;
+              }).join('');
+        }
+
+        if(!recs.length){ $('statCats').innerHTML=compHtml+'<div class="si-note">No records to list.</div>'; return; }
+        const head=`<div class="si-crow si-chead"><span>Prefab / Store</span><span>Name / HP</span><span>Coords</span><span>ID</span><span>Actions</span></div>`;
+        $('statCats').innerHTML=compHtml+`<div class="si-note" style="margin-top:8px"><b>${recs.length.toLocaleString()}</b> of <b>${r.total.toLocaleString()}</b> ${esc(cat)} records${r.total>r.shown?` — showing first ${r.shown}`:''}.</div><div class="si-ptable">`+head+recs.map(o=>{
           const coords=o.coords?o.coords.map(n=>Math.round(n)).join(', '):'';
           const hp=(o.health!=null)?`<span class="si-mut">hp ${o.health}</span>`:'';
+          const storeLine=`<span class="si-mut" style="font-size:.66rem">${o.protected?'🛡 ':''}${esc(storeLabel(o.store))}${o.comps?` · ${o.comps}c`:''}</span>`;
+          // Placed structures are protected — no Drop button, so they can't be swept by mistake.
+          const actions = o.protected
+            ? `<span class="si-act" onclick="openRecord('${esc(o.id)}')">View</span><span class="si-mut" title="Placed structure — protected from purge">🛡</span>`
+            : `<span class="si-act" onclick="openRecord('${esc(o.id)}')">View</span><span class="si-act del" onclick="dropById('${esc(o.id)}',this)">Drop</span>`;
           return `<div class="si-crow">
-            <code class="si-mut">${esc(o.prefab||'?')}</code>
+            <span><code class="si-mut">${esc(o.prefab||'?')}</code><br>${storeLine}</span>
             <span>${o.name?esc(o.name):''} ${hp}</span>
             <span class="si-mut">${esc(coords)}</span>
             <code class="si-mut" style="font-size:.7rem;overflow:hidden;text-overflow:ellipsis">${esc(o.id)}</code>
-            <span class="si-acts">
-              <span class="si-act" onclick="openRecord('${esc(o.id)}')">View</span>
-              <span class="si-act del" onclick="dropById('${esc(o.id)}',this)">Drop</span>
-            </span>
+            <span class="si-acts">${actions}</span>
           </div>`;
         }).join('')+`</div>`;
       } catch { $('statCats').innerHTML='<div class="si-err">Failed to load collection.</div>'; }
@@ -539,7 +572,8 @@
         const data = await (await fetch(`/api/shop/admin/save-orphans?server=${encodeURIComponent(curServer())}&category=${encodeURIComponent(cat)}`)).json();
         if (data.error){ $('orphErr').textContent=data.error; $('orphNote').textContent=''; return; }
         orphanCount = data.orphanCount;
-        $('orphNote').textContent=`${data.orphanCount.toLocaleString()} orphaned of ${data.total.toLocaleString()} ${cat} records${data.orphanCount>data.shown?` (showing first ${data.shown})`:''}. Tick to drop a few, or "Purge ALL".`;
+        const protNote = data.protectedCount ? ` · ${data.protectedCount.toLocaleString()} placed structures protected 🛡` : '';
+        $('orphNote').textContent=`${data.orphanCount.toLocaleString()} orphaned of ${data.total.toLocaleString()} ${cat} records${protNote}${data.orphanCount>data.shown?` (showing first ${data.shown})`:''}. Tick to drop a few, or "Purge ALL".`;
         if (!data.orphans.length){ $('orphList').innerHTML=`<div class="si-note">No orphaned ${cat} records — nothing to clean.</div>`; updateOrphBtn(); return; }
         const col = cat==='Character' ? '#8a5cd0' : '#3fa85f';
         $('orphList').innerHTML = data.orphans.map(o=>`<div class="si-orph-row">
@@ -562,7 +596,7 @@
       try {
         const r = await (await fetch('/api/shop/admin/save-purge-orphans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),category:cat,force:forceWrite()})})).json();
         if (r.error){ alert('Purge failed: '+r.error); updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans'; return; }
-        $('orphNote').innerHTML=`<span class="si-ok">Purged ${r.moved.toLocaleString()} orphaned ${cat} records → trash. Start the server and verify it's healthy.</span>`;
+        $('orphNote').innerHTML=`<span class="si-ok">Purged ${r.moved.toLocaleString()} orphaned ${cat} records → trash.${r.protectedCount?` ${r.protectedCount.toLocaleString()} placed structures protected 🛡.`:''} Start the server and verify it's healthy.</span>`;
         $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans';
       } catch { alert('Purge failed.'); updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans'; }
     }

@@ -2,3 +2,8 @@ node_modules/
 .env
 *.db
 uploads/
+
+# Infrastructure credentials — NEVER commit. Real secrets live here, local-only.
+secrets/
+*.local.md
+*.secret.md

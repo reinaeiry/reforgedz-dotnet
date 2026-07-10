@@ -26,9 +26,9 @@ function sshOpen(privateKey, host, port, username) {
   });
 }
 
-function sshRun(conn, command) {
+function sshRun(conn, command, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('SSH command timed out after 30s')), 30000);
+    const timeout = setTimeout(() => reject(new Error(`SSH command timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
     conn.exec(command, (err, stream) => {
       if (err) { clearTimeout(timeout); return reject(err); }
       let stdout = '';
@@ -509,10 +509,10 @@ async function saveOpContext(serverId) {
   return { server, saveBase, uuid, privateKey, entryHost, trashBase: trashBaseFromSave(saveBase) };
 }
 
-async function runOn(ctx, inner) {
+async function runOn(ctx, inner, timeoutMs = 30000) {
   const cmd = wrapForRegion(ctx.server, inner);
   const conn = await sshOpen(ctx.privateKey, ctx.entryHost.host, ctx.entryHost.port, ctx.entryHost.user);
-  try { return await sshRun(conn, cmd); } finally { conn.end(); }
+  try { return await sshRun(conn, cmd, timeoutMs); } finally { conn.end(); }
 }
 
 // Robust "is the game server running?" probe. Two-tier so it can NEVER silently
@@ -597,6 +597,25 @@ async function deleteSaveRecords(serverId, ids, force = false) {
 }
 
 const ORPHAN_UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+
+// Persistence stores whose records live in the Item collection but are REAL placed
+// player structures (workbenches, salvage benches — flag-registered base objects with
+// owner/placement components). They must NEVER be treated as orphans or swept by an
+// Item purge. Matched by the m_rStoreName in each record's configuration.
+const PROTECTED_STORES = ['673F305B76CC7974'];
+// grep alternation for the store guids, e.g. 673F305B76CC7974|AAAA...
+const PROTECTED_STORES_GREP = PROTECTED_STORES.join('|');
+// Heavy save scans (orphan detect / collection list) walk 20k+ files — the default
+// 30s SSH timeout is too short; give them room.
+const SAVE_HEAVY_TIMEOUT = 180000;
+
+// Emit (into $T/protected AND appended to $T/refs) the ids of records in this category
+// that belong to a PROTECTED_STORES store. grep (not jq) so a malformed record can never
+// abort the scan and silently expose a real structure to deletion.
+function protectStoresSnippet(saveBase, cat) {
+  return `find "${saveBase}"/*/gamemode/${cat} -maxdepth 1 -name '*.json' -print0 2>/dev/null | xargs -0 -r grep -lE '"m_rStoreName":[[:space:]]*"(${PROTECTED_STORES_GREP})"' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/protected"; cat "$T/protected" >> "$T/refs"; sort -u "$T/refs" -o "$T/refs"`;
+}
+
 function safeCategory(c) {
   const cat = String(c == null ? 'Item' : c).trim();
   if (!/^[A-Za-z]+$/.test(cat)) throw new Error('Invalid category');
@@ -615,24 +634,26 @@ async function scanOrphans(serverId, category = 'Item', limit = 1000) {
     `T=$(mktemp -d)`,
     `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/ids"`,
     `find "$SB" -name '*.json' -not -path '*/gamemode/${cat}/*' -print0 2>/dev/null | xargs -0 grep -hoE '${ORPHAN_UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
+    protectStoresSnippet(ctx.saveBase, cat),
     `comm -23 "$T/ids" "$T/refs" > "$T/orph"`,
-    `echo "ALL:$(wc -l < "$T/ids")"; echo "TOTAL:$(wc -l < "$T/orph")"`,
-    `head -${cap} "$T/orph" | while IFS= read -r id; do f=$(find "$SB"/*/gamemode/${cat} -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && echo "ORPH:$id:$(jq -c '{prefab:.spawnData.prefab,coords:.spawnData.coords,name:(.components|to_entries|map(.value.name)|map(select(.))|first)}' "$f" 2>/dev/null | base64 -w0)"; done`,
+    `echo "ALL:$(wc -l < "$T/ids")"; echo "TOTAL:$(wc -l < "$T/orph")"; echo "PROTECTED:$(wc -l < "$T/protected")"`,
+    `head -${cap} "$T/orph" | while IFS= read -r id; do f=$(find "$SB"/*/gamemode/${cat} -name "$id.json" 2>/dev/null | head -1); [ -n "$f" ] && echo "ORPH:$id:$(jq -c '{prefab:.spawnData.prefab,coords:.spawnData.coords,store:(.configuration.m_rStoreName // ""),name:((.components // {})|to_entries|map(.value.name?)|map(select(.))|first)}' "$f" 2>/dev/null | base64 -w0)"; done`,
     `rm -rf "$T"`,
   ].join('; ');
-  const out = await runOn(ctx, inner);
-  let total = 0, all = 0;
+  const out = await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT);
+  let total = 0, all = 0, protectedCount = 0;
   const orphans = [];
   for (const line of String(out).split('\n')) {
     if (line.startsWith('TOTAL:')) { total = parseInt(line.slice(6), 10) || 0; continue; }
     if (line.startsWith('ALL:')) { all = parseInt(line.slice(4), 10) || 0; continue; }
+    if (line.startsWith('PROTECTED:')) { protectedCount = parseInt(line.slice(10), 10) || 0; continue; }
     const m = line.match(/^ORPH:([0-9a-fA-F-]+):([A-Za-z0-9+/=]+)$/);
     if (!m) continue;
     let info = {};
     try { info = JSON.parse(Buffer.from(m[2], 'base64').toString('utf8')); } catch {}
-    orphans.push({ id: m[1], prefab: info.prefab, coords: info.coords, name: info.name });
+    orphans.push({ id: m[1], prefab: info.prefab, coords: info.coords, store: info.store, name: info.name });
   }
-  return { category: cat, total: all, orphanCount: total, shown: orphans.length, orphans };
+  return { category: cat, total: all, orphanCount: total, protectedCount, shown: orphans.length, orphans };
 }
 
 // Move ALL orphans of a category to the recoverable trash in one pass. Server
@@ -647,15 +668,17 @@ async function purgeOrphans(serverId, category, force = false) {
     `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/orphans-${cat}-$TS"; mkdir -p "$TRASH"`,
     `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | sed 's#.*/##; s#\\.json$##' | tr 'A-F' 'a-f' | sort -u > "$T/ids"`,
     `find "$SB" -name '*.json' -not -path '*/gamemode/${cat}/*' -print0 2>/dev/null | xargs -0 grep -hoE '${ORPHAN_UUID}' 2>/dev/null | tr 'A-F' 'a-f' | sort -u > "$T/refs"`,
+    protectStoresSnippet(ctx.saveBase, cat),
     `comm -23 "$T/ids" "$T/refs" | while IFS= read -r id; do mv "$SB"/*/gamemode/${cat}/"$id".json "$TRASH/" 2>/dev/null; done`,
-    `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"`,
+    `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "TRASH:$TRASH"; echo "PROTECTED:$(wc -l < "$T/protected")"`,
     `rm -rf "$T"`,
   ].filter(Boolean).join('; ');
-  const out = (await runOn(ctx, inner)).trim();
+  const out = (await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT)).trim();
   if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
   const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
   const trash = (out.match(/TRASH:(\S+)/) || [])[1] || '';
-  return { ok: true, moved, trash };
+  const protectedCount = parseInt((out.match(/PROTECTED:(\d+)/) || [])[1], 10) || 0;
+  return { ok: true, moved, trash, protectedCount };
 }
 
 // A character's damage component stores per-hitzone health; the "Health" hitzone
@@ -736,22 +759,72 @@ async function listPlayers(serverId) {
 
 // List records inside one collection (category) — compact summary per record for
 // the collection browser. Capped; returns total so the UI can show "X of Y".
+// Robustness (this used to return nothing for EVERY collection + Exit-1 on big ones):
+//  - `//` MUST be spaced: jq 1.7 reads `.x?//y` / `.x//y` glued as the destructuring
+//    operator `?//` -> compile error -> zero records.
+//  - list to a temp file (no `find | head` SIGPIPE that made the pipeline exit non-zero),
+//  - batch jq via `xargs` (no 1-process-per-file storm blowing the SSH timeout),
+//  - end on `rm` so the command always exits 0 (sshRun rejects ANY non-zero exit).
+const COLLECTION_JQ = '"R:" + ({id:(.id // (input_filename|sub(".*/";"")|rtrimstr(".json"))), prefab:(.spawnData.prefab // ""), coords:(.spawnData.coords // null), store:(.configuration.m_rStoreName // ""), name:([.components[]? | objects | .name // empty] | first // ""), comps:((.components // {}) | length), health:([.components[]? | objects | .hitzones? // empty | .[]? | select(.name=="Health") | .health] | first)} | tojson)';
 async function listCollectionRecords(serverId, category, limit = 1000) {
   const cat = safeCategory(category);
   const ctx = await saveOpContext(serverId);
   const cap = Math.min(Math.max(parseInt(limit, 10) || 1000, 1), 3000);
   const inner = [
     `SB='${ctx.saveBase}'`,
-    `echo "TOTAL:$(find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | wc -l)"`,
-    `find "$SB"/*/gamemode/${cat} -name '*.json' 2>/dev/null | head -${cap} | while IFS= read -r f; do j=$(jq -c '{id:(.id // (input_filename|sub(".*/";"")|rtrimstr(".json"))), prefab:(.spawnData.prefab//""), coords:(.spawnData.coords//null), store:(.configuration.m_rStoreName//""), name:([.components[]?|objects|.name//empty]|first // ""), health:([.components[]?|objects|.hitzones?//empty|.[]?|select(.name=="Health")|.health]|first)}' "$f" 2>/dev/null); [ -n "$j" ] && echo "R:$(printf %s "$j" | base64 -w0)"; done`,
+    `T=$(mktemp -d)`,
+    `find "$SB"/*/gamemode/${cat} -maxdepth 1 -name '*.json' 2>/dev/null > "$T/all"`,
+    `echo "TOTAL:$(wc -l < "$T/all")"`,
+    `head -${cap} "$T/all" | tr '\\n' '\\0' | xargs -0 -r -n 500 jq -rc '${COLLECTION_JQ}' 2>/dev/null`,
+    `rm -rf "$T"`,
   ].join('; ');
-  const out = await runOn(ctx, inner);
+  const out = await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT);
+  const protectedSet = new Set(PROTECTED_STORES);
   let total = 0; const records = [];
   for (const line of String(out).split('\n')) {
     if (line.startsWith('TOTAL:')) { total = parseInt(line.slice(6), 10) || 0; continue; }
-    if (line.startsWith('R:')) { try { records.push(JSON.parse(Buffer.from(line.slice(2), 'base64').toString('utf8'))); } catch {} }
+    if (line.startsWith('R:')) {
+      try {
+        const rec = JSON.parse(line.slice(2));
+        rec.protected = protectedSet.has(rec.store);
+        records.push(rec);
+      } catch {}
+    }
   }
-  return { category: cat, total, shown: records.length, records };
+  return { category: cat, total, shown: records.length, records, protectedStores: PROTECTED_STORES };
+}
+
+// Composition of a collection: counts per store, split by whether records carry
+// component data. Lets an admin SEE what a collection is made of (loose stubs vs
+// placed structures vs items-with-state) BEFORE deciding to purge. One batched jq pass.
+async function getCollectionStats(serverId, category) {
+  const cat = safeCategory(category);
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "TOTAL:0"; exit 0; }`,
+    `T=$(mktemp -d)`,
+    `find "$SB"/*/gamemode/${cat} -maxdepth 1 -name '*.json' 2>/dev/null > "$T/all"`,
+    `echo "TOTAL:$(wc -l < "$T/all")"`,
+    `tr '\\n' '\\0' < "$T/all" | xargs -0 -r -n 500 jq -rc '(.configuration.m_rStoreName // "none") + "\\t" + (((.components // {}) | length) > 0 | tostring)' 2>/dev/null | sort | uniq -c | sort -rn | while IFS= read -r n rest; do printf 'S:%s:%s\\n' "$n" "$rest"; done`,
+    `rm -rf "$T"`,
+  ].join('; ');
+  const out = await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT);
+  const protectedSet = new Set(PROTECTED_STORES);
+  let total = 0; const stores = {};
+  for (const line of String(out).split('\n')) {
+    if (line.startsWith('TOTAL:')) { total = parseInt(line.slice(6), 10) || 0; continue; }
+    const m = line.match(/^S:(\d+):(\S+)\t(true|false)$/);
+    if (!m) continue;
+    const count = parseInt(m[1], 10) || 0;
+    const store = m[2];
+    const withComps = m[3] === 'true';
+    if (!stores[store]) stores[store] = { store, total: 0, withComponents: 0, withoutComponents: 0, protected: protectedSet.has(store) };
+    stores[store].total += count;
+    if (withComps) stores[store].withComponents += count; else stores[store].withoutComponents += count;
+  }
+  const list = Object.values(stores).sort((a, b) => b.total - a.total);
+  const protectedTotal = list.filter(s => s.protected).reduce((a, s) => a + s.total, 0);
+  return { category: cat, total, stores: list, protectedStores: PROTECTED_STORES, protectedTotal };
 }
 
 // Custom counts for the stat bar. A "base" (territory) = a placed Fortify FlagPole;
@@ -771,4 +844,4 @@ async function getExtraStats(serverId) {
   return { flags, baseBuilding: bb, baseParts: Math.max(0, bb - flags) };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords };
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats };

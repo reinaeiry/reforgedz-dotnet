@@ -5,7 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -1597,6 +1597,17 @@ router.get('/api/shop/admin/save-collection', requireAdmin, async (req, res) => 
   } catch (e) {
     console.error('[save-collection]', e.message);
     res.status(500).json({ error: e.message || 'Collection load failed' });
+  }
+});
+
+router.get('/api/shop/admin/save-collection-stats', requireAdmin, async (req, res) => {
+  const { server, category } = req.query;
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    res.json(await getCollectionStats(server, category || 'Item'));
+  } catch (e) {
+    console.error('[save-collection-stats]', e.message);
+    res.status(500).json({ error: e.message || 'Composition load failed' });
   }
 });
 
