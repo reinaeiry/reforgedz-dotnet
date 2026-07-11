@@ -174,6 +174,16 @@
         <div id="deadNote" class="si-note">Finds characters whose <b>Health</b> hitzone is &le; 0 (dead bodies) — directly, regardless of references. Living characters (Health &gt; 0) and records with no health data are never listed or touched. Server must be STOPPED to purge; everything moves to a recoverable trash folder.</div>
         <div id="deadErr" class="si-err"></div>
         <div id="deadList"></div>
+
+        <hr style="border:none;border-top:1px solid #ffffff18;margin:16px 0">
+        <div class="si-row" style="align-items:center;gap:8px">
+          <span class="si-note" style="margin:0">Prune accounts inactive for
+            <input id="inactDays" type="number" value="14" min="1" style="width:56px;background:#00000030;border:1px solid #ffffff2a;color:inherit;border-radius:6px;padding:3px 6px"> days:</span>
+          <button class="si-btn" id="inactScan">Scan inactive</button>
+          <button class="si-btn danger" id="inactPurge" disabled>Prune inactive characters</button>
+        </div>
+        <div id="inactNote" class="si-note">Removes the <b>character</b> record of any account whose last login is older than N days — their account &amp; stats stay, so a returning player just fresh-spawns a body. Accounts with no <code>lastLogin</code> are skipped. Everything moves to a recoverable trash folder. This directly shrinks the oversized <code>gamemode</code> save.</div>
+        <div id="inactErr" class="si-err"></div>
       </div>
     </div>
   </div>
@@ -238,6 +248,8 @@
       $('orphPurge').onclick = purgeAllOrphans;
       $('deadScan').onclick = scanDead;
       $('deadPurge').onclick = purgeDead;
+      $('inactScan').onclick = scanInactive;
+      $('inactPurge').onclick = purgeInactive;
       $('orphCat').onchange = () => { $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphNote').textContent='Pick a category and scan.'; };
       document.querySelectorAll('.si-tab').forEach(t => t.onclick = () => {
         document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active')); t.classList.add('active');
@@ -417,7 +429,19 @@
         }).join('')+`</div>`;
       } catch { $('statCats').innerHTML='<div class="si-err">Failed to load collection.</div>'; }
     }
-    function openRecord(id){ $('q').value=id; const t=document.querySelector('.si-tab[data-tab="search"]'); if(t) t.click(); doSearch(); }
+    async function openRecord(id){
+      // Fetch the record DIRECTLY by id (fast) instead of a freetext grep over the whole
+      // save (slow / times out on a big save), then show it with the JSON open.
+      const t=document.querySelector('.si-tab[data-tab="search"]'); if(t) t.click();
+      $('q').value=id; $('err').textContent=''; $('note').textContent='Loading record…'; $('results').innerHTML='';
+      try {
+        const rec = await (await fetch(`/api/shop/admin/save-record?server=${encodeURIComponent(curServer())}&id=${encodeURIComponent(id)}`)).json();
+        if(rec.error){ $('err').textContent=rec.error; $('note').textContent=''; return; }
+        if(!rec.found){ $('note').textContent=`Record ${id} not found on ${curServer().toUpperCase()}.`; return; }
+        $('note').textContent=`Record ${id}${rec.category?` — ${rec.category}`:''}`;
+        $('results').innerHTML = resultCard({ id, category:rec.category, world:rec.world, data:rec.data, role:'' }, true);
+      } catch { $('err').textContent='Load failed.'; $('note').textContent=''; }
+    }
     async function dropById(id, el){
       if(!confirm(`Drop record ${id}?\n\nIt moves to a recoverable trash folder.`)) return;
       try {
@@ -653,6 +677,35 @@
         $('deadList').innerHTML=''; deadCount=0; statsLoaded=false; updateDeadBtn();
       } catch { alert('Purge failed.'); updateDeadBtn(); }
       finally { $('deadPurge').textContent='Purge ALL dead'; }
+    }
+    let inactiveCount = 0;
+    async function scanInactive(){
+      const days = parseInt($('inactDays').value) || 14;
+      $('inactErr').textContent=''; inactiveCount=0; $('inactPurge').disabled=true; $('inactPurge').textContent='Prune inactive characters';
+      $('inactNote').textContent='Scanning player logins… (reads every Player record — a few seconds)'; $('inactScan').disabled=true;
+      try {
+        const r = await (await fetch(`/api/shop/admin/save-scan-inactive?server=${encodeURIComponent(curServer())}&days=${days}`)).json();
+        if(r.error){ $('inactErr').textContent=r.error; $('inactNote').textContent=''; return; }
+        inactiveCount = r.inactive;
+        $('inactNote').innerHTML = `<b>${r.inactive.toLocaleString()}</b> of ${r.players.toLocaleString()} accounts inactive ≥ ${r.days} days → ~<b>${r.mb} MB</b> of character records. ${r.skipped.toLocaleString()} skipped (no lastLogin). Account & stats are kept.`;
+        $('inactPurge').disabled = !inactiveCount;
+        $('inactPurge').textContent = inactiveCount ? `Prune ${inactiveCount.toLocaleString()} inactive characters` : 'Prune inactive characters';
+      } catch { $('inactErr').textContent='Scan failed.'; $('inactNote').textContent=''; }
+      finally { $('inactScan').disabled=false; }
+    }
+    async function purgeInactive(){
+      const days = parseInt($('inactDays').value) || 14;
+      if(!inactiveCount){ alert('Run a scan first.'); return; }
+      if(!confirm(`Prune ${inactiveCount.toLocaleString()} character records for accounts inactive ≥ ${days} days on ${curServer().toUpperCase()}?\n\nTheir account & stats are kept — they fresh-spawn a body on return. Everything moves to a recoverable trash folder.\n\nContinue?`)) return;
+      if(!confirm(`Final confirm: pruning ${inactiveCount.toLocaleString()} inactive characters on ${curServer().toUpperCase()}. Proceed?`)) return;
+      $('inactPurge').disabled=true; $('inactPurge').textContent='Pruning…';
+      try {
+        const r = await (await fetch('/api/shop/admin/save-purge-inactive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),days,force:forceWrite()})})).json();
+        if(r.error){ alert('Prune failed: '+r.error); $('inactPurge').textContent='Prune inactive characters'; return; }
+        $('inactNote').innerHTML = `<span class="si-ok">Pruned ${r.moved.toLocaleString()} inactive character records → trash. Start the server and verify.</span>`;
+        inactiveCount=0; statsLoaded=false;
+      } catch { alert('Prune failed.'); }
+      finally { $('inactPurge').textContent='Prune inactive characters'; }
     }
     async function bulkDropOrphans(){
       const ids=selectedOrphans(); if(!ids.length) return;

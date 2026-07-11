@@ -716,6 +716,62 @@ async function purgeLooseItems(serverId, category, force = false) {
   return { ok: true, moved, kept, trash };
 }
 
+// --- Inactive-character prune (accounts not seen in N days) ---
+// lastLogin is a "YYYY-MM-DD HH:MM:SS" string, which sorts chronologically, so we
+// compare it as a STRING against the cutoff (one `date` call, no per-record spawn).
+// A Player links to its character via .entity.playerEntity. Accounts with a blank
+// lastLogin are SKIPPED (never pruned). Only the Character record is moved; the
+// Player account/stats are kept, so a returning player just fresh-spawns a body.
+function inactiveCharsSnippet(days) {
+  return [
+    `CUT=$(date -d '${days} days ago' '+%Y-%m-%d %H:%M:%S')`,
+    `find "$G/Player" -maxdepth 1 -name '*.json' -print0 2>/dev/null | xargs -0 -r -n300 jq -rc '{c:(.entity.playerEntity//""),l:([.components[]?|objects|.lastLogin//empty]|first//"")}|[.c,.l]|@tsv' 2>/dev/null > "$T/pl"`,
+    `awk -F'\\t' -v cut="$CUT" '$2!="" && ($2"")<(cut"") && $1!="" {print $1}' "$T/pl" | sort -u > "$T/chars"`,
+  ].join('; ');
+}
+
+async function scanInactiveCharacters(serverId, days = 14) {
+  const d = Math.min(Math.max(parseInt(days, 10) || 14, 1), 3650);
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    `SB='${ctx.saveBase}'; G=$(ls -d "$SB"/*/gamemode 2>/dev/null | head -1); [ -d "$G" ] || { echo "PLAYERS:0"; exit 0; }`,
+    `T=$(mktemp -d)`,
+    inactiveCharsSnippet(d),
+    `echo "PLAYERS:$(wc -l < "$T/pl")"`,
+    `echo "SKIP:$(awk -F'\\t' '$2==""{c++} END{print c+0}' "$T/pl")"`,
+    `echo "INACTIVE:$(wc -l < "$T/chars")"`,
+    `B=$(while IFS= read -r c; do f="$G/Character/$c.json"; [ -f "$f" ] && stat -c %s "$f"; done < "$T/chars" | awk '{s+=$1} END{print s+0}'); echo "MB:$((B/1024/1024))"`,
+    `rm -rf "$T"`,
+  ].join('; ');
+  const out = await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT);
+  return {
+    days: d,
+    players: parseInt((out.match(/PLAYERS:(\d+)/) || [])[1], 10) || 0,
+    inactive: parseInt((out.match(/INACTIVE:(\d+)/) || [])[1], 10) || 0,
+    skipped: parseInt((out.match(/SKIP:(\d+)/) || [])[1], 10) || 0,
+    mb: parseInt((out.match(/MB:(\d+)/) || [])[1], 10) || 0,
+  };
+}
+
+async function purgeInactiveCharacters(serverId, days = 14, force = false) {
+  const d = Math.min(Math.max(parseInt(days, 10) || 14, 1), 3650);
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
+    `SB='${ctx.saveBase}'; G=$(ls -d "$SB"/*/gamemode 2>/dev/null | head -1); [ -d "$G" ] || { echo "MOVED:0"; exit 0; }`,
+    `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/inactive-${d}d-$TS"; mkdir -p "$TRASH"`,
+    inactiveCharsSnippet(d),
+    `moved=0; while IFS= read -r c; do [ -n "$c" ] && mv "$G/Character/$c".json "$TRASH/" 2>/dev/null && moved=$((moved+1)); done < "$T/chars"`,
+    `echo "MOVED:$moved"; echo "TRASH:$TRASH"`,
+    `rm -rf "$T"`,
+  ].filter(Boolean).join('; ');
+  const out = (await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT)).trim();
+  if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
+  const moved = parseInt((out.match(/MOVED:(\d+)/) || [])[1], 10) || 0;
+  const trash = (out.match(/TRASH:(\S+)/) || [])[1] || '';
+  return { ok: true, moved, days: d, trash };
+}
+
 // A character's damage component stores per-hitzone health; the "Health" hitzone
 // is the global one. <= 0 == dead body. This filter returns that value (or null
 // if the record has no such hitzone). We treat ONLY a positively-found value <= 0
@@ -879,4 +935,4 @@ async function getExtraStats(serverId) {
   return { flags, baseBuilding: bb, baseParts: Math.max(0, bb - flags) };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems };
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanInactiveCharacters, purgeInactiveCharacters };

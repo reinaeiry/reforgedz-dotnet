@@ -5,7 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanInactiveCharacters, purgeInactiveCharacters } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -1602,6 +1602,31 @@ router.post('/api/shop/admin/save-purge-loose', requireAdmin, async (req, res) =
   } catch (e) {
     console.error('[save-purge-loose]', e.message);
     res.status(500).json({ error: e.message || 'Purge failed' });
+  }
+});
+
+// Inactive-character prune: count / remove Character records for accounts not seen in N days.
+router.get('/api/shop/admin/save-scan-inactive', requireAdmin, async (req, res) => {
+  const { server, days } = req.query;
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    res.json(await scanInactiveCharacters(server, days || 14));
+  } catch (e) {
+    console.error('[save-scan-inactive]', e.message);
+    res.status(500).json({ error: e.message || 'Scan failed' });
+  }
+});
+
+router.post('/api/shop/admin/save-purge-inactive', requireAdmin, async (req, res) => {
+  const { server, days, force } = req.body || {};
+  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  try {
+    const r = await purgeInactiveCharacters(server, days || 14, force === true);
+    if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
+    res.json(r);
+  } catch (e) {
+    console.error('[save-purge-inactive]', e.message);
+    res.status(500).json({ error: e.message || 'Prune failed' });
   }
 });
 
