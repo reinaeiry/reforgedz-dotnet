@@ -347,6 +347,7 @@
     // ---- Stats ----
     async function loadStats(force){
       $('statErr').textContent=''; if (!force && statsLoaded) return;
+      $('statCats').style.display=''; // restore the cards grid (openCollection sets it to block)
       $('statBar').innerHTML='<div class="si-note">Loading stats…</div>'; $('statCats').innerHTML='';
       try {
         const data = await (await fetch(`/api/shop/admin/save-categories?server=${encodeURIComponent(curServer())}`)).json();
@@ -379,6 +380,7 @@
     function storeLabel(s){ if(!s) return '—'; return STORE_LABELS[s] || s; }
     async function openCollection(cat){
       $('statErr').textContent='';
+      $('statCats').style.display='block'; // full-width for the record table (the cards grid would squash it)
       $('statBar').innerHTML=`<div class="si-row"><button class="si-btn ghost" onclick="loadStats(true)">← Collections</button><span class="si-note" style="margin:0">Browsing <b>${esc(cat)}</b></span></div>`;
       $('statCats').innerHTML='<div class="si-note">Loading '+esc(cat)+'…</div>';
       try {
