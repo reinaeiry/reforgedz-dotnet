@@ -5,7 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanInactiveCharacters, purgeInactiveCharacters } = require('../sync');
+const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
 const discord = require('../discord');
 
@@ -1627,6 +1627,34 @@ router.post('/api/shop/admin/save-purge-inactive', requireAdmin, async (req, res
   } catch (e) {
     console.error('[save-purge-inactive]', e.message);
     res.status(500).json({ error: e.message || 'Prune failed' });
+  }
+});
+
+// Copy the full save DB from one server to another (destination must be stopped;
+// its old .save is kept as .save.pre-copy.<ts> on the box). Runs detached — the
+// UI polls the status route below with the returned jobId.
+router.post('/api/shop/admin/save-copy-db', requireAdmin, async (req, res) => {
+  const { from, to, confirm } = req.body || {};
+  if (!isValidServerId(from) || !isValidServerId(to)) return res.status(400).json({ error: 'Pick valid servers.' });
+  if (from === to) return res.status(400).json({ error: 'Source and destination must differ.' });
+  if (confirm !== to) return res.status(400).json({ error: 'Confirmation mismatch — type the destination server id.' });
+  try {
+    res.json(await startSaveDbCopy(from, to));
+  } catch (e) {
+    if (e.code === 'destination_running') return res.status(409).json({ error: 'Destination server is RUNNING — stop it in the panel first.' });
+    console.error('[save-copy-db]', e.message);
+    res.status(500).json({ error: e.message || 'Copy failed to start' });
+  }
+});
+
+router.get('/api/shop/admin/save-copy-db-status', requireAdmin, async (req, res) => {
+  const job = String(req.query.job || '');
+  if (!/^[a-z0-9]{6,40}$/.test(job)) return res.status(400).json({ error: 'Bad job id.' });
+  try {
+    res.json(await getSaveDbCopyStatus(job));
+  } catch (e) {
+    console.error('[save-copy-db-status]', e.message);
+    res.status(500).json({ error: e.message || 'Status check failed' });
   }
 });
 

@@ -935,4 +935,125 @@ async function getExtraStats(serverId) {
   return { flags, baseBuilding: bb, baseParts: Math.max(0, bb - flags) };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanInactiveCharacters, purgeInactiveCharacters };
+// ---- Full DB copy between servers ----
+// Copies the whole persistence save (<volume>/profile/profile/.save — world DB +
+// savepoints) from one server to another. The destination must be STOPPED (checked
+// with the same two-tier probe destructive ops use); its current .save is kept as
+// .save.pre-copy.<ts>. The source may stay live: rsync runs twice, the second
+// --delete pass picks up whatever changed during the first.
+// A ~300MB copy takes minutes, so the job runs DETACHED (nohup) on the entry host
+// (or on the shared remote host when both servers live there) and the HTTP layer
+// polls a marker file. Job registry is in-memory: a website restart mid-copy only
+// loses the status view, never the copy itself.
+const dbCopyJobs = new Map(); // jobId -> { via: 'entry'|serverId, marker, log, from, to, startedAt }
+
+async function startSaveDbCopy(fromId, toId) {
+  if (fromId === toId) throw new Error('Source and destination must be different servers');
+  const from = await saveOpContext(fromId);
+  const to = await saveOpContext(toId);
+
+  if (await getServerRunning(toId)) {
+    const e = new Error('destination_running');
+    e.code = 'destination_running';
+    throw e;
+  }
+
+  const onEntry = s => s.region === 'eu';
+  const fromRoot = from.saveBase.replace(/\/game$/, '');   // .../profile/profile/.save
+  const toRoot = to.saveBase.replace(/\/game$/, '');
+  const toProfile = toRoot.replace(/\/\.save$/, '');       // .../profile/profile
+
+  // Topology: the job always runs where it can reach both sides with existing keys.
+  // The entry host holds the hop key to the remote nodes, so any pair involving the
+  // entry host runs there; a pair sharing one remote host runs nested on that host.
+  let via = 'entry';
+  let srcSpec = `${fromRoot}/`;
+  let dstSpec = `${toRoot}/`;
+  let rsyncE = '';
+  let dexec = '';
+  if (onEntry(from.server) && onEntry(to.server)) {
+    // both local to the entry host - plain local rsync
+  } else if (onEntry(from.server)) {
+    dstSpec = `${to.server.user}@${to.server.host}:${toRoot}/`;
+    rsyncE = `-e "ssh -o StrictHostKeyChecking=no -p ${to.server.port}"`;
+    dexec = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${to.server.port} ${to.server.user}@${to.server.host}`;
+  } else if (onEntry(to.server)) {
+    srcSpec = `${from.server.user}@${from.server.host}:${fromRoot}/`;
+    rsyncE = `-e "ssh -o StrictHostKeyChecking=no -p ${from.server.port}"`;
+  } else if (from.server.host === to.server.host && from.server.region === to.server.region) {
+    via = toId; // shared remote box - run the whole job there with local paths
+  } else {
+    throw new Error(`Copy from ${fromId} to ${toId} is not supported (servers on different remote hosts)`);
+  }
+
+  const jobId = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e8).toString(36)}`;
+  const log = `/tmp/rz-dbcopy-${jobId}.log`;
+  const marker = `/tmp/rz-dbcopy-${jobId}.done`;
+
+  // dex() runs a command on the destination box (via ssh when the job host isn't it).
+  // Volume paths are pterodactyl-generated ([a-z0-9-/.]) so plain interpolation is safe.
+  const script = [
+    `#!/bin/bash`,
+    `exec > ${log} 2>&1`,
+    `echo "DB copy ${fromId} -> ${toId} started $(date '+%F %T')"`,
+    `DEXEC='${dexec}'`,
+    `dex() { if [ -n "$DEXEC" ]; then $DEXEC "$1"; else bash -c "$1"; fi; }`,
+    `TS=$(date +%s)`,
+    `OWN=$(dex "stat -c %u:%g ${toProfile}")`,
+    `echo "destination owner: $OWN - backing up current .save as .save.pre-copy.$TS"`,
+    `dex "cd ${toProfile} && { [ -d .save ] && mv .save .save.pre-copy.$TS; mkdir -p .save; }"`,
+    `echo "rsync pass 1 (bulk)..."`,
+    `rsync -a ${rsyncE} ${srcSpec} ${dstSpec}`,
+    `R1=$?`,
+    `echo "rsync pass 2 (delta + delete)..."`,
+    `rsync -a --delete ${rsyncE} ${srcSpec} ${dstSpec}`,
+    `R2=$?`,
+    `echo "rsync pass1=$R1 pass2=$R2"`,
+    `dex "chown -R $OWN ${toProfile}/.save"`,
+    `SIZE=$(dex "du -sm ${toProfile}/.save | cut -f1")`,
+    `BB=$(dex "find ${toProfile}/.save -path '*gamemode/BaseBuilding*' -name '*.json' 2>/dev/null | wc -l")`,
+    `if [ "$R2" = "0" ]; then echo "DONE size=\${SIZE}MB basebuilding=\${BB} backup=.save.pre-copy.\${TS}" > ${marker}; else echo "FAIL rsync exit \${R2} - old destination save preserved at .save.pre-copy.\${TS}" > ${marker}; fi`,
+    `echo "finished $(date '+%F %T')"`,
+  ].join('\n');
+
+  const scriptB64 = Buffer.from(script, 'utf8').toString('base64');
+  const installer = `echo ${scriptB64} | base64 -d > /tmp/rz-dbcopy-${jobId}.sh; chmod +x /tmp/rz-dbcopy-${jobId}.sh; nohup /tmp/rz-dbcopy-${jobId}.sh >/dev/null 2>&1 & sleep 1; echo LAUNCHED`;
+  const cmd = via === 'entry' ? installer : wrapForRegion(to.server, installer);
+
+  const conn = await sshOpen(from.privateKey, from.entryHost.host, from.entryHost.port, from.entryHost.user);
+  let out;
+  try { out = await sshRun(conn, cmd, 30000); } finally { conn.end(); }
+  if (!/LAUNCHED/.test(String(out))) throw new Error('Copy job failed to launch');
+
+  dbCopyJobs.set(jobId, { via, marker, log, from: fromId, to: toId, startedAt: Date.now() });
+  return { jobId, from: fromId, to: toId };
+}
+
+async function getSaveDbCopyStatus(jobId) {
+  const job = dbCopyJobs.get(String(jobId));
+  if (!job) return { found: false, error: 'Unknown job (website restarted mid-copy?). The copy itself keeps running - check the destination .save on the box.' };
+
+  const probe = `if [ -f ${job.marker} ]; then echo "MARK:$(cat ${job.marker})"; fi; echo "LOGTAIL:"; tail -n 6 ${job.log} 2>/dev/null`;
+  const servers = listServers();
+  const entryHost = servers.find(s => s.region === 'eu') || servers[0];
+  const privateKey = getPrivateKey();
+  if (!privateKey) throw new Error('SSH key not configured');
+  let cmd = probe;
+  if (job.via !== 'entry') {
+    const viaServer = servers.find(s => s.id === job.via);
+    if (!viaServer) throw new Error('Job host no longer configured');
+    cmd = wrapForRegion(viaServer, probe);
+  }
+  const conn = await sshOpen(privateKey, entryHost.host, entryHost.port, entryHost.user);
+  let out;
+  try { out = await sshRun(conn, cmd, 20000); } finally { conn.end(); }
+
+  const text = String(out);
+  const mark = (text.match(/^MARK:(.*)$/m) || [])[1] || null;
+  const logTail = (text.split(/^LOGTAIL:\s*$/m)[1] || '').trim();
+  let ok = null;
+  if (mark) ok = mark.startsWith('DONE');
+  return { found: true, done: !!mark, ok, message: mark, logTail, from: job.from, to: job.to, startedAt: job.startedAt };
+}
+
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };

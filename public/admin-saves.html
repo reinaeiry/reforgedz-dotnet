@@ -131,6 +131,7 @@
         <div class="si-tab" data-tab="stats">Collections</div>
         <div class="si-tab" data-tab="orphans">Orphan items</div>
         <div class="si-tab" data-tab="dead">Dead chars</div>
+        <div class="si-tab" data-tab="copy">Copy DB</div>
       </div>
 
       <div id="tab-search">
@@ -185,6 +186,19 @@
         <div id="inactNote" class="si-note">Removes the <b>character</b> record of any account whose last login is older than N days — their account &amp; stats stay, so a returning player just fresh-spawns a body. Accounts with no <code>lastLogin</code> are skipped. Everything moves to a recoverable trash folder. This directly shrinks the oversized <code>gamemode</code> save.</div>
         <div id="inactErr" class="si-err"></div>
       </div>
+
+      <div id="tab-copy" style="display:none">
+        <div class="si-row" style="align-items:center;gap:8px">
+          <span class="si-note" style="margin:0">Copy DB from</span>
+          <select id="copyFrom"></select>
+          <span class="si-note" style="margin:0">to</span>
+          <select id="copyTo"></select>
+          <button class="si-btn danger" id="copyStart">Copy DB</button>
+        </div>
+        <div class="si-note">Copies the <b>full persistence save</b> (world DB + savepoints) from source to destination. The <b>destination must be STOPPED</b> — its current save is kept on the box as <code>.save.pre-copy.&lt;time&gt;</code>, so this is recoverable. The source can stay live (the copy runs a second delta pass to catch changes). A ~300 MB copy takes a few minutes; progress shows below and keeps running even if you close this page.</div>
+        <div id="copyErr" class="si-err"></div>
+        <pre id="copyStatus" style="display:none;background:#101014;border:1px solid var(--si-line);border-radius:9px;padding:12px;font-size:.78rem;white-space:pre-wrap;color:#b9b9c2"></pre>
+      </div>
     </div>
   </div>
 
@@ -223,13 +237,55 @@
       } catch { setBanner('unknown','Could not check status.'); }
     }
 
+    // ---- Copy DB between servers ----
+    let copyJobId = null, copyTimer = null;
+    async function startDbCopy(){
+      const from = $('copyFrom').value, to = $('copyTo').value;
+      $('copyErr').textContent='';
+      if (from === to){ $('copyErr').textContent='Source and destination must differ.'; return; }
+      const typed = prompt(`This OVERWRITES the "${to}" database with a copy of "${from}".\n\n• ${to} must be STOPPED (its old save is kept on the box)\n• ${from} can stay live\n\nType ${to} to confirm:`);
+      if (typed !== to) return;
+      $('copyStart').disabled = true;
+      $('copyStatus').style.display='block';
+      $('copyStatus').textContent = `Starting copy ${from} → ${to}…`;
+      try {
+        const r = await (await fetch('/api/shop/admin/save-copy-db', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ from, to, confirm: to })
+        })).json();
+        if (r.error){ $('copyErr').textContent = r.error; $('copyStatus').style.display='none'; $('copyStart').disabled=false; return; }
+        copyJobId = r.jobId;
+        $('copyStatus').textContent = `Copy ${from} → ${to} running (job ${r.jobId})…`;
+        copyTimer = setInterval(pollDbCopy, 5000);
+      } catch { $('copyErr').textContent='Failed to start the copy.'; $('copyStatus').style.display='none'; $('copyStart').disabled=false; }
+    }
+    async function pollDbCopy(){
+      if (!copyJobId) return;
+      try {
+        const r = await (await fetch(`/api/shop/admin/save-copy-db-status?job=${encodeURIComponent(copyJobId)}`)).json();
+        if (r.error && !r.found){ clearInterval(copyTimer); copyTimer=null; $('copyStart').disabled=false; $('copyStatus').textContent += `\n${r.error}`; return; }
+        let text = `Copy ${r.from} → ${r.to}\n\n${r.logTail || '(working…)'}`;
+        if (r.done){
+          clearInterval(copyTimer); copyTimer=null; $('copyStart').disabled=false;
+          if (r.ok) text += `\n\n✔ ${r.message}\nCopy complete — start the destination server when ready.`;
+          else text += `\n\n✖ ${r.message}\nCopy FAILED — the destination's old save is preserved on the box.`;
+        }
+        $('copyStatus').textContent = text;
+      } catch {}
+    }
+
     async function init(){
       let user=null; try { user = await (await fetch('/api/auth/me')).json(); } catch {}
       if (!user || user.role !== 'admin'){ $('denied').style.display='block'; return; }
       $('content').style.display='block';
       try {
         const servers = await (await fetch('/api/shop/admin/save-servers')).json();
-        $('server').innerHTML = servers.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
+        const opts = servers.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
+        $('server').innerHTML = opts;
+        $('copyFrom').innerHTML = opts;
+        $('copyTo').innerHTML = opts;
+        // sensible defaults: live EU1 -> the DEV box
+        if (servers.some(s=>s.id==='dev1')) $('copyTo').value = 'dev1';
       } catch { $('err').textContent='Could not load servers.'; }
 
       $('server').onchange = () => { statsLoaded=false; playersLoaded=false; refreshStatus(); loadTopBar(); $('results').innerHTML=''; $('statBar').innerHTML=''; $('statCats').innerHTML=''; $('orphList').innerHTML=''; $('note').textContent=''; };
@@ -250,10 +306,11 @@
       $('deadPurge').onclick = purgeDead;
       $('inactScan').onclick = scanInactive;
       $('inactPurge').onclick = purgeInactive;
+      $('copyStart').onclick = startDbCopy;
       $('orphCat').onchange = () => { $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphNote').textContent='Pick a category and scan.'; };
       document.querySelectorAll('.si-tab').forEach(t => t.onclick = () => {
         document.querySelectorAll('.si-tab').forEach(x=>x.classList.remove('active')); t.classList.add('active');
-        ['search','stats','orphans','dead'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
+        ['search','stats','orphans','dead','copy'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab ? 'block' : 'none');
         if (t.dataset.tab==='stats' && !statsLoaded) loadStats();
       });
       refreshStatus();
