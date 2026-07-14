@@ -200,3 +200,26 @@ const pathTab = window.location.pathname.replace(/^\/+|\/+$/g, '');
 if (pathTab && document.getElementById('tab-' + pathTab)) {
   switchTab(pathTab);
 }
+
+// ---- Deep links to a section INSIDE the home tab (e.g. /#nattiiguard, via /nattiiguard) ----
+// The tab router owns scrolling, so a hash that isn't a tab needs its own handling. Without
+// this, the browser's native anchor jump races the reveal animations and image loading, and
+// the viewport ends up stranded partway down the hero with the nav shoved off the top.
+(function () {
+  function scrollToHashSection() {
+    const raw = (location.hash || '').replace(/^#/, '');
+    if (!raw) return;
+    const el = document.getElementById(raw);
+    if (!el || el.classList.contains('tab-content')) return;   // tabs are the router's business
+    switchTab('home');
+    // reveal immediately -- arriving at a section that then fades in around you feels broken
+    el.querySelectorAll('.reveal').forEach(r => r.classList.add('visible'));
+    // 'instant', explicitly: the page sets scroll-behavior:smooth globally, and 'auto' defers
+    // to it -- turning a deep link into a multi-second lurch from the hero to the section.
+    requestAnimationFrame(() => el.scrollIntoView({ behavior: 'instant', block: 'start' }));
+  }
+  // once now, again when images have sized the page (layout shifts in between)
+  scrollToHashSection();
+  window.addEventListener('load', scrollToHashSection);
+  window.addEventListener('hashchange', scrollToHashSection);
+})();

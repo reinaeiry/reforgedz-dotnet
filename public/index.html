@@ -151,32 +151,53 @@
     <section class="section bg-black" id="nattiiguard">
       <div class="container">
         <div class="section-header reveal">
-          <h2>NattiiGuard</h2>
-          <p>Game crashing? Find out why. A free crash doctor for your PC, built by us for our players.</p>
-        </div>
-        <div class="features-grid">
-          <div class="feature reveal">
-            <h3>Reads the crash</h3>
-            <p>Every time something crashes, Windows quietly saves a crash dump that almost nobody can read. NattiiGuard reads it, works out which component actually failed, and tells you in plain English.</p>
-          </div>
-          <div class="feature reveal">
-            <h3>Tells you what to do</h3>
-            <p>A numbered plan, cheapest and safest first. It runs the safe repairs itself, and never uninstalls anything or touches your BIOS, drivers or overclock on its own.</p>
-          </div>
-          <div class="feature reveal">
-            <h3>Watches while you play</h3>
-            <p>Frame rate with 1% lows, CPU, GPU, temperature, VRAM and memory &mdash; live, for a fraction of one CPU core. Nothing is injected into the game, so anti-cheat has nothing to object to.</p>
-          </div>
+          <h2>Game keeps crashing?</h2>
+          <p>NattiiGuard is our free crash doctor for Windows. It reads the crash dumps your PC already saves and tells you, in plain English, what actually failed &mdash; then how to fix it.</p>
         </div>
 
-        <div class="ng-get reveal">
-          <a href="/downloads/NattiiGuard-Setup-3.0.0.exe" class="btn-filled" download>Download for Windows</a>
-          <p class="ng-meta">Windows 10 &amp; 11 &middot; 2.4&nbsp;MB &middot; free &middot; no account needed</p>
-          <p class="ng-note">
-            Windows will show an <strong>&ldquo;unknown publisher&rdquo;</strong> warning the first time you run it.
-            That's our signing certificate, not the program &mdash; click <em>More info</em> then <em>Run anyway</em>.
-            We're sorting out a certificate to make that go away.
-          </p>
+        <div class="ng-panel reveal">
+          <!-- A real NattiiGuard verdict, as the app renders it. Show, don't tell. -->
+          <div class="ng-report" aria-hidden="true">
+            <div class="ng-report-bar">
+              <span class="ng-report-brand">NATTII<span class="ng-red">GUARD</span></span>
+              <span class="ng-report-tag">CRASH REPORT</span>
+            </div>
+            <div class="ng-report-body">
+              <div class="ng-verdict">This looks like unstable memory &mdash; not the game's fault.</div>
+              <div class="ng-confidence">CONFIDENCE: STRONG &middot; 9 PIECES OF EVIDENCE</div>
+              <div class="ng-plan-label">What to do &mdash; in this order</div>
+              <ol class="ng-plan">
+                <li><span class="ng-step-n">1</span> Test your RAM overnight <span class="ng-step-meta">60 min &middot; free</span></li>
+                <li><span class="ng-step-n">2</span> Turn off XMP and play a session <span class="ng-step-meta">5 min &middot; reversible</span></li>
+                <li><span class="ng-step-n">3</span> Repair Windows' own files <span class="ng-step-meta">we can do this for you</span></li>
+              </ol>
+            </div>
+          </div>
+
+          <div class="ng-pitch">
+            <dl class="ng-rows">
+              <div class="ng-row">
+                <dt>Reads the wreck</dt>
+                <dd>Every crash leaves a dump file almost nobody can read. NattiiGuard reads it and names the component that failed.</dd>
+              </div>
+              <div class="ng-row">
+                <dt>Plans the fix</dt>
+                <dd>A numbered plan, safest first. The safe repairs it runs itself &mdash; it never touches your BIOS, drivers or overclock.</dd>
+              </div>
+              <div class="ng-row">
+                <dt>Watches your frames</dt>
+                <dd>Live FPS with 1% lows, CPU, GPU and VRAM. Nothing is injected into the game, so anti-cheat has nothing to object to.</dd>
+              </div>
+            </dl>
+
+            <a href="/downloads/NattiiGuard-Setup-3.0.0.exe" class="btn-filled ng-dl" download>Download for Windows</a>
+            <p class="ng-meta">Windows 10 &amp; 11 &middot; 2.4&nbsp;MB &middot; free &middot; nothing leaves your PC unless you press send</p>
+            <p class="ng-note">
+              Heads up: Windows shows an <strong>&ldquo;unknown publisher&rdquo;</strong> warning for now &mdash;
+              click <em>More info</em>, then <em>Run anyway</em>. Our publisher verification with Microsoft
+              is underway; once it clears, the warning goes away for good.
+            </p>
+          </div>
         </div>
       </div>
     </section>
