@@ -685,28 +685,41 @@ async function purgeOrphans(serverId, category, force = false) {
   return { ok: true, moved, trash, protectedCount };
 }
 
+// Fast counts for the loose-item sweep: how many records the category holds, how
+// many are protected placed structures (workbench/salvage store), and how many the
+// sweep would delete. Read-only — safe while the server is running.
+async function scanLooseItems(serverId, category) {
+  const cat = safeCategory(category);
+  const ctx = await saveOpContext(serverId);
+  const inner = [
+    `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "ALL:0"; echo "PROT:0"; exit 0; }`,
+    `echo "ALL:$(find "$SB"/*/gamemode/${cat} -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)"`,
+    `echo "PROT:$(find "$SB"/*/gamemode/${cat} -maxdepth 1 -name '*.json' -print0 2>/dev/null | xargs -0 -r grep -lE '"m_rStoreName":[[:space:]]*"(${PROTECTED_STORES_GREP})"' 2>/dev/null | wc -l)"`,
+  ].join('; ');
+  const out = await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT);
+  const total = parseInt((out.match(/ALL:(\d+)/) || [])[1], 10) || 0;
+  const protectedCount = parseInt((out.match(/PROT:(\d+)/) || [])[1], 10) || 0;
+  return { category: cat, total, protectedCount, prunable: Math.max(0, total - protectedCount) };
+}
+
 // Move EVERY record in a category to the recoverable trash EXCEPT those in a
 // PROTECTED_STORES store. For Item this clears loose world loot AND stray duplicate
-// files. Verified safe: real stored loot (player inventories, base/vehicle storage)
-// is saved NESTED inside the Character/BaseBuilding/Storage record — it is never a
-// separate file in this folder, so it is not touched. Server should be stopped;
-// everything moves to a recoverable trash folder. Matches only filenames, so a
-// malformed record can't hide from the sweep.
+// files. Verified safe (checked against a live DB copy): real stored loot (player
+// inventories, base/vehicle storage) is embedded IN FULL inside its parent
+// Character/BaseBuilding/Vehicle record — the standalone file in this folder is a
+// duplicate copy, so the stored item respawns from the parent either way. Server
+// should be stopped; everything moves to a recoverable trash folder. grep -L keys
+// the sweep on file CONTENT, so a malformed record is swept, never kept by mistake.
 async function purgeLooseItems(serverId, category, force = false) {
   const cat = safeCategory(category);
   const ctx = await saveOpContext(serverId);
   const inner = [
     force ? '' : RUNNING_GUARD(ctx.uuid, ctx.saveBase),
     `SB='${ctx.saveBase}'; [ -d "$SB" ] || { echo "MOVED:0"; exit 0; }`,
-    `T=$(mktemp -d); TS=$(date +%s); TRASH="${ctx.trashBase}/loose-${cat}-$TS"; mkdir -p "$TRASH"`,
-    // filenames of protected (placed-structure) records — never moved
-    `find "$SB"/*/gamemode/${cat} -maxdepth 1 -name '*.json' -print0 2>/dev/null | xargs -0 -r grep -lE '"m_rStoreName":[[:space:]]*"(${PROTECTED_STORES_GREP})"' 2>/dev/null | sed 's#.*/##' | sort -u > "$T/prot"`,
-    // all filenames in the category
-    `find "$SB"/*/gamemode/${cat} -maxdepth 1 -name '*.json' -printf '%f\\n' 2>/dev/null | sort -u > "$T/all"`,
-    // move everything that is not protected
-    `comm -23 "$T/all" "$T/prot" | while IFS= read -r fn; do [ -n "$fn" ] && mv "$SB"/*/gamemode/${cat}/"$fn" "$TRASH/" 2>/dev/null; done`,
-    `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "KEPT:$(wc -l < "$T/prot")"; echo "TRASH:$TRASH"`,
-    `rm -rf "$T"`,
+    `TS=$(date +%s); TRASH="${ctx.trashBase}/loose-${cat}-$TS"; mkdir -p "$TRASH"`,
+    // grep -L = files NOT containing a protected store name — everything to sweep
+    `KEPT=0; for W in "$SB"/*/gamemode/${cat}; do [ -d "$W" ] || continue; find "$W" -maxdepth 1 -name '*.json' -print0 2>/dev/null | xargs -0 -r grep -LE '"m_rStoreName":[[:space:]]*"(${PROTECTED_STORES_GREP})"' 2>/dev/null | xargs -d '\\n' -r mv -t "$TRASH" 2>/dev/null; KEPT=$((KEPT + $(find "$W" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l))); done`,
+    `echo "MOVED:$(find "$TRASH" -name '*.json' 2>/dev/null | wc -l)"; echo "KEPT:$KEPT"; echo "TRASH:$TRASH"`,
   ].filter(Boolean).join('; ');
   const out = (await runOn(ctx, inner, SAVE_HEAVY_TIMEOUT)).trim();
   if (out.includes('RUNNING')) return { ok: false, error: 'server_running' };
@@ -1056,4 +1069,4 @@ async function getSaveDbCopyStatus(jobId) {
   return { found: true, done: !!mark, ok, message: mark, logTail, from: job.from, to: job.to, startedAt: job.startedAt };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };
+module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };

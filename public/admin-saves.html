@@ -156,13 +156,13 @@
 
       <div id="tab-orphans" style="display:none">
         <div class="si-row">
-          <select id="orphCat"><option value="Item">Item</option><option value="Character">Character (dead bodies)</option></select>
-          <button class="si-btn" id="scanBtn">Scan for orphans</button>
+          <select id="orphCat"><option value="Item">Items (loose loot)</option><option value="Character">Character (dead bodies)</option></select>
+          <button class="si-btn" id="scanBtn">Scan</button>
           <button class="si-btn ghost" id="orphSelectAll">Select all shown</button>
           <button class="si-btn danger" id="orphDelete" disabled>Drop selected</button>
-          <button class="si-btn danger" id="orphPurge" disabled>Purge ALL orphans</button>
+          <button class="si-btn danger" id="orphPurge" disabled>Purge</button>
         </div>
-        <div id="orphNote" class="si-note">Orphans = records referenced by nothing else. Items = loose world loot; Characters = dead/old bodies no player points to. Review before dropping.</div>
+        <div id="orphNote" class="si-note">Items = deletes EVERY Item record except placed workbenches / salvage stations 🛡 (stored loot lives inside its container's record and is untouched). Characters = dead/old bodies no player points to (reference scan).</div>
         <div id="orphErr" class="si-err"></div>
         <div id="orphList"></div>
       </div>
@@ -653,17 +653,32 @@
       } catch { box.innerHTML='<div class="si-err" style="padding:10px 14px">Lookup failed.</div>'; }
     }
 
-    // ---- Orphans ----
+    // ---- Item sweep + Character orphans ----
+    // Item uses the LOOSE sweep: delete everything except placed workbenches /
+    // salvage stations (protected stores). Character keeps the reference-based
+    // orphan scan (only unreferenced bodies are dropped).
     function selectedOrphans(){ return Array.from(document.querySelectorAll('.orph-cb:checked')).map(c=>c.dataset.id); }
     function updateOrphBtn(){
       const n=selectedOrphans().length;
       $('orphDelete').disabled=!canWrite()||!n; $('orphDelete').textContent=n?`Drop selected (${n})`:'Drop selected';
-      const p=$('orphPurge'); if(p){ p.disabled=!canWrite()|| !orphanCount; p.textContent=orphanCount?`Purge ALL orphans (${orphanCount.toLocaleString()})`:'Purge ALL orphans'; }
+      const item = $('orphCat').value==='Item';
+      const p=$('orphPurge'); if(p){ p.disabled=!canWrite()|| !orphanCount; p.textContent=orphanCount?(item?`Delete ${orphanCount.toLocaleString()} loose items`:`Purge ALL orphans (${orphanCount.toLocaleString()})`):'Purge'; }
     }
     let orphanCount = 0;
     async function doScan(){
       const cat = $('orphCat').value;
       $('orphErr').textContent=''; $('orphList').innerHTML=''; orphanCount = 0; updateOrphBtn();
+      if (cat === 'Item'){
+        $('orphNote').textContent='Counting Item records…';
+        try {
+          const data = await (await fetch(`/api/shop/admin/save-scan-loose?server=${encodeURIComponent(curServer())}&category=Item`)).json();
+          if (data.error){ $('orphErr').textContent=data.error; $('orphNote').textContent=''; return; }
+          orphanCount = data.prunable;
+          $('orphNote').innerHTML = `<b>${data.prunable.toLocaleString()}</b> of ${data.total.toLocaleString()} Item records will be DELETED — only <b>${data.protectedCount.toLocaleString()}</b> placed workbench / salvage station${data.protectedCount===1?'':'s'} 🛡 are kept. Stored loot (inventories, base &amp; vehicle storage) lives inside its container's record and is NOT touched. Everything moves to a recoverable trash folder.`;
+          updateOrphBtn();
+        } catch { $('orphErr').textContent='Scan failed.'; $('orphNote').textContent=''; }
+        return;
+      }
       $('orphNote').textContent=`Scanning ${cat}… (greps every save file once — a few seconds)`;
       try {
         const data = await (await fetch(`/api/shop/admin/save-orphans?server=${encodeURIComponent(curServer())}&category=${encodeURIComponent(cat)}`)).json();
@@ -687,15 +702,26 @@
       const cat = $('orphCat').value;
       if (!canWrite()){ alert('Stop the server first.'); return; }
       if (!orphanCount){ alert('Run a scan first.'); return; }
+      if (cat === 'Item'){
+        if (!confirm(`Delete ${orphanCount.toLocaleString()} loose Item records on ${curServer().toUpperCase()}?\n\nONLY placed workbenches / salvage stations are kept. Stored loot (inventories, base & vehicle storage) is saved inside its container's record and is not touched. Everything moves to a recoverable trash folder.\n\nStop the server first. Continue?`)) return;
+        $('orphPurge').disabled=true; $('orphPurge').textContent='Deleting…';
+        try {
+          const r = await (await fetch('/api/shop/admin/save-purge-loose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),category:'Item',force:forceWrite()})})).json();
+          if (r.error){ alert('Purge failed: '+r.error); updateOrphBtn(); $('orphPurge').textContent='Purge'; return; }
+          $('orphNote').innerHTML=`<span class="si-ok">Deleted ${r.moved.toLocaleString()} loose Item records → trash. Kept ${r.kept} placed structure${r.kept===1?'':'s'} 🛡. Start the server and verify a base or two.</span>`;
+          orphanCount=0; updateOrphBtn(); $('orphPurge').textContent='Purge';
+        } catch { alert('Purge failed.'); updateOrphBtn(); $('orphPurge').textContent='Purge'; }
+        return;
+      }
       if (!confirm(`⚠️ LAST RESORT — PURGE ALL ${orphanCount.toLocaleString()} orphaned ${cat} records?\n\nThis drops every orphan of this type (server must be stopped). They move to a recoverable trash folder. Test on ONE server and start it back up to confirm it's healthy before doing the rest.\n\nContinue?`)) return;
       if (!confirm(`Final confirm: purging ${orphanCount.toLocaleString()} ${cat} records on ${curServer().toUpperCase()}. Proceed?`)) return;
       $('orphPurge').disabled=true; $('orphPurge').textContent='Purging…';
       try {
         const r = await (await fetch('/api/shop/admin/save-purge-orphans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:curServer(),category:cat,force:forceWrite()})})).json();
-        if (r.error){ alert('Purge failed: '+r.error); updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans'; return; }
+        if (r.error){ alert('Purge failed: '+r.error); updateOrphBtn(); $('orphPurge').textContent='Purge'; return; }
         $('orphNote').innerHTML=`<span class="si-ok">Purged ${r.moved.toLocaleString()} orphaned ${cat} records → trash.${r.protectedCount?` ${r.protectedCount.toLocaleString()} placed structures protected 🛡.`:''} Start the server and verify it's healthy.</span>`;
-        $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans';
-      } catch { alert('Purge failed.'); updateOrphBtn(); $('orphPurge').textContent='Purge ALL orphans'; }
+        $('orphList').innerHTML=''; orphanCount=0; updateOrphBtn(); $('orphPurge').textContent='Purge';
+      } catch { alert('Purge failed.'); updateOrphBtn(); $('orphPurge').textContent='Purge'; }
     }
     // ---- Dead characters (Health hitzone <= 0; ignores references) ----
     function updateDeadBtn(){
