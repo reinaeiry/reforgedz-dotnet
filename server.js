@@ -140,6 +140,26 @@ app.use((req, res, next) => {
   next();
 });
 
+// ---- NattiiGuard download counter ----
+// Counts only -- no IPs, no user agents, nothing personal. Same file pattern as
+// radio-stats.json. Registered BEFORE express.static, which would otherwise serve
+// /downloads/* first and the count would never happen.
+const ngStatsFile = path.join(__dirname, 'nattiiguard-stats.json');
+let ngStats = { total: 0, byDay: {} };
+try { ngStats = JSON.parse(fs.readFileSync(ngStatsFile, 'utf8')); } catch {}
+
+function countNattiiGuardDownload() {
+  const day = new Date().toISOString().slice(0, 10);
+  ngStats.total += 1;
+  ngStats.byDay[day] = (ngStats.byDay[day] || 0) + 1;
+  fs.writeFile(ngStatsFile, JSON.stringify(ngStats, null, 2), () => {});
+}
+
+app.use('/downloads', (req, res, next) => {
+  if (req.method === 'GET' && /NattiiGuard-Setup.*\.exe$/i.test(req.path)) countNattiiGuardDownload();
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/radio', express.static(path.join(__dirname, 'radio')));
 
@@ -638,7 +658,14 @@ app.get('/nattiiguard', (req, res) => {
 });
 
 app.get('/nattiiguard/download', (req, res) => {
+  countNattiiGuardDownload();   // this path bypasses the /downloads middleware
   res.download(path.join(__dirname, 'public', 'downloads', NATTIIGUARD_INSTALLER));
+});
+
+// "Has anyone downloaded it yet?" -- answerable without SSH. Counts only.
+app.get('/nattiiguard/stats', (req, res) => {
+  const days = Object.entries(ngStats.byDay).sort().slice(-14);
+  res.json({ total: ngStats.total, last14days: Object.fromEntries(days) });
 });
 
 app.get('/radio', (req, res) => {
