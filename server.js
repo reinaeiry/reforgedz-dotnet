@@ -629,6 +629,18 @@ app.get('/map', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'map', 'index.html'));
 });
 
+// Short links worth pasting in Discord when someone says "my game keeps crashing".
+// The version lives in one place, so the links never have to change.
+const NATTIIGUARD_INSTALLER = 'NattiiGuard-Setup-3.0.0.exe';
+
+app.get('/nattiiguard', (req, res) => {
+  res.redirect('/#nattiiguard');
+});
+
+app.get('/nattiiguard/download', (req, res) => {
+  res.download(path.join(__dirname, 'public', 'downloads', NATTIIGUARD_INSTALLER));
+});
+
 app.get('/radio', (req, res) => {
   const trackFile = req.query.track;
   if (!trackFile) {

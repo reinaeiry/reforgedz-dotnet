@@ -708,6 +708,48 @@ img { display: block; max-width: 100%; }
 }
 
 /* ============================================
+   NattiiGuard download
+   ============================================ */
+
+.ng-get {
+  text-align: center;
+  margin-top: 48px;
+}
+
+.ng-meta {
+  margin-top: 18px;
+  font-family: var(--display);
+  font-size: 0.8rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-ghost);
+}
+
+/* Windows WILL show an "unknown publisher" warning on this download until the signing
+   certificate is in place. Saying so up front is the difference between a user who clicks
+   through and a user who assumes the site handed them a virus. */
+.ng-note {
+  max-width: 640px;
+  margin: 22px auto 0;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  text-align: left;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
+.ng-note strong { color: var(--text); font-weight: 600; }
+.ng-note em     { color: var(--text); font-weight: 600; font-style: normal; }
+
+@media (max-width: 600px) {
+  .ng-note { padding: 14px 16px; font-size: 0.8rem; }
+}
+
+/* ============================================
    Inner Pages (About, Radio, Contact)
    ============================================ */
 
