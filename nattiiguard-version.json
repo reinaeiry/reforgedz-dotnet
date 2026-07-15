@@ -1,7 +1,7 @@
 {
-  "version": "3.2.1",
-  "file": "NattiiGuard-Setup-3.2.1.exe",
-  "url": "https://reforgedz.net/downloads/NattiiGuard-Setup-3.2.1.exe",
-  "sha256": "984266cc2e266d73bd20cd6e6d506cc3cc789a63ceaa210093561dc2c6062f46",
-  "notes": "NattiiGuard updates itself from now on. Adds a Support ReforgedZ button."
+  "version": "3.2.2",
+  "file": "NattiiGuard-Setup-3.2.2.exe",
+  "url": "https://reforgedz.net/downloads/NattiiGuard-Setup-3.2.2.exe",
+  "sha256": "342881c40461a48fe73f52d79311f70b3e583c9547b85c81fe33996cd4507777",
+  "notes": "The disk map is now much easier to read: folders shown inside folders, an Up button, and clearer navigation."
 }
