@@ -145,18 +145,29 @@ app.use((req, res, next) => {
 // radio-stats.json. Registered BEFORE express.static, which would otherwise serve
 // /downloads/* first and the count would never happen.
 const ngStatsFile = path.join(__dirname, 'nattiiguard-stats.json');
-let ngStats = { total: 0, byDay: {} };
-try { ngStats = JSON.parse(fs.readFileSync(ngStatsFile, 'utf8')); } catch {}
+let ngStats = { total: 0, byDay: {}, updates: 0 };
+try { ngStats = { updates: 0, ...JSON.parse(fs.readFileSync(ngStatsFile, 'utf8')) }; } catch {}
 
-function countNattiiGuardDownload() {
+// The version manifest is the single source of truth for a release: the app's
+// built-in updater polls /nattiiguard/version and compares against itself.
+// Shipping an update = new installer in public/downloads + rewrite this file,
+// in the SAME commit (the sha256 must always match the exe being served).
+const ngManifestFile = path.join(__dirname, 'nattiiguard-version.json');
+let ngManifest = null;
+try { ngManifest = JSON.parse(fs.readFileSync(ngManifestFile, 'utf8')); } catch {}
+
+function countNattiiGuardDownload(isUpdate) {
   const day = new Date().toISOString().slice(0, 10);
   ngStats.total += 1;
   ngStats.byDay[day] = (ngStats.byDay[day] || 0) + 1;
+  if (isUpdate) ngStats.updates += 1;
   fs.writeFile(ngStatsFile, JSON.stringify(ngStats, null, 2), () => {});
 }
 
 app.use('/downloads', (req, res, next) => {
-  if (req.method === 'GET' && /NattiiGuard-Setup.*\.exe$/i.test(req.path)) countNattiiGuardDownload();
+  if (req.method === 'GET' && /NattiiGuard-Setup.*\.exe$/i.test(req.path)) {
+    countNattiiGuardDownload(req.query.update === '1');
+  }
   next();
 });
 
@@ -650,22 +661,29 @@ app.get('/map', (req, res) => {
 });
 
 // Short links worth pasting in Discord when someone says "my game keeps crashing".
-// The version lives in one place, so the links never have to change.
-const NATTIIGUARD_INSTALLER = 'NattiiGuard-Setup-3.1.0.exe';
+// The filename comes from the version manifest, so a release updates one file.
+const NATTIIGUARD_INSTALLER = (ngManifest && ngManifest.file) || 'NattiiGuard-Setup-3.1.0.exe';
 
 app.get('/nattiiguard', (req, res) => {
   res.redirect('/#nattiiguard');
 });
 
 app.get('/nattiiguard/download', (req, res) => {
-  countNattiiGuardDownload();   // this path bypasses the /downloads middleware
+  countNattiiGuardDownload(false);   // this path bypasses the /downloads middleware
   res.download(path.join(__dirname, 'public', 'downloads', NATTIIGUARD_INSTALLER));
+});
+
+// What the app's updater polls on launch. 404 (not a stale answer) if the
+// manifest is missing/corrupt -- the app treats any non-200 as "no update".
+app.get('/nattiiguard/version', (req, res) => {
+  if (!ngManifest) return res.status(404).json({ error: 'no manifest' });
+  res.json(ngManifest);
 });
 
 // "Has anyone downloaded it yet?" -- answerable without SSH. Counts only.
 app.get('/nattiiguard/stats', (req, res) => {
   const days = Object.entries(ngStats.byDay).sort().slice(-14);
-  res.json({ total: ngStats.total, last14days: Object.fromEntries(days) });
+  res.json({ total: ngStats.total, updates: ngStats.updates, last14days: Object.fromEntries(days) });
 });
 
 app.get('/radio', (req, res) => {
