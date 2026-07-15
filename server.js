@@ -651,7 +651,7 @@ app.get('/map', (req, res) => {
 
 // Short links worth pasting in Discord when someone says "my game keeps crashing".
 // The version lives in one place, so the links never have to change.
-const NATTIIGUARD_INSTALLER = 'NattiiGuard-Setup-3.0.0.exe';
+const NATTIIGUARD_INSTALLER = 'NattiiGuard-Setup-3.1.0.exe';
 
 app.get('/nattiiguard', (req, res) => {
   res.redirect('/#nattiiguard');
