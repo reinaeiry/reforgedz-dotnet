@@ -1,7 +1,7 @@
 {
-  "version": "3.2.2",
-  "file": "NattiiGuard-Setup-3.2.2.exe",
-  "url": "https://reforgedz.net/downloads/NattiiGuard-Setup-3.2.2.exe",
-  "sha256": "342881c40461a48fe73f52d79311f70b3e583c9547b85c81fe33996cd4507777",
-  "notes": "The disk map is now much easier to read: folders shown inside folders, an Up button, and clearer navigation."
+    "version":  "3.2.3",
+    "file":  "NattiiGuard-Setup-3.2.3.exe",
+    "url":  "https://reforgedz.net/downloads/NattiiGuard-Setup-3.2.3.exe",
+    "sha256":  "4c2b9a289c307675152edf3049405d0f29ff0a67e771984f34790bedcac9bf42",
+    "notes":  "Detects crash-causing adware, smarter evidence, honest confidence on ties."
 }
