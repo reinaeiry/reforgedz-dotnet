@@ -1420,7 +1420,8 @@ function buildPriorityQueueList() {
       COALESCE(u.gamertag, u.persona) AS display_name,
       p.server_specific,
       o.server_id,
-      o.effective_until
+      o.effective_until,
+      o.created_at
     FROM orders o
     JOIN users u ON o.steam_id = u.steam_id
     JOIN products p ON o.product_id = p.id
@@ -1430,7 +1431,7 @@ function buildPriorityQueueList() {
       AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
   `).all();
 
-  const manualRows = db.prepare(`SELECT guid, server_id, display_name, expires_at, removed FROM priority_queue_grants WHERE removed = 1 OR expires_at IS NULL OR expires_at > unixepoch()`).all();
+  const manualRows = db.prepare(`SELECT guid, server_id, display_name, expires_at, removed, granted_at FROM priority_queue_grants WHERE removed = 1 OR expires_at IS NULL OR expires_at > unixepoch()`).all();
 
   const byGuid = new Map();
   const blank = () => Object.fromEntries(SERVER_IDS.map(id => [id, false]));
@@ -1440,7 +1441,7 @@ function buildPriorityQueueList() {
   function ensureEntry(guid, displayName) {
     let e = byGuid.get(guid);
     if (!e) {
-      e = { guid, displayName: displayName || '', presence: blank(), sources: blankSrc(), _exp: blankExp() };
+      e = { guid, displayName: displayName || '', presence: blank(), sources: blankSrc(), _exp: blankExp(), _purchasedAt: null, _grantedAt: null };
       byGuid.set(guid, e);
     } else if (!e.displayName && displayName) {
       e.displayName = displayName;
@@ -1461,6 +1462,8 @@ function buildPriorityQueueList() {
 
   for (const r of orderRows) {
     const e = ensureEntry(r.guid, r.display_name);
+    // Track when they last bought, even for orders that grant no server presence.
+    if (r.created_at != null && (e._purchasedAt == null || r.created_at > e._purchasedAt)) e._purchasedAt = r.created_at;
     if (!r.server_specific) {
       for (const id of SERVER_IDS) mark(e, id, 'purchase', r.effective_until);
     } else if (r.server_id) {
@@ -1470,16 +1473,28 @@ function buildPriorityQueueList() {
 
   for (const r of manualRows) {
     if (!r.server_id || !SERVER_IDS.includes(r.server_id)) continue;
+    // Deny rows create an entry too. Otherwise turning off a holder's last server
+    // makes them vanish from the list mid-edit, before a new server can be picked.
+    const e = ensureEntry(r.guid, r.display_name);
+    if (r.granted_at != null && (e._grantedAt == null || r.granted_at > e._grantedAt)) e._grantedAt = r.granted_at;
     if (r.removed) {
-      // Deny: hide this server even if purchased. Only affects an existing holder.
-      const e = byGuid.get(r.guid);
-      if (!e) continue;
+      // Deny: hide this server even if purchased.
       e.presence[r.server_id] = false;
       e.sources[r.server_id] = null;
       e._exp[r.server_id] = -Infinity;
     } else {
-      const e = ensureEntry(r.guid, r.display_name);
       mark(e, r.server_id, 'manual', r.expires_at);
+    }
+  }
+
+  // Deny rows carry no display name, so a holder left with only denies would read
+  // as "Unknown". Fall back to the account name.
+  const unnamed = Array.from(byGuid.values()).filter(e => !e.displayName).map(e => e.guid);
+  if (unnamed.length) {
+    const holes = unnamed.map(() => '?').join(',');
+    for (const u of db.prepare(`SELECT bi_uid, COALESCE(gamertag, persona) AS name FROM users WHERE bi_uid IN (${holes})`).all(...unnamed)) {
+      const e = byGuid.get(u.bi_uid);
+      if (e && !e.displayName && u.name) e.displayName = u.name;
     }
   }
 
@@ -1492,7 +1507,16 @@ function buildPriorityQueueList() {
       if (!isFinite(v)) { expiry[id] = null; }
       else { expiry[id] = v; expiresAt = (expiresAt == null || v < expiresAt) ? v : expiresAt; }
     }
-    return { guid: e.guid, displayName: e.displayName, presence: e.presence, sources: e.sources, expiry, expiresAt };
+    return {
+      guid: e.guid,
+      displayName: e.displayName,
+      presence: e.presence,
+      sources: e.sources,
+      expiry,
+      expiresAt,
+      purchasedAt: e._purchasedAt,
+      grantedAt: e._grantedAt,
+    };
   });
 
   return out.sort((a, b) =>
@@ -1502,6 +1526,29 @@ function buildPriorityQueueList() {
 
 function priorityQueueServers() {
   return SERVER_IDS.map(id => ({ id, label: SERVER_LABELS[id] || id.toUpperCase() }));
+}
+
+// The expiry a newly granted server should inherit. Moving a holder from one
+// server to another used to write a fresh grant with no expiry, silently turning
+// a dated entitlement into a permanent one and losing the removal date.
+// Returns null for permanent — either because an active source has no expiry, or
+// because there is no other source at all (a brand-new manual grant).
+function deriveHolderExpiry(guid) {
+  const rows = db.prepare(`
+    SELECT expires_at AS exp FROM priority_queue_grants
+    WHERE guid = ? AND removed = 0 AND (expires_at IS NULL OR expires_at > unixepoch())
+    UNION ALL
+    SELECT o.effective_until AS exp
+    FROM orders o
+    JOIN users u ON o.steam_id = u.steam_id
+    JOIN products p ON o.product_id = p.id
+    WHERE u.bi_uid = ? AND o.status = 'completed' AND p.grants_priority_queue = 1
+      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
+  `).all(guid, guid);
+
+  if (!rows.length) return null;
+  if (rows.some(r => r.exp == null)) return null;   // a permanent source wins
+  return Math.max(...rows.map(r => Number(r.exp)));
 }
 
 // ============================================================
@@ -1847,24 +1894,43 @@ router.post('/api/shop/admin/priority-queue/toggle', requireAdmin, (req, res) =>
   if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
   if (!SERVER_IDS.includes(serverId)) return res.status(400).json({ error: 'Invalid server ID' });
 
+  const by = req.user && req.user.steam_id ? req.user.steam_id : 'api';
+  const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
+  const existing = db.prepare('SELECT removed, expires_at FROM priority_queue_grants WHERE guid = ? AND server_id = ?').get(guid, serverId);
+
   if (present) {
-    // Grant this server (and clear any deny on it).
-    const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
-    db.prepare(`
-      INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
-      VALUES (?, ?, ?, 0, ?, unixepoch())
-      ON CONFLICT(guid, server_id) DO UPDATE SET
-        removed = 0,
-        display_name = COALESCE(excluded.display_name, display_name)
-    `).run(guid, serverId, name, req.user && req.user.steam_id ? req.user.steam_id : 'api');
+    // Grant this server (and clear any deny on it). Seed the expiry only for a
+    // brand-new row or one that was previously a deny, so switching servers keeps
+    // the holder's removal date. An existing live grant keeps whatever it has —
+    // including a deliberate permanent (NULL).
+    if (!existing) {
+      db.prepare(`
+        INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at, expires_at)
+        VALUES (?, ?, ?, 0, ?, unixepoch(), ?)
+      `).run(guid, serverId, name, by, deriveHolderExpiry(guid));
+    } else if (existing.removed) {
+      db.prepare(`
+        UPDATE priority_queue_grants
+        SET removed = 0, display_name = COALESCE(?, display_name), expires_at = ?
+        WHERE guid = ? AND server_id = ?
+      `).run(name, deriveHolderExpiry(guid), guid, serverId);
+    } else {
+      db.prepare(`
+        UPDATE priority_queue_grants SET display_name = COALESCE(?, display_name)
+        WHERE guid = ? AND server_id = ?
+      `).run(name, guid, serverId);
+    }
   } else {
     // Hide this server. A deny row (removed=1) keeps a PURCHASE-driven server off too,
-    // and turns a plain manual grant off — sync ignores denied rows.
+    // and turns a plain manual grant off — sync ignores denied rows. The name is kept
+    // so a holder whose servers are all off still reads properly in the list.
     db.prepare(`
       INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
-      VALUES (?, ?, NULL, 1, ?, unixepoch())
-      ON CONFLICT(guid, server_id) DO UPDATE SET removed = 1
-    `).run(guid, serverId, req.user && req.user.steam_id ? req.user.steam_id : 'api');
+      VALUES (?, ?, ?, 1, ?, unixepoch())
+      ON CONFLICT(guid, server_id) DO UPDATE SET
+        removed = 1,
+        display_name = COALESCE(display_name, excluded.display_name)
+    `).run(guid, serverId, name, by);
   }
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
