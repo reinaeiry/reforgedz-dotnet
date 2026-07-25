@@ -12,8 +12,11 @@ let currentCurrency = (localStorage.getItem('rz_currency') || 'USD').toUpperCase
 if (!['USD', 'GBP', 'EUR'].includes(currentCurrency)) currentCurrency = 'USD';
 const CURRENCY_SYMBOLS = { USD: '$', GBP: '£', EUR: '€' };
 const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
-const SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2'];
-const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Chernarus)', eu3: 'EU3 (Everon)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Chernarus)' };
+// EU3 is now the EU dev server — Everon moved to EU2 (and NA2). 'eu3' stays out of
+// SERVER_IDS so it isn't offered for purchase; its label is kept for historical
+// order display.
+const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2'];
+const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Everon)', eu3: 'EU3 (now EU Dev)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Everon)' };
 
 // ---- DOM refs (static elements only — re-queried as needed for dynamic ones) ----
 const navAuth = document.getElementById('navAuth');

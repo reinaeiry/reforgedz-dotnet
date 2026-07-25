@@ -1,5 +1,8 @@
-const SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2', 'dev1'];
-const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Chernarus)', eu3: 'EU3 (Everon)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Chernarus)', dev1: '09 — [DEV] Official Chernarus' };
+// EU3 became the EU dev server and its Everon role moved to EU2 (NA2 is Everon
+// too). 'eu3' is deliberately absent from SERVER_IDS so it can't be sold or
+// synced, but its label is kept so historical eu3 orders still render a name.
+const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2', 'dev1'];
+const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Everon)', eu3: 'EU3 (now EU Dev)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Everon)', dev1: 'NA Dev' };
 
 // Given the shop's purchases.json path (which sits deep inside the
 // pterodactyl volume), strip back to the volume root and append the
@@ -35,14 +38,9 @@ function listServers() {
   const euUser = process.env.GAME_SERVER_EU_USER || 'root';
   const naUser = process.env.GAME_SERVER_NA_USER || 'root';
 
-  // EU3 lives on its own host (a separate node), so it is reached the same way
-  // as the NA servers: a nested SSH hop from the EU entry host. Its distinct
-  // region ('eu3') is what makes sync.js wrap commands in that hop rather than
-  // running them directly on the entry host.
-  const eu3 = (process.env.GAME_SERVER_EU3_PATHS || '').split(',').map(s => s.trim()).filter(Boolean);
-  const eu3Host = process.env.GAME_SERVER_EU3_HOST;
-  const eu3Port = parseInt(process.env.GAME_SERVER_EU3_PORT) || 22;
-  const eu3User = process.env.GAME_SERVER_EU3_USER || 'root';
+  // EU3 is now the EU dev server — its Everon role moved to EU2, so it is no
+  // longer synced. The GAME_SERVER_EU3_* env vars are unread; leaving them set
+  // in .env is harmless.
 
   // The [DEV] Chernarus server lives on the NA box, so it reuses the NA host/creds
   // and the same nested-SSH hop (region 'na'). Its own path var keeps it independent
@@ -53,7 +51,6 @@ function listServers() {
   const all = [
     { id: 'eu1', region: 'eu', host: euHost, port: euPort, user: euUser, path: eu[0] || null },
     { id: 'eu2', region: 'eu', host: euHost, port: euPort, user: euUser, path: eu[1] || null },
-    { id: 'eu3', region: 'eu3', host: eu3Host, port: eu3Port, user: eu3User, path: eu3[0] || null },
     { id: 'na1', region: 'na', host: naHost, port: naPort, user: naUser, path: na[0] || null },
     { id: 'na2', region: 'na', host: naHost, port: naPort, user: naUser, path: na[1] || null },
     { id: 'dev1', region: 'na', host: naHost, port: naPort, user: naUser, path: naDev || null },
