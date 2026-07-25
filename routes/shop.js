@@ -1441,7 +1441,7 @@ function buildPriorityQueueList() {
   function ensureEntry(guid, displayName) {
     let e = byGuid.get(guid);
     if (!e) {
-      e = { guid, displayName: displayName || '', presence: blank(), sources: blankSrc(), _exp: blankExp(), _purchasedAt: null, _grantedAt: null };
+      e = { guid, displayName: displayName || '', presence: blank(), sources: blankSrc(), _exp: blankExp(), _purchasedAt: null, _grantedAt: null, _entitle: -Infinity };
       byGuid.set(guid, e);
     } else if (!e.displayName && displayName) {
       e.displayName = displayName;
@@ -1451,6 +1451,15 @@ function buildPriorityQueueList() {
 
   // expiry: null = permanent (always wins). Otherwise keep the LATEST date the
   // holder keeps access on that server (so they only drop when the last source lapses).
+  // The holder's entitlement regardless of which server it is attached to. Needed
+  // because expiry below is only measured across servers they currently hold — a
+  // holder with every server toggled off would otherwise report no date at all and
+  // render as "Permanent" when they in fact have a dated (or no) entitlement.
+  function noteEntitlement(entry, expiry) {
+    const d = (expiry == null) ? Infinity : Number(expiry);
+    if (d > entry._entitle) entry._entitle = d;
+  }
+
   function mark(entry, serverId, source, expiry) {
     if (!SERVER_IDS.includes(serverId)) return;
     entry.presence[serverId] = true;
@@ -1464,6 +1473,7 @@ function buildPriorityQueueList() {
     const e = ensureEntry(r.guid, r.display_name);
     // Track when they last bought, even for orders that grant no server presence.
     if (r.created_at != null && (e._purchasedAt == null || r.created_at > e._purchasedAt)) e._purchasedAt = r.created_at;
+    noteEntitlement(e, r.effective_until);
     if (!r.server_specific) {
       for (const id of SERVER_IDS) mark(e, id, 'purchase', r.effective_until);
     } else if (r.server_id) {
@@ -1483,6 +1493,7 @@ function buildPriorityQueueList() {
       e.sources[r.server_id] = null;
       e._exp[r.server_id] = -Infinity;
     } else {
+      noteEntitlement(e, r.expires_at);
       mark(e, r.server_id, 'manual', r.expires_at);
     }
   }
@@ -1501,12 +1512,18 @@ function buildPriorityQueueList() {
   const out = Array.from(byGuid.values()).map(e => {
     const expiry = {};        // per-server: unix ts, or null = permanent / not present
     let expiresAt = null;     // soonest dated expiry across servers held (null = all permanent)
+    let assigned = false;     // holds at least one server
     for (const id of SERVER_IDS) {
       if (!e.presence[id]) { expiry[id] = null; continue; }
+      assigned = true;
       const v = e._exp[id];
       if (!isFinite(v)) { expiry[id] = null; }
       else { expiry[id] = v; expiresAt = (expiresAt == null || v < expiresAt) ? v : expiresAt; }
     }
+    // With no server held there is nothing to measure, so report the underlying
+    // entitlement instead — otherwise a dated holder reads as "Permanent".
+    if (!assigned && isFinite(e._entitle)) expiresAt = e._entitle;
+    const hasEntitlement = e._entitle > -Infinity;
     return {
       guid: e.guid,
       displayName: e.displayName,
@@ -1514,6 +1531,8 @@ function buildPriorityQueueList() {
       sources: e.sources,
       expiry,
       expiresAt,
+      assigned,
+      hasEntitlement,
       purchasedAt: e._purchasedAt,
       grantedAt: e._grantedAt,
     };
