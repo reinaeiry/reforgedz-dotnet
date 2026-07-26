@@ -1,7 +1,7 @@
 {
-    "version":  "3.2.4",
-    "file":  "NattiiGuard-Setup-3.2.4.exe",
-    "url":  "https://reforgedz.net/downloads/NattiiGuard-Setup-3.2.4.exe",
-    "sha256":  "a0fdab15ef1bfbb5b0ac750b51410480a660d4996260e65977d6e75e7e339997",
-    "notes":  "Updates now install themselves (skippable countdown)."
+    "version":  "3.2.5",
+    "file":  "NattiiGuard-Setup-3.2.5.exe",
+    "url":  "https://reforgedz.net/downloads/NattiiGuard-Setup-3.2.5.exe",
+    "sha256":  "cffa0220d181e53e494f533d500453d184c67481ee06e9d0d76afd50cee0c194",
+    "notes":  "Signed by ReforgedZ, LLC - the Windows unknown-publisher warning is gone. Also fixes the crash plan pointing at a recording button that did not exist."
 }

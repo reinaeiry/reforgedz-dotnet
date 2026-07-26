@@ -846,25 +846,6 @@ img { display: block; max-width: 100%; }
   color: var(--text-ghost);
 }
 
-/* Windows WILL warn about the publisher until the certificate lands. Saying so before it
-   happens is the difference between a user who clicks through and one who assumes the
-   site handed them a virus. */
-.ng-note {
-  margin-top: 18px;
-  padding: 14px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: 6px;
-  font-size: 0.83rem;
-  line-height: 1.65;
-  color: var(--text-dim);
-  max-width: 34rem;
-}
-
-.ng-note strong { color: var(--text); font-weight: 600; }
-.ng-note em     { color: var(--text); font-weight: 600; font-style: normal; }
-
 .ng-wifi { margin-top: 18px; }
 
 @media (max-width: 900px) {
