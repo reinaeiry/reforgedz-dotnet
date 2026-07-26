@@ -457,7 +457,7 @@
     }
     var midRooms = ranked.filter(function(x){ return x.g === "C"; });
     if (midRooms.length && worst.sc >= 45){
-      ins.push(midRooms.map(function(x){ return x.r.name; }).join(", ") + " sit in the middle — usable for browsing and video, but you may notice lag in games or on video calls.");
+      ins.push(midRooms.map(function(x){ return x.r.name; }).join(", ") + (midRooms.length === 1 ? " sits" : " sit") + " in the middle — usable for browsing and video, but you may notice lag in games or on video calls.");
     }
     if (spdRatio >= 3 && worst.r.spd < 15){
       ins.push("Download speed collapses " + spdRatio.toFixed(1) + "× from best to worst room — a classic sign the far room is connecting on a weak fringe signal and retransmitting heavily.");
