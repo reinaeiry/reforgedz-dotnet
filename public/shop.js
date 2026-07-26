@@ -149,7 +149,9 @@ function formatDate(unix) {
 function escHtml(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
-  return d.innerHTML;
+  // textContent→innerHTML escapes & < > but NOT quotes; escape them too so the
+  // result is safe inside attribute and CSS url('…') contexts, not just text.
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 async function api(url, opts = {}) {

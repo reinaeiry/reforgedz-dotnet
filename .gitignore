@@ -1,6 +1,11 @@
 node_modules/
 .env
 *.db
+# SQLite sidecars — *.db doesn't match these, and the WAL can hold un-checkpointed
+# rows (personas, Steam IDs, payer emails). Never commit them.
+*.db-wal
+*.db-shm
+*.db-journal
 uploads/
 
 # Infrastructure credentials — NEVER commit. Real secrets live here, local-only.

@@ -16,6 +16,28 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const ADMIN_IDS = (process.env.ADMIN_STEAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// Constant-time string compare for shared secrets (avoids timing side-channels).
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+// fetch() with an abort timeout so a hung upstream (BattleMetrics / Pterodactyl)
+// can never stall the status poller or pin an event-loop slot indefinitely.
+async function fetchWithTimeout(url, opts = {}, timeoutMs = 10000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ---- Passport Steam setup ----
 passport.serializeUser((user, done) => done(null, user.steam_id));
@@ -46,20 +68,64 @@ passport.use(new SteamStrategy({
 // Behind Pterodactyl/nginx, so the client's real IP is in X-Forwarded-For.
 // trust proxy = 1 means trust one hop of proxy; needed for rate-limit to key by real IP.
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
-// ---- PayPal webhook (must be before express.json AND before rate limiters,
-// because PayPal controls its retry cadence and its IPs change; signature
-// verification needs the raw body). ----
-const shopRoutes = require('./routes/shop');
-app.post('/api/shop/paypal/webhook', express.raw({ type: '*/*' }), shopRoutes.webhookHandler);
-// Back-compat alias so any still-registered Stripe webhook URL doesn't 404.
-app.post('/api/shop/webhook', express.raw({ type: '*/*' }), shopRoutes.webhookHandler);
+// ---- Security headers ----
+// Hand-rolled (no new dependency) so it applies to EVERY response, including
+// static files served below. NOTE: script-src/style-src keep 'unsafe-inline'
+// because the shop, admin, monetization and map pages use inline <script>
+// blocks and inline on* handlers; a stricter nonce-based policy would need those
+// refactored first. unpkg.com is allowlisted because /map loads Leaflet +
+// markercluster from it; the Google Fonts hosts serve the site-wide fonts.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://unpkg.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+  "img-src 'self' data: https:",
+  "font-src 'self' https://fonts.gstatic.com",
+  "connect-src 'self'",
+  "media-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+  "upgrade-insecure-requests"
+].join('; ');
 
-// Register PayPal webhooks with PayPal on boot (idempotent).
-shopRoutes.registerPayPalWebhooks().catch((e) => console.error('[paypal] webhook registration error:', e.message));
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  // HSTS only in production (never pin HTTPS-only on a local http:// dev box).
+  if (IS_PROD) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
 
 // ---- Rate limiting ----
 const rateLimit = require('express-rate-limit');
+
+// ---- PayPal webhook (must be before express.json AND before the global/auth
+// limiters, because PayPal controls its retry cadence and its IPs change;
+// signature verification needs the raw body). It gets its OWN generous limiter
+// so a flood of forged webhooks can't amplify into unbounded outbound calls to
+// PayPal (each verify attempt costs us round-trips) — PayPal's real retries are
+// bursty but bounded well under this ceiling. ----
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many requests.' }
+});
+const shopRoutes = require('./routes/shop');
+app.post('/api/shop/paypal/webhook', webhookLimiter, express.raw({ type: '*/*' }), shopRoutes.webhookHandler);
+// Back-compat alias so any still-registered Stripe webhook URL doesn't 404.
+app.post('/api/shop/webhook', webhookLimiter, express.raw({ type: '*/*' }), shopRoutes.webhookHandler);
+
+// Register PayPal webhooks with PayPal on boot (idempotent).
+shopRoutes.registerPayPalWebhooks().catch((e) => console.error('[paypal] webhook registration error:', e.message));
 
 // Generous global ceiling to catch obvious abuse without hurting real users.
 const globalLimiter = rateLimit({
@@ -131,7 +197,7 @@ app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   if (req.path === '/api/shop/paypal/webhook' || req.path === '/api/shop/webhook') return next();
   const apiKey = req.headers['x-shop-admin-key'];
-  if (apiKey && process.env.SHOP_ADMIN_API_KEY && apiKey === process.env.SHOP_ADMIN_API_KEY) return next();
+  if (apiKey && process.env.SHOP_ADMIN_API_KEY && safeEqual(apiKey, process.env.SHOP_ADMIN_API_KEY)) return next();
 
   let allowedHost;
   try { allowedHost = new URL(BASE_URL).host; }
@@ -347,7 +413,12 @@ app.use(shopRoutes.router);
 let trackCache = null;
 
 function escHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function readMp3Meta(filePath) {
@@ -476,17 +547,22 @@ app.get('/api/radio/stats', (req, res) => {
 });
 
 app.post('/api/radio/play', (req, res) => {
-  const { file } = req.body;
-  if (!file) return res.sendStatus(400);
+  const { file } = req.body || {};
+  if (!file || typeof file !== 'string') return res.sendStatus(400);
+  // Only count real, known tracks — otherwise an attacker could grow
+  // radio-stats.json without bound by posting arbitrary keys.
+  if (!trackCache) trackCache = loadAllTracks();
+  if (!trackCache.trackMap[file]) return res.sendStatus(400);
   listenStats.plays[file] = (listenStats.plays[file] || 0) + 1;
   saveStats();
   res.json({ plays: listenStats.plays[file] });
 });
 
 app.post('/api/radio/listened', (req, res) => {
-  const { seconds } = req.body;
-  if (!seconds || seconds <= 0) return res.sendStatus(400);
-  listenStats.totalSeconds += Math.floor(seconds);
+  const seconds = Number(req.body && req.body.seconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return res.sendStatus(400);
+  // Cap a single report at one hour so a crafted value can't inflate the total.
+  listenStats.totalSeconds += Math.min(Math.floor(seconds), 3600);
   saveStats();
   res.sendStatus(200);
 });
@@ -512,7 +588,7 @@ function bmAuthHeaders() {
 
 async function fetchBattleMetricsPlayers(bmId) {
   try {
-    const res = await fetch(`https://api.battlemetrics.com/servers/${bmId}`, { headers: bmAuthHeaders() });
+    const res = await fetchWithTimeout(`https://api.battlemetrics.com/servers/${bmId}`, { headers: bmAuthHeaders() }, 8000);
     if (!res.ok) return null;
     const data = await res.json();
     const a = data?.data?.attributes;
@@ -528,7 +604,7 @@ async function resolveBattleMetricsId(rawIp, port, serverName) {
   const portNum = Number(port);
   try {
     const ipUrl = `https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(rawIp)}&page[size]=10`;
-    const res = await fetch(ipUrl, { headers: bmAuthHeaders() });
+    const res = await fetchWithTimeout(ipUrl, { headers: bmAuthHeaders() }, 8000);
     if (!res.ok) console.warn(`[bm] server search HTTP ${res.status} for ${rawIp}`);
     if (res.ok) {
       const list = (await res.json())?.data || [];
@@ -540,7 +616,7 @@ async function resolveBattleMetricsId(rawIp, port, serverName) {
     const tagMatch = (serverName || '').match(/\[([^\]]+)\]/);
     const tag = tagMatch ? tagMatch[1] : null;
     if (tag) {
-      const nameRes = await fetch(`https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(tag)}&page[size]=5`, { headers: bmAuthHeaders() });
+      const nameRes = await fetchWithTimeout(`https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(tag)}&page[size]=5`, { headers: bmAuthHeaders() }, 8000);
       if (nameRes.ok) {
         const nd = (await nameRes.json())?.data || [];
         const tagUpper = tag.toUpperCase();
@@ -553,13 +629,13 @@ async function resolveBattleMetricsId(rawIp, port, serverName) {
 }
 
 async function pteroFetch(endpoint) {
-  const res = await fetch(`${PTERO_URL}${endpoint}`, {
+  const res = await fetchWithTimeout(`${PTERO_URL}${endpoint}`, {
     headers: {
       'Authorization': `Bearer ${PTERO_KEY}`,
       'Accept': 'application/json',
       'Content-Type': 'application/json'
     }
-  });
+  }, 10000);
   if (!res.ok) throw new Error(`Pterodactyl API ${res.status}: ${res.statusText}`);
   return res.json();
 }
@@ -668,11 +744,20 @@ app.get('/shop', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'shop.html'));
 });
 
-app.get('/admin/orders', (req, res) => {
+// Gate the admin pages server-side. The APIs behind them are already
+// requireAdmin-guarded, but serving the HTML to anyone leaks the full admin
+// surface (endpoint names, destructive operations). Return 404 to non-admins so
+// the paths aren't even discoverable. Admins are always session-authenticated.
+function requireAdminPage(req, res, next) {
+  if (req.isAuthenticated && req.isAuthenticated() && req.user && req.user.role === 'admin') return next();
+  return res.status(404).send('Not found');
+}
+
+app.get('/admin/orders', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-orders.html'));
 });
 
-app.get('/admin/saves', (req, res) => {
+app.get('/admin/saves', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-saves.html'));
 });
 
@@ -750,6 +835,27 @@ app.get('/radio', (req, res) => {
   }
 
   res.send(html);
+});
+
+// ---- Catch-all error handler ----
+// A thrown route error returns JSON (not an HTML stack page) and never bubbles
+// up to crash the process. Must be registered AFTER all routes.
+app.use((err, req, res, next) => {
+  console.error('[express] Unhandled route error:', err && (err.stack || err.message || err));
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Something went wrong. Please try again.' });
+});
+
+// ---- Process-level guards (steady uptime) ----
+// This is a single Node process serving the site, shop, radio and status pages.
+// Log-and-continue beats crashing the whole box on one stray async error; the
+// per-route handler above and the PayPal webhook handler already follow this
+// philosophy. Anything genuinely fatal will still surface loudly in the logs.
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] Unhandled promise rejection:', reason && (reason.stack || reason.message || reason));
+});
+process.on('uncaughtException', (err) => {
+  console.error('[process] Uncaught exception (kept alive):', err && (err.stack || err.message || err));
 });
 
 app.listen(PORT, '0.0.0.0', () => {

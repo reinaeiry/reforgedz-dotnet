@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { Client } = require('ssh2');
 const db = require('./db');
 const { listServers, SERVER_IDS, saveGamePathFromShopPath } = require('./gameServers');
@@ -8,6 +9,35 @@ function getPrivateKey() {
   console.error('[sync] SSH_PRIVATE_KEY_B64 not set in .env');
   return null;
 }
+
+// Host-key pinning. When GAME_SERVER_HOST_FINGERPRINTS is set (comma-separated
+// base64 SHA-256 fingerprints), every SSH host key must match one of them or the
+// connection is refused — this blocks MITM on the sync channel. When it's unset
+// we log the fingerprint and accept (trust-on-first-use), so pinning can be
+// rolled out without an uptime break: read the logged values, then set the env.
+const PINNED_FINGERPRINTS = (process.env.GAME_SERVER_HOST_FINGERPRINTS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+function hostKeyFingerprint(keyBuf) {
+  return crypto.createHash('sha256').update(keyBuf).digest('base64').replace(/=+$/, '');
+}
+
+function verifyHostKey(keyBuf) {
+  const fp = hostKeyFingerprint(keyBuf);
+  if (PINNED_FINGERPRINTS.length === 0) {
+    console.warn(`[sync] SSH host key SHA256:${fp} accepted (no GAME_SERVER_HOST_FINGERPRINTS set — set it to pin).`);
+    return true;
+  }
+  const ok = PINNED_FINGERPRINTS.includes(fp);
+  if (!ok) console.error(`[sync] SSH host key SHA256:${fp} REJECTED — not in GAME_SERVER_HOST_FINGERPRINTS.`);
+  return ok;
+}
+
+// For the nested NA hop / rsync that shell out to the `ssh` binary: default to
+// accept-new (TOFU — records the key on first use, then pins) instead of the old
+// blanket StrictHostKeyChecking=no. Set GAME_SERVER_STRICT_HOSTKEYS=1 once a
+// known_hosts is provisioned to require an already-trusted key.
+const SSH_STRICT = process.env.GAME_SERVER_STRICT_HOSTKEYS === '1' ? 'yes' : 'accept-new';
 
 function sshOpen(privateKey, host, port, username) {
   return new Promise((resolve, reject) => {
@@ -21,7 +51,7 @@ function sshOpen(privateKey, host, port, username) {
     conn.connect({
       host, port, username, privateKey,
       readyTimeout: 10000,
-      hostVerifier: () => true
+      hostVerifier: verifyHostKey
     });
   });
 }
@@ -163,7 +193,7 @@ function wrapForRegion(server, innerCmd) {
   // outer SSH quoting. The remote shell decodes and pipes to bash. Single-quote
   // wrapping is safe because base64 alphabet is [A-Za-z0-9+/=] only.
   const innerB64 = Buffer.from(innerCmd, 'utf8').toString('base64');
-  return `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${server.port} ${server.user}@${server.host} 'echo ${innerB64} | base64 -d | bash'`;
+  return `ssh -o StrictHostKeyChecking=${SSH_STRICT} -o ConnectTimeout=10 -p ${server.port} ${server.user}@${server.host} 'echo ${innerB64} | base64 -d | bash'`;
 }
 
 async function patchServerAdmins(conn, server, desiredGuids) {
@@ -433,8 +463,18 @@ async function openSaveDownloadStream(serverId, relPath) {
   const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
   if (!saveBase) throw new Error('No save path for this server');
 
-  let rel = String(relPath == null ? '.' : relPath).replace(/\\/g, '/').replace(/\.\.(\/|$)/g, '').replace(/^\/+/, '').trim();
+  // Sanitise the requested sub-path. The previous single-pass ../ strip could be
+  // defeated by doubled sequences (`....//` → `../`), so instead: normalise, then
+  // reject anything that still contains a `..` segment or is absolute. This
+  // confines the download to paths at or under the save root.
+  let rel = String(relPath == null ? '.' : relPath).replace(/\\/g, '/').replace(/^\/+/, '').trim();
   if (!rel) rel = '.';
+  const posix = require('path').posix;
+  const normalised = posix.normalize(rel);
+  if (normalised === '..' || normalised.startsWith('../') || normalised.includes('/../') || posix.isAbsolute(normalised)) {
+    throw new Error('Path escapes save root');
+  }
+  rel = normalised;
 
   const privateKey = getPrivateKey();
   if (!privateKey) throw new Error('SSH key not configured');
@@ -988,11 +1028,11 @@ async function startSaveDbCopy(fromId, toId) {
     // both local to the entry host - plain local rsync
   } else if (onEntry(from.server)) {
     dstSpec = `${to.server.user}@${to.server.host}:${toRoot}/`;
-    rsyncE = `-e "ssh -o StrictHostKeyChecking=no -p ${to.server.port}"`;
-    dexec = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${to.server.port} ${to.server.user}@${to.server.host}`;
+    rsyncE = `-e "ssh -o StrictHostKeyChecking=${SSH_STRICT} -p ${to.server.port}"`;
+    dexec = `ssh -o StrictHostKeyChecking=${SSH_STRICT} -o ConnectTimeout=10 -p ${to.server.port} ${to.server.user}@${to.server.host}`;
   } else if (onEntry(to.server)) {
     srcSpec = `${from.server.user}@${from.server.host}:${fromRoot}/`;
-    rsyncE = `-e "ssh -o StrictHostKeyChecking=no -p ${from.server.port}"`;
+    rsyncE = `-e "ssh -o StrictHostKeyChecking=${SSH_STRICT} -p ${from.server.port}"`;
   } else if (from.server.host === to.server.host && from.server.region === to.server.region) {
     via = toId; // shared remote box - run the whole job there with local paths
   } else {

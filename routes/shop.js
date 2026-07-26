@@ -64,6 +64,15 @@ function handleCustomFlagUpload(req, res, next) {
   });
 }
 
+// Validate an upload by its real magic bytes, not the client-supplied MIME
+// header (which is trivially spoofable). Returns 'png' | 'jpg' | null.
+function detectImageExt(buf) {
+  if (!buf || buf.length < 4) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'png';           // \x89PNG
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'jpg';                               // JFIF/EXIF
+  return null;
+}
+
 const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
 
 function sendDiscordNotification({ eventType, user, biUid, productTitle, amountCents, currency, status, serverId }) {
@@ -153,6 +162,19 @@ const perServerStockUsedStmt = db.prepare(`
 
 function stockUsedFor(productId) {
   return stockUsedStmt.get(productId).used;
+}
+
+// Guard against a single buyer firing many concurrent checkout requests to
+// slip past the sold-out check (a TOCTOU race): one live pending order per
+// (buyer, product) at a time. Completed orders are unaffected (renewals etc.).
+const recentPendingStmt = db.prepare(`
+  SELECT id FROM orders
+  WHERE steam_id = ? AND product_id = ? AND status = 'pending' AND created_at > ?
+  LIMIT 1
+`);
+function hasLivePendingOrder(steamId, productId) {
+  const cutoff = Math.floor(Date.now() / 1000) - PENDING_TIMEOUT_SECONDS;
+  return !!recentPendingStmt.get(steamId, productId, cutoff);
 }
 
 function perServerStockUsed(productId) {
@@ -251,6 +273,31 @@ function sweepStalePending() {
 sweepStalePending();
 setInterval(sweepStalePending, SWEEPER_INTERVAL_MS);
 
+// Reap orphaned custom-flag uploads. A cancelled order's image is dead weight
+// (a paid-after-cancel order is flipped back to 'completed' by the webhook, so
+// anything still 'cancelled' an hour later will never be needed). Unlink the
+// file and clear the column so it isn't reaped twice — prevents unbounded disk
+// growth from abandoned/malicious checkout loops.
+const ORPHAN_FILE_GRACE_SECONDS = 60 * 60;
+const reapOrphanStmt = db.prepare(`
+  SELECT id, custom_file_path FROM orders
+  WHERE status = 'cancelled' AND custom_file_path IS NOT NULL AND created_at < ?
+`);
+const clearFilePathStmt = db.prepare("UPDATE orders SET custom_file_path = NULL WHERE id = ?");
+function reapOrphanUploads() {
+  const cutoff = Math.floor(Date.now() / 1000) - ORPHAN_FILE_GRACE_SECONDS;
+  let reaped = 0;
+  for (const row of reapOrphanStmt.all(cutoff)) {
+    // basename() defends against any traversal in a stored path.
+    try { fs.unlinkSync(path.join(CUSTOM_FLAG_UPLOAD_DIR, path.basename(row.custom_file_path))); } catch {}
+    clearFilePathStmt.run(row.id);
+    reaped++;
+  }
+  if (reaped > 0) console.log(`[orders] Reaped ${reaped} orphaned custom-flag upload(s)`);
+}
+reapOrphanUploads();
+setInterval(reapOrphanUploads, SWEEPER_INTERVAL_MS);
+
 // Whenever a subscription cycle's effective_until just crossed into the past,
 // re-run the purchase sync so the GUID drops out of game.admins. No state
 // change to the order row — sync.js's effective_until check handles the
@@ -283,11 +330,36 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// Constant-time compare so the shared admin key can't be recovered byte-by-byte
+// via response-timing analysis.
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
 function requireAdmin(req, res, next) {
-  if (req.isAuthenticated() && req.user.role === 'admin') return next();
+  // Audit trail: every state-changing admin action is attributed, and every
+  // rejection is logged with its source IP so probing / key brute-forcing is
+  // visible. GETs are read-only and would just be noise, so only log writes.
+  const auditWrite = (actor) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      console.log(`[admin-audit] ${actor} ${req.method} ${req.originalUrl} from ${req.ip}`);
+    }
+  };
+  if (req.isAuthenticated() && req.user.role === 'admin') {
+    auditWrite(`steam:${req.user.steam_id}`);
+    return next();
+  }
   // Shared-secret fallback used by the reforgedz admin page backend.
   const apiKey = req.headers['x-shop-admin-key'];
-  if (apiKey && process.env.SHOP_ADMIN_API_KEY && apiKey === process.env.SHOP_ADMIN_API_KEY) return next();
+  if (apiKey && process.env.SHOP_ADMIN_API_KEY && safeEqual(apiKey, process.env.SHOP_ADMIN_API_KEY)) {
+    auditWrite('apikey');
+    return next();
+  }
+  console.warn(`[admin-audit] DENIED ${req.method} ${req.originalUrl} from ${req.ip}`);
   return res.status(403).json({ error: 'Admin access required' });
 }
 
@@ -403,6 +475,12 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     amountCents = requested;
   }
 
+  // One live checkout per (buyer, product) — closes the concurrent-request
+  // race that could otherwise oversell a limited item.
+  if (hasLivePendingOrder(req.user.steam_id, product.id)) {
+    return res.status(409).json({ error: 'You already have a checkout in progress for this item. Finish or cancel it first.' });
+  }
+
   // Create the pending order row up-front so the customId we hand to PayPal
   // can map back to our DB even before they approve.
   const order = db.prepare(`
@@ -490,9 +568,20 @@ router.post('/api/shop/checkout-custom-flag', requireAuth, handleCustomFlagUploa
   }
 
   const amountCents = product.price_cents;
-  const ext = CUSTOM_FLAG_MIME_EXT[req.file.mimetype];
+  // Derive the extension from the file's actual content, not its claimed MIME —
+  // an attacker labelling an HTML/SVG polyglot as image/png would otherwise be
+  // stored and later served to admins.
+  const ext = detectImageExt(req.file.buffer);
+  if (!ext) {
+    return res.status(400).json({ error: 'Flag image must be a real PNG or JPG file.' });
+  }
   const fileName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
   const diskPath = path.join(CUSTOM_FLAG_UPLOAD_DIR, fileName);
+
+  // One live checkout per (buyer, product) — also bounds abandoned uploads.
+  if (hasLivePendingOrder(req.user.steam_id, product.id)) {
+    return res.status(409).json({ error: 'You already have a Custom Flag checkout in progress. Finish or cancel it first.' });
+  }
 
   const orderInfo = db.prepare(`
     INSERT INTO orders (steam_id, product_id, status, amount_cents, test_mode, custom_fields_json, custom_file_path)
@@ -2671,7 +2760,26 @@ async function registerPayPalWebhooks() {
   }
 }
 
+// PayPal signs webhooks with a cert served from its own domain; the transmission
+// id/sig/time headers are always present on a genuine event. Requiring them (and
+// pinning the cert host) lets us reject junk BEFORE spending any outbound
+// verify round-trips to PayPal — the amplification/DoS guard.
+const PAYPAL_CERT_HOST = /^https:\/\/api(-m)?\.(sandbox\.)?paypal\.com\//i;
+function hasPlausiblePayPalHeaders(h) {
+  const certUrl = h['paypal-cert-url'];
+  return !!(h['paypal-transmission-id'] &&
+            h['paypal-transmission-sig'] &&
+            h['paypal-transmission-time'] &&
+            certUrl && PAYPAL_CERT_HOST.test(certUrl));
+}
+
 async function webhookHandler(req, res) {
+  // Cheap rejection first: anything without well-formed PayPal signature
+  // headers can't possibly verify, so drop it without calling PayPal.
+  if (!hasPlausiblePayPalHeaders(req.headers)) {
+    return res.sendStatus(400);
+  }
+
   let event;
   try {
     event = JSON.parse(req.body.toString('utf8'));

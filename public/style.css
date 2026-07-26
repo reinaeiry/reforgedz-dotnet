@@ -2958,3 +2958,21 @@ img { display: block; max-width: 100%; }
 
   .contact-channel-name { font-size: 1rem; }
 }
+
+/* ============================================
+   Reduced motion (accessibility + perf)
+   Honors the OS "reduce motion" preference: stops the continuously
+   repainting loops (scroll bob, waveforms, status pulse, hero zoom)
+   and the smooth-scroll. No effect for users who haven't opted in.
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .hero-bg, .hero-bg.loaded { transform: none !important; }
+  .reveal { opacity: 1 !important; transform: none !important; }
+}

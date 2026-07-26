@@ -13,6 +13,18 @@ const SANDBOX_BASE = 'https://api-m.sandbox.paypal.com';
 
 function apiBase(testMode) { return testMode ? SANDBOX_BASE : LIVE_BASE; }
 
+// fetch() with an abort timeout so a slow/hung PayPal endpoint can't pin the
+// event loop or stall the webhook handler indefinitely.
+async function fetchWithTimeout(url, opts = {}, timeoutMs = 12000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function creds(testMode) {
   if (testMode) {
     return { id: process.env.PAYPAL_TEST_CLIENT_ID || '', secret: process.env.PAYPAL_TEST_SECRET || '' };
@@ -36,7 +48,7 @@ async function getAccessToken(testMode) {
   const c = creds(testMode);
   if (!c.id || !c.secret) throw new Error(`PayPal ${envKey} credentials not configured`);
   const auth = Buffer.from(`${c.id}:${c.secret}`).toString('base64');
-  const res = await fetch(`${apiBase(testMode)}/v1/oauth2/token`, {
+  const res = await fetchWithTimeout(`${apiBase(testMode)}/v1/oauth2/token`, {
     method: 'POST',
     headers: {
       'Authorization': `Basic ${auth}`,
@@ -58,7 +70,7 @@ async function getAccessToken(testMode) {
 
 async function ppFetch(testMode, path, { method = 'GET', body, headers } = {}) {
   const token = await getAccessToken(testMode);
-  const res = await fetch(`${apiBase(testMode)}${path}`, {
+  const res = await fetchWithTimeout(`${apiBase(testMode)}${path}`, {
     method,
     headers: {
       'Authorization': `Bearer ${token}`,
