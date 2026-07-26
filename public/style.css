@@ -865,6 +865,8 @@ img { display: block; max-width: 100%; }
 .ng-note strong { color: var(--text); font-weight: 600; }
 .ng-note em     { color: var(--text); font-weight: 600; font-style: normal; }
 
+.ng-wifi { margin-top: 18px; }
+
 @media (max-width: 900px) {
   .ng-panel { grid-template-columns: 1fr; gap: 36px; }
   .ng-report { max-width: 30rem; }

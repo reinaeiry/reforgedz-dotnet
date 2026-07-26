@@ -90,6 +90,17 @@ const authLimiter = rateLimit({
 
 app.use(globalLimiter);
 
+// ---- wifi.reforgedz.net ----
+// The Cloudflare tunnel points the wifi subdomain at this same container, so
+// route by Host before sessions/static kick in. The tester is one self-contained
+// page; every GET on that host gets it, anything else 404s.
+const wifiPage = path.join(__dirname, 'public', 'wifi', 'index.html');
+app.use((req, res, next) => {
+  if (req.hostname !== 'wifi.reforgedz.net') return next();
+  if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).end();
+  res.sendFile(wifiPage);
+});
+
 // ---- Middleware ----
 app.use(express.json());
 app.use(session({
