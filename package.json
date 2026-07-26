@@ -14,7 +14,7 @@
     "express-rate-limit": "^8.5.1",
     "express-session": "^1.19.0",
     "multer": "^2.0.2",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^9.0.3",
     "passport": "^0.7.0",
     "passport-steam": "^1.0.18",
     "ssh2": "^1.17.0"
