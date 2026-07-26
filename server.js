@@ -502,9 +502,17 @@ const bmIdCache = new Map();
 
 let serverStatusCache = { servers: [], lastUpdate: null };
 
+// BattleMetrics stopped serving anonymous API requests (every endpoint now
+// 403s without a token), so all BM calls must carry the same token the
+// player-search already uses.
+function bmAuthHeaders() {
+  const tk = process.env.BATTLEMETRICS_TOKEN;
+  return tk ? { Authorization: `Bearer ${tk}` } : {};
+}
+
 async function fetchBattleMetricsPlayers(bmId) {
   try {
-    const res = await fetch(`https://api.battlemetrics.com/servers/${bmId}`);
+    const res = await fetch(`https://api.battlemetrics.com/servers/${bmId}`, { headers: bmAuthHeaders() });
     if (!res.ok) return null;
     const data = await res.json();
     const a = data?.data?.attributes;
@@ -520,7 +528,8 @@ async function resolveBattleMetricsId(rawIp, port, serverName) {
   const portNum = Number(port);
   try {
     const ipUrl = `https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(rawIp)}&page[size]=10`;
-    const res = await fetch(ipUrl);
+    const res = await fetch(ipUrl, { headers: bmAuthHeaders() });
+    if (!res.ok) console.warn(`[bm] server search HTTP ${res.status} for ${rawIp}`);
     if (res.ok) {
       const list = (await res.json())?.data || [];
       const exact = list.find(s => s.attributes?.ip === rawIp && Number(s.attributes?.port) === portNum);
@@ -531,7 +540,7 @@ async function resolveBattleMetricsId(rawIp, port, serverName) {
     const tagMatch = (serverName || '').match(/\[([^\]]+)\]/);
     const tag = tagMatch ? tagMatch[1] : null;
     if (tag) {
-      const nameRes = await fetch(`https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(tag)}&page[size]=5`);
+      const nameRes = await fetch(`https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(tag)}&page[size]=5`, { headers: bmAuthHeaders() });
       if (nameRes.ok) {
         const nd = (await nameRes.json())?.data || [];
         const tagUpper = tag.toUpperCase();
