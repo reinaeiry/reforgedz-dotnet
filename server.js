@@ -4,7 +4,15 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
+// Session store on better-sqlite3 (which the app already uses), dropping the
+// unmaintained connect-sqlite3 and its entire native-build dependency chain
+// (sqlite3 → node-gyp → tar/cacache/glob/...). Fresh DB filename so it doesn't
+// collide with the old connect-sqlite3 table schema in sessions.db — existing
+// logins reset once on cutover, which is expected.
+const SqliteStore = require('better-sqlite3-session-store')(session);
+const Database = require('better-sqlite3');
+const sessionDb = new Database(path.join(__dirname, 'sessions-store.db'));
+sessionDb.pragma('journal_mode = WAL');
 const passport = require('passport');
 const SteamStrategy = require('passport-steam').Strategy;
 const db = require('./db');
@@ -170,7 +178,10 @@ app.use((req, res, next) => {
 // ---- Middleware ----
 app.use(express.json());
 app.use(session({
-  store: new SQLiteStore({ db: 'sessions.db', dir: __dirname }),
+  store: new SqliteStore({
+    client: sessionDb,
+    expired: { clear: true, intervalMs: 15 * 60 * 1000 }
+  }),
   secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
   resave: false,
   saveUninitialized: false,
