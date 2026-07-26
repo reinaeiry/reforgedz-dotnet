@@ -2,160 +2,178 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>WiFi Room Meter</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WiFi Room Meter | ReforgedZ</title>
+<meta name="theme-color" content="#cc1f1f">
+<link rel="icon" type="image/svg+xml" href="https://reforgedz.net/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
   :root {
-    --body: #1b1d20;
-    --panel: #26292e;
-    --panel-edge: #33373d;
-    --chassis: #f5b700;
-    --chassis-dark: #c99700;
-    --lcd: #c9d4bf;
-    --lcd-dim: #aab5a1;
-    --lcd-ink: #232a1e;
-    --lcd-ghost: rgba(35,42,30,0.10);
-    --text: #e8e9ea;
-    --text-dim: #9aa0a6;
+    --bg: #0c0c0c;
+    --surface: #181818;
+    --surface-raised: #202020;
+    --screen: #0e0e0e;
+    --border: rgba(255,255,255,0.07);
+    --border-hover: rgba(255,255,255,0.15);
+    --accent: #cc1f1f;
+    --accent-hover: #e02525;
+    --accent-ghost: rgba(204,31,31,0.08);
+    --text: #f0f0f0;
+    --text-dim: #aaa;
+    --text-ghost: #777;
     --good: #4caf6d;
     --fair: #e0a52e;
     --poor: #d95c4a;
+    --display: 'Oswald', sans-serif;
+    --mono: 'Share Tech Mono', monospace;
   }
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
-    background: var(--body);
+    background: var(--bg);
     color: var(--text);
-    font-family: 'Barlow', -apple-system, sans-serif;
+    font-family: 'Inter', -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     padding: 14px;
     max-width: 460px;
     margin: 0 auto;
   }
+  ::selection { background: var(--accent); color: #000; }
 
-  .brandbar { display:flex; align-items:center; justify-content:space-between; padding: 10px 4px 12px; }
-  .brandbar .name { font-weight:700; letter-spacing:.14em; font-size:13px; text-transform:uppercase; }
-  .brandbar .name span { color: var(--chassis); }
-  .brandbar .model { font-family:'Share Tech Mono',monospace; font-size:11px; color:var(--text-dim); letter-spacing:.08em; }
+  .brandbar { display:flex; align-items:center; justify-content:space-between; padding: 10px 4px 14px; }
+  .brandbar .name {
+    font-family:var(--display); font-weight:700; letter-spacing:3px; font-size:15px;
+    text-transform:uppercase; color:var(--text); text-decoration:none;
+  }
+  .brandbar .name span { color: var(--accent); }
+  .brandbar .model { font-family:var(--mono); font-size:11px; color:var(--text-ghost); letter-spacing:.08em; }
 
   .meter {
-    border: 3px solid var(--chassis);
-    border-radius: 14px;
-    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
     overflow: hidden;
     box-shadow: 0 4px 18px rgba(0,0,0,.45);
   }
   .lcd {
-    background: linear-gradient(180deg, var(--lcd) 0%, var(--lcd-dim) 100%);
-    color: var(--lcd-ink);
+    background: var(--screen);
+    color: var(--text);
     padding: 16px 16px 12px;
-    font-family: 'Share Tech Mono', monospace;
+    font-family: var(--mono);
+    border-bottom: 1px solid var(--border);
   }
   .lcd .toprow {
     display:flex; justify-content:space-between; align-items:baseline;
     font-size:11px; letter-spacing:.12em; text-transform:uppercase;
-    opacity:.75; margin-bottom:4px;
+    color:var(--text-ghost); margin-bottom:4px;
   }
   .lcd .main { display:flex; align-items:baseline; gap:10px; line-height:1; }
-  .lcd .value { font-size:72px; font-variant-numeric:tabular-nums; position:relative; }
-  .lcd .value .ghost { position:absolute; left:0; top:0; color:var(--lcd-ghost); }
-  .lcd .unit { font-size:20px; }
+  .lcd .value { font-size:72px; font-variant-numeric:tabular-nums; position:relative; color:var(--accent); }
+  .lcd .value .ghost { position:absolute; left:0; top:0; color:var(--accent-ghost); }
+  .lcd .unit { font-size:20px; color:var(--text-dim); }
   .lcd .rating { margin-top:6px; font-size:15px; letter-spacing:.18em; text-transform:uppercase; }
-  .lcd .subs { display:flex; margin-top:12px; border-top:1px dashed rgba(35,42,30,.3); padding-top:8px; }
+  .lcd .subs { display:flex; margin-top:12px; border-top:1px dashed rgba(255,255,255,.08); padding-top:8px; }
   .lcd .sub { flex:1; }
-  .lcd .sub + .sub { border-left:1px dashed rgba(35,42,30,.3); padding-left:12px; }
-  .lcd .sub .k { font-size:10px; letter-spacing:.12em; text-transform:uppercase; opacity:.65; }
+  .lcd .sub + .sub { border-left:1px dashed rgba(255,255,255,.08); padding-left:12px; }
+  .lcd .sub .k { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-ghost); }
   .lcd .sub .v { font-size:20px; margin-top:2px; font-variant-numeric:tabular-nums; }
-  .lcd .sub .v small { font-size:11px; opacity:.75; }
+  .lcd .sub .v small { font-size:11px; color:var(--text-dim); }
 
-  .progresswrap { background:var(--panel); border-top:1px solid var(--panel-edge); padding:12px 16px; }
+  .progresswrap { background:var(--surface); padding:12px 16px; }
   .progresswrap .k { display:flex; justify-content:space-between; font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-dim); margin-bottom:6px; }
-  .ptrack { height:10px; background:#1b1d20; border-radius:5px; overflow:hidden; }
-  .pfill { height:100%; width:0%; background:var(--chassis); border-radius:5px; transition:width .3s linear; }
+  .ptrack { height:8px; background:var(--bg); border-radius:4px; overflow:hidden; }
+  .pfill { height:100%; width:0%; background:var(--accent); border-radius:4px; transition:width .3s linear; }
 
   .setup { margin-top:16px; }
   .setup input {
-    width:100%; background:var(--panel); border:1px solid var(--panel-edge);
-    border-radius:10px; color:var(--text); padding:14px; font-size:16px;
-    font-family:'Barlow',sans-serif;
+    width:100%; background:var(--surface); border:1px solid var(--border);
+    border-radius:6px; color:var(--text); padding:14px; font-size:16px;
+    font-family:'Inter',sans-serif;
   }
-  .setup input::placeholder { color:#6b7076; }
-  .setup input:focus-visible { outline:3px solid var(--chassis); outline-offset:1px; }
-  button { font-family:'Barlow',sans-serif; cursor:pointer; border:none; border-radius:10px; font-weight:600; }
-  button:focus-visible { outline:3px solid var(--chassis); outline-offset:2px; }
+  .setup input::placeholder { color:var(--text-ghost); }
+  .setup input:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  button { font-family:'Inter',sans-serif; cursor:pointer; border:none; border-radius:6px; font-weight:600; }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .btn-test {
-    width:100%; margin-top:10px; padding:16px; font-size:16px; letter-spacing:.06em; text-transform:uppercase;
-    background:var(--chassis); color:#1b1500; border-bottom:4px solid var(--chassis-dark);
+    width:100%; margin-top:10px; padding:15px; font-size:15px; letter-spacing:.06em; text-transform:uppercase;
+    background:var(--accent); color:#fff;
+    transition: background .2s, transform .15s;
   }
-  .btn-test:active { transform:translateY(2px); border-bottom-width:2px; }
+  .btn-test:hover { background:var(--accent-hover); }
+  .btn-test:active { transform:translateY(1px); }
   .btn-test:disabled { opacity:.45; cursor:default; }
-  .btn-test.cancel { background:#3a3e44; color:var(--text); border-bottom-color:#2b2e33; }
+  .btn-test.cancel { background:var(--surface-raised); color:var(--text); border:1px solid var(--border-hover); }
   .hint { font-size:12px; color:var(--text-dim); margin-top:8px; padding:0 4px; line-height:1.5; }
 
   .rooms { margin-top:22px; }
   .rooms h2, .report h2 {
-    font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+    font-family:var(--display); font-size:12px; letter-spacing:2px; text-transform:uppercase;
     color:var(--text-dim); font-weight:600; margin-bottom:8px; padding:0 4px;
   }
   .roomlist { display:flex; flex-direction:column; gap:8px; }
-  .room { background:var(--panel); border:1px solid var(--panel-edge); border-radius:12px; padding:12px 14px; }
+  .room { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 14px; }
   .room.best { border-color: var(--good); }
   .room .head { display:flex; justify-content:space-between; align-items:baseline; }
   .room .rname { font-weight:600; font-size:15px; }
-  .room .rbadge { font-family:'Share Tech Mono',monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
+  .room .rbadge { font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
   .room .bars { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
   .bar { display:flex; align-items:center; gap:8px; font-size:12px; }
-  .bar .bk { width:52px; color:var(--text-dim); font-family:'Share Tech Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
-  .bar .track { flex:1; height:8px; background:#1b1d20; border-radius:4px; overflow:hidden; }
-  .bar .fill { height:100%; border-radius:4px; background:var(--chassis); transition:width .4s ease; }
-  .bar .bv { width:74px; text-align:right; font-family:'Share Tech Mono',monospace; font-variant-numeric:tabular-nums; }
-  .room .rdel { background:none; color:#6b7076; font-size:12px; padding:4px 6px; margin:-4px -6px 0 8px; }
+  .bar .bk { width:52px; color:var(--text-dim); font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+  .bar .track { flex:1; height:8px; background:var(--bg); border-radius:4px; overflow:hidden; }
+  .bar .fill { height:100%; border-radius:4px; background:var(--accent); transition:width .4s ease; }
+  .bar .bv { width:74px; text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  .room .rdel { background:none; color:var(--text-ghost); font-size:12px; padding:4px 6px; margin:-4px -6px 0 8px; }
   .empty {
-    text-align:center; color:#6b7076; font-size:13px; padding:22px 10px;
-    border:1px dashed var(--panel-edge); border-radius:12px; line-height:1.6;
+    text-align:center; color:var(--text-ghost); font-size:13px; padding:22px 10px;
+    border:1px dashed var(--border); border-radius:8px; line-height:1.6;
   }
 
   .btn-analyze {
-    width:100%; margin-top:14px; padding:16px; font-size:15px; letter-spacing:.08em; text-transform:uppercase;
-    background:var(--panel); color:var(--chassis); border:2px solid var(--chassis);
+    width:100%; margin-top:14px; padding:15px; font-size:14px; letter-spacing:.08em; text-transform:uppercase;
+    background:rgba(255,255,255,0.08); color:var(--text); border:1px solid var(--border-hover);
+    transition: background .2s, border-color .2s;
   }
+  .btn-analyze:hover:not(:disabled) { background:rgba(255,255,255,0.13); border-color:rgba(255,255,255,0.3); }
   .btn-analyze:disabled { opacity:.35; cursor:default; }
 
   .report { margin-top:22px; display:none; }
   .report.show { display:block; }
   .reportcard {
-    border:3px solid var(--chassis); border-radius:14px; overflow:hidden;
-    background: linear-gradient(180deg, var(--lcd) 0%, var(--lcd-dim) 100%);
-    color: var(--lcd-ink);
-    font-family:'Share Tech Mono',monospace;
+    border:1px solid var(--border); border-top:3px solid var(--accent); border-radius:8px; overflow:hidden;
+    background: var(--surface);
+    color: var(--text);
+    font-family:var(--mono);
   }
   .reportcard .rhead {
-    padding:14px 16px 10px; border-bottom:2px solid rgba(35,42,30,.35);
+    padding:14px 16px 10px; border-bottom:1px solid var(--border);
     display:flex; justify-content:space-between; align-items:baseline;
   }
   .reportcard .rtitle { font-size:13px; letter-spacing:.16em; text-transform:uppercase; }
-  .reportcard .rdate { font-size:10px; opacity:.65; }
-  .reportcard .verdict { padding:14px 16px; font-size:13px; line-height:1.65; border-bottom:1px dashed rgba(35,42,30,.3); font-family:'Barlow',sans-serif; font-weight:500; }
+  .reportcard .rdate { font-size:10px; color:var(--text-ghost); }
+  .reportcard .verdict { padding:14px 16px; font-size:13px; line-height:1.65; border-bottom:1px dashed rgba(255,255,255,.08); font-family:'Inter',sans-serif; font-weight:500; }
   .ranking { padding:10px 16px 4px; }
-  .rankrow { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px dashed rgba(35,42,30,.2); font-size:13px; }
+  .rankrow { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px dashed rgba(255,255,255,.06); font-size:13px; }
   .rankrow:last-child { border-bottom:none; }
-  .rankrow .pos { width:22px; font-size:15px; }
-  .rankrow .rrname { flex:1; font-family:'Barlow',sans-serif; font-weight:600; font-size:14px; }
+  .rankrow .pos { width:22px; font-size:15px; color:var(--text-dim); }
+  .rankrow .rrname { flex:1; font-family:'Inter',sans-serif; font-weight:600; font-size:14px; }
   .rankrow .grade { width:30px; text-align:center; font-size:16px; font-weight:400; }
-  .rankrow .score { width:56px; text-align:right; font-size:11px; opacity:.75; }
+  .rankrow .score { width:56px; text-align:right; font-size:11px; color:var(--text-ghost); }
   .insights { padding:12px 16px 14px; }
-  .insights .ik { font-size:10px; letter-spacing:.14em; text-transform:uppercase; opacity:.65; margin-bottom:6px; }
-  .insight { font-family:'Barlow',sans-serif; font-size:13px; line-height:1.55; padding:5px 0 5px 16px; position:relative; }
-  .insight:before { content:"▸"; position:absolute; left:0; font-family:'Share Tech Mono',monospace; }
+  .insights .ik { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-ghost); margin-bottom:6px; }
+  .insight { font-family:'Inter',sans-serif; font-size:13px; line-height:1.55; padding:5px 0 5px 16px; position:relative; }
+  .insight:before { content:"▸"; position:absolute; left:0; font-family:var(--mono); color:var(--accent); }
+
+  .sitelink { text-align:center; margin:26px 0 8px; font-family:var(--mono); font-size:11px; letter-spacing:.08em; color:var(--text-ghost); }
+  .sitelink a { color:var(--text-dim); text-decoration:none; }
+  .sitelink a:hover { color:var(--text); }
   @media (prefers-reduced-motion: reduce) { .bar .fill, .pfill { transition:none; } }
 </style>
 </head>
 <body>
 
 <div class="brandbar">
-  <div class="name">WIFI <span>ROOM METER</span></div>
-  <div class="model">RM-5 · 30s SURVEY</div>
+  <a class="name" href="https://reforgedz.net">REFORGED<span>Z</span></a>
+  <div class="model">WIFI ROOM METER · 30s SURVEY</div>
 </div>
 
 <div class="meter">
@@ -210,9 +228,14 @@
   </div>
 </div>
 
+<p class="sitelink">a ReforgedZ field tool &middot; <a href="https://reforgedz.net">reforgedz.net</a></p>
+
 <script>
 (function(){
-  var PING_URL  = "https://cdnjs.cloudflare.com/ajax/libs/humps/2.0.1/humps.min.js";
+  // Ping our own origin: same Cloudflare path every room, no third-party
+  // dependency that can 404 out from under us. Speed test stays on a big
+  // CDN-cached file so it measures the connection, not our server.
+  var PING_URL  = "/";
   var SPEED_URL = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
   var SAMPLES = 6, GAP = 5000; // 6 samples x 5s = 30s survey
 
