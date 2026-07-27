@@ -676,8 +676,12 @@ async function resolveBattleMetricsId(rawIp, port, serverName) {
       const list = (await res.json())?.data || [];
       const exact = list.find(s => s.attributes?.ip === rawIp && Number(s.attributes?.port) === portNum);
       if (exact?.id) return exact.id;
-      const ipOnly = list.find(s => s.attributes?.ip === rawIp);
-      if (ipOnly?.id) return ipOnly.id;
+      // Fall back to IP-only ONLY when that IP hosts a single Reforger server.
+      // Several of ours share a box (EU1/EU2/EU Dev on one IP), so an unqualified
+      // IP match would hand this server a different one's BattleMetrics id — that
+      // is how "eirys goonserver" ended up mirroring EU1's player count.
+      const ipMatches = list.filter(s => s.attributes?.ip === rawIp);
+      if (ipMatches.length === 1 && ipMatches[0].id) return ipMatches[0].id;
     }
     const tagMatch = (serverName || '').match(/\[([^\]]+)\]/);
     const tag = tagMatch ? tagMatch[1] : null;
@@ -734,10 +738,13 @@ async function pollServerStatus() {
     for (const srv of servers) {
       const attr = srv.attributes;
       const id = attr.identifier;
-      const nameLower = (attr.name || '').toLowerCase();
-
-      // Skip dev servers and web servers
-      if (nameLower.includes('dev') || nameLower.includes('.net') || nameLower.includes('.com')) continue;
+      // Only the official public game servers belong on the homepage. Match the
+      // [EU1]/[EU2]/[NA1]/[NA2] tag POSITIVELY rather than blacklisting keywords:
+      // the old "skip anything containing dev/.net/.com" let unrelated servers on
+      // the same panel through — a Palworld server named "eirys goonserver" showed
+      // up as a phantom entry. Dev builds are tagged "[EU Dev]"/"[NA Dev]" (no
+      // digit after the region), so they stay excluded as before.
+      if (!/\[(?:EU|NA)\d+\]/i.test(attr.name || '')) continue;
 
       const region = detectRegion(attr.name, attr.node);
 
