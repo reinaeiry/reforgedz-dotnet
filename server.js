@@ -166,12 +166,67 @@ app.use(globalLimiter);
 
 // ---- wifi.reforgedz.net ----
 // The Cloudflare tunnel points the wifi subdomain at this same container, so
-// route by Host before sessions/static kick in. The tester is one self-contained
-// page; every GET on that host gets it, anything else 404s.
+// route by Host before sessions/static kick in. Besides the page itself, the
+// subdomain serves its own speed-test endpoints, because the site's CSP is
+// connect-src 'self': the tester may only talk to its own origin.
+//
+//   /ping.bin        32 B, edge-cached  -> latency to the nearest Cloudflare PoP
+//   /blob-<n>m.bin   incompressible bulk, edge-cached -> download measures the
+//                    user's access network, not the tunnel back to this box
+//   /upload          POST, drained and counted here -> upload DOES traverse to
+//                    this box; the page labels it accordingly
+//
+// The .bin extension matters: it is on Cloudflare's default-cacheable list, so
+// with Cache-Control public the edge keeps these and only /upload and the page
+// itself ever reach this process once a PoP is warm.
 const wifiPage = path.join(__dirname, 'public', 'wifi', 'index.html');
+// 1 MiB of noise, repeated per-request below. gzip's 32 KB window cannot fold
+// the repetition, so the wire size is the advertised size.
+const wifiChunk = crypto.randomBytes(1024 * 1024);
+const WIFI_BLOBS = { '/blob-1m.bin': 1, '/blob-10m.bin': 10, '/blob-25m.bin': 25 };
+const WIFI_UPLOAD_CAP = 40 * 1024 * 1024;
+
+function sendWifiBlob(res, mib) {
+  res.writeHead(200, {
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': String(mib * wifiChunk.length),
+    'Cache-Control': 'public, max-age=86400, immutable'
+  });
+  let left = mib;
+  (function pump() {
+    while (left > 0) {
+      left--;
+      if (!res.write(wifiChunk)) { res.once('drain', pump); return; }
+    }
+    res.end();
+  })();
+}
+
 app.use((req, res, next) => {
   if (req.hostname !== 'wifi.reforgedz.net') return next();
+
+  if (req.method === 'POST' && req.path === '/upload') {
+    let received = 0;
+    req.on('data', (c) => {
+      received += c.length;
+      if (received > WIFI_UPLOAD_CAP) req.destroy();
+    });
+    req.on('end', () => res.json({ received }));
+    req.on('error', () => { try { res.destroy(); } catch {} });
+    return;
+  }
+
   if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).end();
+  if (req.path === '/ping.bin') {
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': '32',
+      'Cache-Control': 'public, max-age=86400, immutable'
+    });
+    return res.end(wifiChunk.subarray(0, 32));
+  }
+  const mib = WIFI_BLOBS[req.path];
+  if (mib) return sendWifiBlob(res, mib);
   res.sendFile(wifiPage);
 });
 

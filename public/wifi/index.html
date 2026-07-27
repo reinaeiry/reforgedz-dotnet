@@ -73,11 +73,11 @@
   .lcd .unit { font-size:20px; color:var(--text-dim); }
   .lcd .rating { margin-top:6px; font-size:15px; letter-spacing:.18em; text-transform:uppercase; }
   .lcd .subs { display:flex; margin-top:12px; border-top:1px dashed rgba(255,255,255,.08); padding-top:8px; }
-  .lcd .sub { flex:1; }
-  .lcd .sub + .sub { border-left:1px dashed rgba(255,255,255,.08); padding-left:12px; }
-  .lcd .sub .k { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-ghost); }
-  .lcd .sub .v { font-size:20px; margin-top:2px; font-variant-numeric:tabular-nums; }
-  .lcd .sub .v small { font-size:11px; color:var(--text-dim); }
+  .lcd .sub { flex:1; min-width:0; }
+  .lcd .sub + .sub { border-left:1px dashed rgba(255,255,255,.08); padding-left:10px; }
+  .lcd .sub .k { font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-ghost); white-space:nowrap; }
+  .lcd .sub .v { font-size:17px; margin-top:2px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .lcd .sub .v small { font-size:10px; color:var(--text-dim); }
 
   .progresswrap { background:var(--surface); padding:12px 16px; }
   .progresswrap .k { display:flex; justify-content:space-between; font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-dim); margin-bottom:6px; }
@@ -121,7 +121,7 @@
   .bar .bk { width:52px; color:var(--text-dim); font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
   .bar .track { flex:1; height:8px; background:var(--bg); border-radius:4px; overflow:hidden; }
   .bar .fill { height:100%; border-radius:4px; background:var(--accent); transition:width .4s ease; }
-  .bar .bv { width:74px; text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  .bar .bv { width:76px; text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
   .room .rdel { background:none; color:var(--text-ghost); font-size:12px; padding:4px 6px; margin:-4px -6px 0 8px; }
   .empty {
     text-align:center; color:var(--text-ghost); font-size:13px; padding:22px 10px;
@@ -173,7 +173,7 @@
 
 <div class="brandbar">
   <a class="name" href="https://reforgedz.net">REFORGED<span>Z</span></a>
-  <div class="model">WIFI ROOM METER · 30s SURVEY</div>
+  <div class="model">WIFI ROOM METER · RM-6</div>
 </div>
 
 <div class="meter">
@@ -189,8 +189,9 @@
     <div class="rating" id="rating">ENTER A ROOM &amp; TEST</div>
     <div class="subs">
       <div class="sub"><div class="k">Jitter</div><div class="v"><span id="jitVal">--</span> <small>ms</small></div></div>
-      <div class="sub"><div class="k">Download</div><div class="v"><span id="spdVal">--</span> <small>Mbps</small></div></div>
-      <div class="sub"><div class="k">Sample</div><div class="v"><span id="cntVal">0</span><small>/6</small></div></div>
+      <div class="sub"><div class="k">Down</div><div class="v"><span id="dlVal">--</span> <small>Mbps</small></div></div>
+      <div class="sub"><div class="k">Up</div><div class="v"><span id="ulVal">--</span> <small>Mbps</small></div></div>
+      <div class="sub"><div class="k">Loaded</div><div class="v"><span id="loadVal">--</span> <small>ms</small></div></div>
     </div>
   </div>
   <div class="progresswrap">
@@ -202,7 +203,7 @@
 <div class="setup">
   <input id="roomName" type="text" placeholder="Room name — e.g. Kitchen" autocomplete="off">
   <button class="btn-test" id="testBtn">Test this room</button>
-  <p class="hint">Stand where you'd actually use your phone in that room. The test runs 30 seconds (6 samples), averages them, and saves the room automatically. Then move to the next room.</p>
+  <p class="hint">Stand where you'd actually use your phone in that room. The test takes about 20 seconds: latency &amp; jitter, real download, upload, and latency under load. It saves the room automatically — then move to the next room.</p>
 </div>
 
 <div class="rooms">
@@ -232,125 +233,264 @@
 
 <script>
 (function(){
-  // Ping our own origin: same Cloudflare path every room, no third-party
-  // dependency that can 404 out from under us. Speed test stays on a big
-  // CDN-cached file so it measures the connection, not our server.
-  var PING_URL  = "/";
-  var SPEED_URL = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
-  var SAMPLES = 6, GAP = 5000; // 6 samples x 5s = 30s survey
+  // Everything is same-origin (the site's CSP allows nothing else).
+  // ping.bin and the blobs are cached on Cloudflare's edge, so latency and
+  // download measure the path to the nearest Cloudflare PoP -- the same
+  // "nearby server" model the big speed tests use. Upload POSTs travel all
+  // the way to the ReforgedZ box, and the analysis says so.
+  var PING_URL = "/ping.bin";
+  var UP_URL   = "/upload";
+  var BLOBS    = { small: "/blob-1m.bin", mid: "/blob-10m.bin", big: "/blob-25m.bin" };
+
+  var IDLE_BUDGET_MS = 3500,  IDLE_PINGS = 10;
+  var DL_WINDOW_MS   = 7000,  DL_DISCARD = 0.25;   // ramp-up excluded from the average
+  var UL_WINDOW_MS   = 6000;
+  var TOTAL_MS       = 20000;                       // for the progress bar only
 
   var rooms = [];
   var testing = false, cancelFlag = false;
+  var aborters = [];
 
   function $(id){ return document.getElementById(id); }
-  var latVal=$("latVal"), jitVal=$("jitVal"), spdVal=$("spdVal"), cntVal=$("cntVal");
+  var latVal=$("latVal"), jitVal=$("jitVal"), dlVal=$("dlVal"), ulVal=$("ulVal"), loadVal=$("loadVal");
   var rating=$("rating"), statusTxt=$("statusTxt"), roomTxt=$("roomTxt");
   var testBtn=$("testBtn"), roomName=$("roomName");
   var pfill=$("pfill"), progLabel=$("progLabel"), progTime=$("progTime");
   var roomList=$("roomList"), emptyMsg=$("emptyMsg"), analyzeBtn=$("analyzeBtn");
   var report=$("report"), verdict=$("verdict"), ranking=$("ranking"), insightList=$("insightList"), rdate=$("rdate");
 
-  function bust(u){ return u + "?t=" + Date.now() + Math.random().toString(36).slice(2); }
+  function median(a){
+    if (!a.length) return null;
+    var s = a.slice().sort(function(x,y){ return x-y; });
+    var m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m-1]+s[m])/2;
+  }
+  function clamp(lo, hi, v){ return Math.max(lo, Math.min(hi, v)); }
+  function fmtSpd(s){ return s >= 100 ? Math.round(s) : (s >= 10 ? s.toFixed(1) : s.toFixed(2)); }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function track(ctrl){ aborters.push(ctrl); return ctrl; }
+  function abortAll(){ aborters.forEach(function(c){ try { c.abort(); } catch(e){} }); aborters = []; }
 
+  // cache:'no-store' skips the browser cache but NOT Cloudflare's edge cache --
+  // exactly what we want: a real network round trip to the nearest PoP.
   function pingOnce(){
+    var ctrl = track(new AbortController());
     var t0 = performance.now();
-    return fetch(bust(PING_URL), { method:"HEAD", cache:"no-store", mode:"cors" })
+    return fetch(PING_URL, { cache: "no-store", signal: ctrl.signal })
+      .then(function(r){ return r.arrayBuffer(); })
       .then(function(){ return performance.now() - t0; });
   }
 
-  function speedTest(){
-    var t0 = performance.now();
-    return fetch(bust(SPEED_URL), { cache:"no-store", mode:"cors" })
-      .then(function(res){ return res.arrayBuffer(); })
-      .then(function(buf){
-        var secs = (performance.now() - t0) / 1000;
-        return (buf.byteLength * 8) / secs / 1e6;
-      });
+  async function idlePhase(){
+    try { await pingOnce(); } catch(e){ return null; }   // warm-up (may prime the PoP); discarded
+    var times = [], t0 = performance.now();
+    for (var i = 0; i < IDLE_PINGS; i++){
+      if (cancelFlag || performance.now() - t0 > IDLE_BUDGET_MS) break;
+      try { times.push(await pingOnce()); } catch(e){}
+    }
+    if (times.length < 3) return null;
+    var jit = 0;
+    for (var j = 1; j < times.length; j++) jit += Math.abs(times[j] - times[j-1]);
+    return { lat: median(times), jit: jit / (times.length - 1) };
   }
 
-  function rateWord(lat, spd){
+  // One continuously-reading stream: fetch the blob, count bytes as they
+  // arrive, refetch when it ends, until told to stop.
+  function streamLoop(url, counter, stopped){
+    var ctrl = track(new AbortController());
+    function once(){
+      if (stopped.v) return Promise.resolve();
+      return fetch(url, { cache: "no-store", signal: ctrl.signal }).then(function(res){
+        var reader = res.body.getReader();
+        function pump(){
+          return reader.read().then(function(r){
+            if (r.done) return once();
+            counter.bytes += r.value.length;
+            return stopped.v ? undefined : pump();
+          });
+        }
+        return pump();
+      }).catch(function(){});
+    }
+    return once();
+  }
+
+  async function downloadPhase(onTick){
+    // Quick estimate with the 1 MiB blob to pick blob size and stream count.
+    var est = 0;
+    try {
+      var t0 = performance.now();
+      var ctrl = track(new AbortController());
+      var timer = setTimeout(function(){ ctrl.abort(); }, 2500);
+      var got = 0;
+      var res = await fetch(BLOBS.small, { cache: "no-store", signal: ctrl.signal });
+      var reader = res.body.getReader();
+      for (;;){ var r = await reader.read(); if (r.done) break; got += r.value.length; }
+      clearTimeout(timer);
+      est = got * 8 / ((performance.now() - t0) / 1000) / 1e6;
+    } catch(e){ /* estimate failed; fall through with est=0 */ }
+    if (cancelFlag) return null;
+
+    var url = est < 5 ? BLOBS.small : (est < 40 ? BLOBS.mid : BLOBS.big);
+    var streams = est < 5 ? 2 : 3;
+
+    var counter = { bytes: 0 }, stopped = { v: false };
+    var loops = [];
+    for (var s = 0; s < streams; s++) loops.push(streamLoop(url, counter, stopped));
+
+    var loaded = [];
+    var start = performance.now();
+    var discardAt = start + DL_WINDOW_MS * DL_DISCARD;
+    var baseBytes = null, baseTime = null;
+    var lastLoadedPing = 0;
+
+    while (performance.now() - start < DL_WINDOW_MS && !cancelFlag){
+      await sleep(120);
+      var now = performance.now();
+      if (baseBytes === null && now >= discardAt){ baseBytes = counter.bytes; baseTime = now; }
+      if (now - lastLoadedPing > 700){
+        lastLoadedPing = now;
+        pingOnce().then(function(ms){ loaded.push(ms); }).catch(function(){});
+      }
+      var winBytes = baseBytes === null ? counter.bytes : counter.bytes - baseBytes;
+      var winSecs  = baseBytes === null ? (now - start) / 1000 : (now - baseTime) / 1000;
+      if (winSecs > 0.2) onTick(winBytes * 8 / winSecs / 1e6);
+    }
+    stopped.v = true;
+    abortAll();
+
+    var endBytes = counter.bytes, endTime = performance.now();
+    var mbps = null;
+    if (baseBytes !== null && endTime - baseTime > 1000)
+      mbps = (endBytes - baseBytes) * 8 / ((endTime - baseTime) / 1000) / 1e6;
+    else if (endTime - start > 1000)
+      mbps = endBytes * 8 / ((endTime - start) / 1000) / 1e6;
+    if (mbps === null || !(mbps > 0)) return null;
+    return { dl: mbps, loaded: loaded.length ? median(loaded) : null };
+  }
+
+  function makePayload(){
+    // 1 MiB of browser-generated noise (64 KiB is the per-call ceiling).
+    var buf = new Uint8Array(1024 * 1024);
+    for (var off = 0; off < buf.length; off += 65536)
+      crypto.getRandomValues(buf.subarray(off, off + 65536));
+    return new Blob([buf, buf]);   // 2 MiB per POST
+  }
+
+  async function uploadPhase(onTick){
+    var payload = makePayload();
+    var start = performance.now();
+    var acked = 0, firstAck = null;
+
+    function lane(){
+      if (cancelFlag || performance.now() - start > UL_WINDOW_MS) return Promise.resolve();
+      var ctrl = track(new AbortController());
+      return fetch(UP_URL, { method: "POST", body: payload, cache: "no-store", signal: ctrl.signal })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(){
+          var now = performance.now();
+          if (firstAck === null) firstAck = { t: now, b: 0 };   // warm-up chunk excluded
+          else { acked += payload.size; }
+          var secs = (now - firstAck.t) / 1000;
+          if (secs > 0.3 && acked > 0) onTick(acked * 8 / secs / 1e6);
+          return lane();
+        })
+        .catch(function(){ return sleep(300).then(lane); });
+    }
+    await Promise.all([lane(), lane()]);
+    abortAll();
+
+    if (firstAck === null) return null;                      // nothing ever landed
+    var secs = (performance.now() - firstAck.t) / 1000;
+    if (acked === 0 || secs < 0.5) return { ul: 0 };         // only the warm-up made it
+    return { ul: acked * 8 / secs / 1e6 };
+  }
+
+  function rateWord(lat, dl){
     if (lat == null) return ["NO SIGNAL", "var(--poor)"];
-    if (lat < 60 && spd >= 25) return ["EXCELLENT", "var(--good)"];
-    if (lat < 120 && spd >= 10) return ["GOOD", "var(--good)"];
-    if (lat < 250 && spd >= 3)  return ["FAIR", "var(--fair)"];
+    if (lat < 40  && dl >= 50) return ["EXCELLENT", "var(--good)"];
+    if (lat < 85  && dl >= 20) return ["GOOD", "var(--good)"];
+    if (lat < 160 && dl >= 6)  return ["FAIR", "var(--fair)"];
     return ["POOR", "var(--poor)"];
-  }
-
-  function fmtSpd(s){ return s >= 100 ? Math.round(s) : s.toFixed(1); }
-  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
-
-  async function takeSample(){
-    var pings = [];
-    for (var i=0;i<3;i++) pings.push(await pingOnce());
-    pings.sort(function(a,b){ return a-b; });
-    var spd = await speedTest();
-    return { lat: pings[1], jit: pings[2]-pings[0], spd: spd };
   }
 
   async function runSurvey(){
     var name = roomName.value.trim();
     if (!name) { roomName.focus(); roomName.placeholder = "Name the room first!"; return; }
-    testing = true; cancelFlag = false;
+    testing = true; cancelFlag = false; aborters = [];
     testBtn.textContent = "Cancel test";
     testBtn.classList.add("cancel");
     roomName.disabled = true;
     roomTxt.textContent = name.toUpperCase().slice(0,14);
-    var samples = [];
-    var startT = Date.now();
-    var totalMs = SAMPLES * GAP;
+    latVal.textContent = "--"; jitVal.textContent = "--"; dlVal.textContent = "--";
+    ulVal.textContent = "--"; loadVal.textContent = "--";
+    rating.textContent = "TESTING"; rating.style.color = "";
+    report.classList.remove("show");
 
+    var startT = performance.now();
     var tick = setInterval(function(){
-      var el = Date.now() - startT;
-      var pct = Math.min(100, el/totalMs*100);
-      pfill.style.width = pct + "%";
-      var remain = Math.max(0, Math.ceil((totalMs - el)/1000));
-      progTime.textContent = remain + "s left";
+      var el = performance.now() - startT;
+      pfill.style.width = Math.min(100, el / TOTAL_MS * 100) + "%";
+      var remain = Math.max(0, Math.ceil((TOTAL_MS - el) / 1000));
+      progTime.textContent = remain > 0 ? "~" + remain + "s left" : "finishing…";
     }, 250);
 
-    progLabel.textContent = "Surveying " + name;
+    var failWhy = null, entry = null;
     try {
-      for (var s=0; s<SAMPLES; s++){
-        if (cancelFlag) break;
-        var sampleStart = Date.now();
-        statusTxt.textContent = "Sampling…";
-        var smp = await takeSample();
-        samples.push(smp);
-        latVal.textContent = Math.round(smp.lat);
-        jitVal.textContent = Math.round(smp.jit);
-        spdVal.textContent = fmtSpd(smp.spd);
-        cntVal.textContent = samples.length;
-        var w = rateWord(smp.lat, smp.spd);
-        rating.textContent = w[0];
-        statusTxt.textContent = "Live";
-        if (s < SAMPLES-1 && !cancelFlag){
-          var wait = GAP - (Date.now() - sampleStart);
-          if (wait > 0) await sleep(wait);
-        }
-      }
+      // -- phase 1: idle latency --
+      statusTxt.textContent = "Pinging";
+      progLabel.textContent = "Latency & jitter";
+      var idle = await idlePhase();
+      if (cancelFlag) throw { cancelled: true };
+      if (!idle) { failWhy = "Couldn't reach the test server — is this device online?"; throw {}; }
+      latVal.textContent = Math.round(idle.lat);
+      jitVal.textContent = Math.round(idle.jit);
+
+      // -- phase 2: download + latency under load --
+      statusTxt.textContent = "Download";
+      progLabel.textContent = "Download & latency under load";
+      var dl = await downloadPhase(function(mbps){ dlVal.textContent = fmtSpd(mbps); });
+      if (cancelFlag) throw { cancelled: true };
+      if (!dl) { failWhy = "Download test failed — the connection dropped mid-test."; throw {}; }
+      dlVal.textContent = fmtSpd(dl.dl);
+      if (dl.loaded != null) loadVal.textContent = Math.round(dl.loaded);
+
+      // -- phase 3: upload --
+      statusTxt.textContent = "Upload";
+      progLabel.textContent = "Upload (to the ReforgedZ server)";
+      var ul = await uploadPhase(function(mbps){ ulVal.textContent = fmtSpd(mbps); });
+      if (cancelFlag) throw { cancelled: true };
+      var ulValNum = ul ? ul.ul : 0;
+      ulVal.textContent = fmtSpd(ulValNum);
+
+      entry = {
+        name: name,
+        lat: idle.lat, jit: idle.jit,
+        dl: dl.dl, ul: ulValNum,
+        loaded: dl.loaded != null ? dl.loaded : idle.lat
+      };
     } catch(e){
-      statusTxt.textContent = "Connection lost";
-      rating.textContent = "NO SIGNAL";
+      if (e && e.cancelled) failWhy = null;
     }
     clearInterval(tick);
+    abortAll();
 
-    if (!cancelFlag && samples.length >= 3){
-      var n = samples.length;
-      var avg = function(k){ return samples.reduce(function(a,x){ return a+x[k]; },0)/n; };
-      var entry = { name:name, lat:avg("lat"), jit:avg("jit"), spd:avg("spd"), n:n };
-      var ex = rooms.findIndex(function(r){ return r.name.toLowerCase() === name.toLowerCase(); });
+    if (entry){
+      var w = rateWord(entry.lat, entry.dl);
+      rating.textContent = w[0]; rating.style.color = w[1];
+      var ex = rooms.findIndex(function(r){ return r.name.toLowerCase() === entry.name.toLowerCase(); });
       if (ex >= 0) rooms[ex] = entry; else rooms.push(entry);
       renderRooms();
       progLabel.textContent = name + " saved — move to next room";
       pfill.style.width = "100%";
-      report.classList.remove("show");
     } else {
-      progLabel.textContent = cancelFlag ? "Test cancelled" : "Test failed — check connection";
+      progLabel.textContent = cancelFlag ? "Test cancelled" : (failWhy || "Test failed");
+      rating.textContent = cancelFlag ? "STANDBY" : "NO SIGNAL";
       pfill.style.width = "0%";
     }
     progTime.textContent = "";
     statusTxt.textContent = "Standby";
     roomTxt.textContent = "—";
-    cntVal.textContent = "0";
     testing = false;
     testBtn.textContent = "Test this room";
     testBtn.classList.remove("cancel");
@@ -360,7 +500,7 @@
   }
 
   testBtn.addEventListener("click", function(){
-    if (testing){ cancelFlag = true; return; }
+    if (testing){ cancelFlag = true; abortAll(); return; }
     runSurvey();
   });
   roomName.addEventListener("keydown", function(e){ if (e.key === "Enter" && !testing) runSurvey(); });
@@ -373,18 +513,22 @@
     if (!rooms.length) return;
     var bestLat = Math.min.apply(null, rooms.map(function(r){ return r.lat; }));
     var maxLat = Math.max.apply(null, rooms.map(function(r){ return r.lat; }).concat([1]));
-    var maxSpd = Math.max.apply(null, rooms.map(function(r){ return r.spd; }).concat([1]));
+    var maxDl = Math.max.apply(null, rooms.map(function(r){ return r.dl; }).concat([1]));
+    var maxUl = Math.max.apply(null, rooms.map(function(r){ return r.ul; }).concat([0.1]));
     rooms.forEach(function(r, idx){
       var div = document.createElement("div");
       div.className = "room" + (r.lat === bestLat && rooms.length > 1 ? " best" : "");
-      var w = rateWord(r.lat, r.spd);
+      var w = rateWord(r.lat, r.dl);
+      var bloat = Math.max(0, r.loaded - r.lat);
       div.innerHTML =
         '<div class="head"><span class="rname"></span>' +
         '<span><span class="rbadge" style="color:' + w[1] + '">' + w[0] + '</span>' +
         '<button class="rdel" aria-label="Remove room">✕</button></span></div>' +
         '<div class="bars">' +
         '<div class="bar"><span class="bk">Latency</span><span class="track"><span class="fill" style="width:' + Math.max(6, 100-(r.lat/maxLat)*100).toFixed(0) + '%"></span></span><span class="bv">' + Math.round(r.lat) + ' ms</span></div>' +
-        '<div class="bar"><span class="bk">Speed</span><span class="track"><span class="fill" style="width:' + Math.max(6,(r.spd/maxSpd)*100).toFixed(0) + '%"></span></span><span class="bv">' + fmtSpd(r.spd) + ' Mbps</span></div>' +
+        '<div class="bar"><span class="bk">Down</span><span class="track"><span class="fill" style="width:' + Math.max(6,(r.dl/maxDl)*100).toFixed(0) + '%"></span></span><span class="bv">' + fmtSpd(r.dl) + ' Mbps</span></div>' +
+        '<div class="bar"><span class="bk">Up</span><span class="track"><span class="fill" style="width:' + Math.max(6,(r.ul/maxUl)*100).toFixed(0) + '%"></span></span><span class="bv">' + fmtSpd(r.ul) + ' Mbps</span></div>' +
+        '<div class="bar"><span class="bk">Bloat</span><span class="track"><span class="fill" style="width:' + Math.max(6, Math.min(100, 100 - bloat/4)).toFixed(0) + '%"></span></span><span class="bv">+' + Math.round(bloat) + ' ms</span></div>' +
         '</div>';
       div.querySelector(".rname").textContent = r.name;
       div.querySelector(".rdel").addEventListener("click", function(){
@@ -395,16 +539,19 @@
   }
 
   function score(r){
-    var latScore = Math.max(0, 100 - (r.lat - 15) * 0.45);
-    var spdScore = Math.min(100, (r.spd / 100) * 100);
-    var jitPenalty = Math.min(20, r.jit * 0.3);
-    return Math.max(0, Math.min(100, latScore*0.5 + spdScore*0.5 - jitPenalty));
+    var latScore = clamp(0, 100, 100 - (r.lat - 15) * 0.5);
+    var dlScore  = clamp(0, 100, 34 * Math.log2(1 + r.dl / 3));
+    var ulScore  = clamp(0, 100, 34 * Math.log2(1 + r.ul / 1.5));
+    var bloat    = Math.max(0, r.loaded - r.lat);
+    var bloatPen = Math.min(25, bloat * 0.12);
+    var jitPen   = Math.min(15, r.jit * 0.6);
+    return clamp(0, 100, latScore * 0.35 + dlScore * 0.35 + ulScore * 0.30 - bloatPen - jitPen);
   }
   function grade(sc){
-    if (sc >= 88) return "A";
-    if (sc >= 75) return "B";
-    if (sc >= 60) return "C";
-    if (sc >= 45) return "D";
+    if (sc >= 85) return "A";
+    if (sc >= 70) return "B";
+    if (sc >= 55) return "C";
+    if (sc >= 40) return "D";
     return "F";
   }
 
@@ -419,9 +566,8 @@
     var d = new Date();
     rdate.textContent = d.toLocaleDateString() + " " + d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
 
-    // Verdict
     var latRatio = worst.r.lat / best.r.lat;
-    var spdRatio = best.r.spd / Math.max(0.1, worst.r.spd);
+    var spdRatio = best.r.dl / Math.max(0.1, worst.r.dl);
     var v;
     if (worst.g === "A" || (worst.g === "B" && latRatio < 1.6)){
       v = "Coverage is strong across all " + rooms.length + " rooms. " + best.r.name + " leads, but nowhere in the house is a problem. No changes needed.";
@@ -432,7 +578,6 @@
     }
     verdict.textContent = v;
 
-    // Ranking rows
     ranking.innerHTML = "";
     ranked.forEach(function(x, i){
       var row = document.createElement("div");
@@ -445,27 +590,34 @@
       ranking.appendChild(row);
     });
 
-    // Insights
     var ins = [];
-    ins.push("Best spot: " + best.r.name + " — " + Math.round(best.r.lat) + " ms, " + fmtSpd(best.r.spd) + " Mbps. Your router is likely closest to here, or has the cleanest line of sight.");
-    if (worst.sc < 60){
-      ins.push(worst.r.name + " is your dead zone (" + Math.round(worst.r.lat) + " ms, " + fmtSpd(worst.r.spd) + " Mbps). Options: move the router toward the middle of the house, add a mesh node or extender roughly halfway between the router and " + worst.r.name + ", or run ethernet to an access point there.");
+    ins.push("Best spot: " + best.r.name + " — " + Math.round(best.r.lat) + " ms, " + fmtSpd(best.r.dl) + " down / " + fmtSpd(best.r.ul) + " up. Your router is likely closest to here, or has the cleanest line of sight.");
+    if (worst.sc < 55){
+      ins.push(worst.r.name + " is your dead zone (" + Math.round(worst.r.lat) + " ms, " + fmtSpd(worst.r.dl) + " Mbps down). Options: move the router toward the middle of the house, add a mesh node or extender roughly halfway between the router and " + worst.r.name + ", or run ethernet to an access point there.");
     }
-    var highJit = ranked.filter(function(x){ return x.r.jit > 40; });
+    var bloaty = ranked.filter(function(x){ return (x.r.loaded - x.r.lat) > 80; });
+    if (bloaty.length){
+      ins.push("Latency under load jumps in " + bloaty.map(function(x){ return x.r.name; }).join(", ") + " (" + bloaty.map(function(x){ return "+" + Math.round(x.r.loaded - x.r.lat) + " ms"; }).join(", ") + " while downloading). That's bufferbloat — your router queues packets when the line is busy, which is what makes games lag while someone streams. Routers with SQM/Smart-Queue (or 'gaming QoS') fix exactly this.");
+    }
+    var highJit = ranked.filter(function(x){ return x.r.jit > 30; });
     if (highJit.length){
       ins.push("High jitter in " + highJit.map(function(x){ return x.r.name; }).join(", ") + " (" + highJit.map(function(x){ return Math.round(x.r.jit) + " ms"; }).join(", ") + "). That means unstable timing, not just weak signal — common causes: 2.4GHz congestion from neighbors, microwaves, baby monitors, or the phone hanging onto a distant band. Try locking those areas to 5GHz if your router broadcasts separate SSIDs.");
     }
+    var weakUp = ranked.filter(function(x){ return x.r.ul < 5; });
+    if (weakUp.length && weakUp.length < ranked.length){
+      ins.push("Upload struggles in " + weakUp.map(function(x){ return x.r.name; }).join(", ") + " — video calls and clip uploads will feel it there even when browsing seems fine.");
+    }
     var midRooms = ranked.filter(function(x){ return x.g === "C"; });
-    if (midRooms.length && worst.sc >= 45){
+    if (midRooms.length && worst.sc >= 40){
       ins.push(midRooms.map(function(x){ return x.r.name; }).join(", ") + (midRooms.length === 1 ? " sits" : " sit") + " in the middle — usable for browsing and video, but you may notice lag in games or on video calls.");
     }
-    if (spdRatio >= 3 && worst.r.spd < 15){
+    if (spdRatio >= 3 && worst.r.dl < 15){
       ins.push("Download speed collapses " + spdRatio.toFixed(1) + "× from best to worst room — a classic sign the far room is connecting on a weak fringe signal and retransmitting heavily.");
     }
     if (ranked.every(function(x){ return x.g === "A" || x.g === "B"; })){
       ins.push("No dead zones detected. If anything ever feels slow, it's more likely your internet plan or a specific device than WiFi coverage.");
     }
-    ins.push("Tip: results include your internet connection, so compare rooms against each other rather than against advertised plan speeds. Re-run the survey at a busy time of day if you want a stress test.");
+    ins.push("How this measures: latency and download go to the nearest Cloudflare edge server — the same 'nearby server' model the big speed tests use — and upload travels to the ReforgedZ server, so read upload as a room-to-room comparison. Results include your internet line: compare rooms against each other, and re-run at a busy hour for a stress test.");
 
     insightList.innerHTML = "";
     ins.forEach(function(t){
