@@ -196,38 +196,52 @@ function wrapForRegion(server, innerCmd) {
   return `ssh -o StrictHostKeyChecking=${SSH_STRICT} -o ConnectTimeout=10 -p ${server.port} ${server.user}@${server.host} 'echo ${innerB64} | base64 -d | bash'`;
 }
 
+// Read config.json + its on-disk SHA-256 in one round-trip, so the write can
+// compare-and-swap on it. Returns { config, hash } or null if the file is empty.
+async function readConfigWithHash(conn, server) {
+  const p = server.configPath;
+  const inner = `sha256sum '${p}' | cut -d' ' -f1; cat '${p}' | base64 -w0`;
+  const out = (await sshRun(conn, wrapForRegion(server, inner))).trim();
+  if (!out) return null;
+  const nl = out.indexOf('\n');
+  if (nl < 0) throw new Error('config read malformed');
+  const hash = out.slice(0, nl).trim();
+  if (!/^[0-9a-f]{64}$/i.test(hash)) throw new Error('config hash malformed');
+  const config = JSON.parse(Buffer.from(out.slice(nl + 1).trim(), 'base64').toString('utf8'));
+  return { config, hash };
+}
+
+// Write config.json under an flock on <config>.lock, but ONLY if its on-disk
+// SHA-256 still matches `expectedHash` (compare-and-swap) — so a concurrent
+// write from the admin page (GM Management) is never clobbered. tmp+mv keeps the
+// file whole. Returns 'ok' | 'stale' | 'err'. Uses the SAME lock file + CAS
+// protocol as the admin page's atomicMutateConfig, so the two processes are
+// mutually exclusive across their separate SSH sessions.
+async function casWriteConfig(conn, server, configObj, expectedHash) {
+  const p = server.configPath;
+  const b64 = Buffer.from(JSON.stringify(configObj, null, 2)).toString('base64');
+  const inner = [
+    `exec 9>'${p}.lock' || exit 20`,
+    `flock -w 15 9 || exit 21`,
+    `CUR=$(sha256sum '${p}' 2>/dev/null | cut -d' ' -f1)`,
+    `if [ "$CUR" != '${expectedHash}' ]; then echo STALE; exit 0; fi`,
+    `printf %s '${b64}' | base64 -d > '${p}.tmp.shopsync' || exit 24`,
+    `mv '${p}.tmp.shopsync' '${p}' || exit 25`,
+    `echo OK`,
+  ].join('\n');
+  const out = (await sshRun(conn, wrapForRegion(server, inner))).trim();
+  if (/(^|\n)OK$/.test(out)) return 'ok';
+  if (out.includes('STALE')) return 'stale';
+  return 'err';
+}
+
 async function patchServerAdmins(conn, server, desiredGuids) {
   if (!server.configPath) {
     console.log(`[admins-sync] ${server.id} no configPath, skipping`);
     return;
   }
 
-  // 1) Read current config.json (base64-encoded over SSH)
-  const readInner = `cat '${server.configPath}' | base64 -w0`;
-  let b64Content;
-  try {
-    b64Content = (await sshRun(conn, wrapForRegion(server, readInner))).trim();
-  } catch (e) {
-    console.error(`[admins-sync] ${server.id} read failed:`, e.message);
-    return;
-  }
-  if (!b64Content) {
-    console.error(`[admins-sync] ${server.id} config.json empty or missing`);
-    return;
-  }
-
-  let config;
-  try {
-    config = JSON.parse(Buffer.from(b64Content, 'base64').toString('utf8'));
-  } catch (e) {
-    console.error(`[admins-sync] ${server.id} config.json parse failed:`, e.message);
-    return;
-  }
-
-  if (!config.game || typeof config.game !== 'object') config.game = {};
-  const currentAdmins = Array.isArray(config.game.admins) ? config.game.admins.slice() : [];
-
-  // 2) Look up the GUIDs WE put there last time
+  // GUIDs WE put there last time (so we strip only our own lapsed entries).
   const prevRow = db.prepare('SELECT previously_owned_json FROM config_admin_sync_state WHERE server_id = ?').get(server.id);
   let previouslyOwned;
   try {
@@ -236,57 +250,85 @@ async function patchServerAdmins(conn, server, desiredGuids) {
     previouslyOwned = new Set();
   }
 
-  // Record the non-shop (GM/owner) admin count so the shop can cap priority
-  // queue at (ceiling - GMs) and never push game.admins past the limit. Stored
-  // every sync, including the no-op case handled below.
-  const nonShopAdminCount = currentAdmins.filter(g => !previouslyOwned.has(g)).length;
-  db.prepare(`
-    INSERT INTO config_admin_sync_state (server_id, non_shop_admin_count, updated_at)
-    VALUES (?, ?, unixepoch())
-    ON CONFLICT(server_id) DO UPDATE SET
-      non_shop_admin_count = excluded.non_shop_admin_count,
-      updated_at = excluded.updated_at
-  `).run(server.id, nonShopAdminCount);
+  // Atomic read-modify-write loop: read config + hash, recompute, then CAS-write
+  // under flock. If the admin page (or anything) changed the file in between, the
+  // CAS fails 'stale' and we retry against the fresh copy — never clobbering a GM
+  // that was just added on the GM Management page.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let read;
+    try {
+      read = await readConfigWithHash(conn, server);
+    } catch (e) {
+      console.error(`[admins-sync] ${server.id} read failed:`, e.message);
+      return;
+    }
+    if (!read) {
+      console.error(`[admins-sync] ${server.id} config.json empty or missing`);
+      return;
+    }
+    const { config, hash } = read;
 
-  // 3) Compute new array: strip OUR previously-owned entries that are no longer
-  //    desired, then add OUR currently-desired entries. Entries from the GM tab
-  //    (or anything else) live untouched in `currentAdmins`.
-  const newAdmins = currentAdmins.filter(g => !previouslyOwned.has(g));
-  for (const g of desiredGuids) {
-    if (g && !newAdmins.includes(g)) newAdmins.push(g);
-  }
+    if (!config.game || typeof config.game !== 'object') config.game = {};
+    const currentAdmins = Array.isArray(config.game.admins) ? config.game.admins.slice() : [];
 
-  // 4) No-op if nothing actually changed
-  const sameSet = newAdmins.length === currentAdmins.length
-    && newAdmins.every(g => currentAdmins.includes(g));
-  const prevMatches = previouslyOwned.size === desiredGuids.size
-    && [...desiredGuids].every(g => previouslyOwned.has(g));
-  if (sameSet && prevMatches) {
+    // Record the non-shop (GM/owner) admin count so the shop can cap priority
+    // queue at (ceiling - GMs) and never push game.admins past the limit. Stored
+    // every sync, including the no-op case handled below.
+    const nonShopAdminCount = currentAdmins.filter(g => !previouslyOwned.has(g)).length;
+    db.prepare(`
+      INSERT INTO config_admin_sync_state (server_id, non_shop_admin_count, updated_at)
+      VALUES (?, ?, unixepoch())
+      ON CONFLICT(server_id) DO UPDATE SET
+        non_shop_admin_count = excluded.non_shop_admin_count,
+        updated_at = excluded.updated_at
+    `).run(server.id, nonShopAdminCount);
+
+    // Strip OUR previously-owned entries no longer desired, then add OUR desired
+    // entries. Entries from the GM tab (or anything else) live untouched.
+    const newAdmins = currentAdmins.filter(g => !previouslyOwned.has(g));
+    for (const g of desiredGuids) {
+      if (g && !newAdmins.includes(g)) newAdmins.push(g);
+    }
+
+    // No-op if nothing actually changed.
+    const sameSet = newAdmins.length === currentAdmins.length
+      && newAdmins.every(g => currentAdmins.includes(g));
+    const prevMatches = previouslyOwned.size === desiredGuids.size
+      && [...desiredGuids].every(g => previouslyOwned.has(g));
+    if (sameSet && prevMatches) {
+      return;
+    }
+
+    config.game.admins = newAdmins;
+    let res;
+    try {
+      res = await casWriteConfig(conn, server, config, hash);
+    } catch (e) {
+      console.error(`[admins-sync] ${server.id} write failed:`, e.message);
+      return;
+    }
+    if (res === 'stale') {
+      console.warn(`[admins-sync] ${server.id} config changed under us — retrying (attempt ${attempt + 1})`);
+      continue;
+    }
+    if (res !== 'ok') {
+      console.error(`[admins-sync] ${server.id} CAS write failed unexpectedly`);
+      return;
+    }
+
+    // Update our tracking only after a successful write.
+    db.prepare(`
+      INSERT INTO config_admin_sync_state (server_id, previously_owned_json, updated_at)
+      VALUES (?, ?, unixepoch())
+      ON CONFLICT(server_id) DO UPDATE SET
+        previously_owned_json = excluded.previously_owned_json,
+        updated_at = excluded.updated_at
+    `).run(server.id, JSON.stringify([...desiredGuids]));
+
+    console.log(`[admins-sync] ${server.id} game.admins ${currentAdmins.length} -> ${newAdmins.length} (shop-owned: ${desiredGuids.size})`);
     return;
   }
-
-  // 5) Write back
-  config.game.admins = newAdmins;
-  const newJson = JSON.stringify(config, null, 2);
-  const newB64 = Buffer.from(newJson).toString('base64');
-  const writeInner = `echo '${newB64}' | base64 -d > '${server.configPath}'`;
-  try {
-    await sshRun(conn, wrapForRegion(server, writeInner));
-  } catch (e) {
-    console.error(`[admins-sync] ${server.id} write failed:`, e.message);
-    return;
-  }
-
-  // 6) Update our tracking
-  db.prepare(`
-    INSERT INTO config_admin_sync_state (server_id, previously_owned_json, updated_at)
-    VALUES (?, ?, unixepoch())
-    ON CONFLICT(server_id) DO UPDATE SET
-      previously_owned_json = excluded.previously_owned_json,
-      updated_at = excluded.updated_at
-  `).run(server.id, JSON.stringify([...desiredGuids]));
-
-  console.log(`[admins-sync] ${server.id} game.admins ${currentAdmins.length} -> ${newAdmins.length} (shop-owned: ${desiredGuids.size})`);
+  console.error(`[admins-sync] ${server.id} game.admins CAS conflict — retries exhausted, will retry next sync`);
 }
 
 async function syncPurchasesToServers() {
