@@ -1,7 +1,10 @@
 const crypto = require('crypto');
 const { Client } = require('ssh2');
 const db = require('./db');
-const { listServers, SERVER_IDS, saveGamePathFromShopPath } = require('./gameServers');
+// listServers() = servers the shop syncs to (eu3 deliberately excluded).
+// listAllServers() = every reachable server, used by the save inspector so a
+// server retired from sale can still have its saves read.
+const { listServers, listAllServers, SERVER_IDS, saveGamePathFromShopPath } = require('./gameServers');
 
 function getPrivateKey() {
   const b64 = process.env.SSH_PRIVATE_KEY_B64;
@@ -332,6 +335,7 @@ async function patchServerAdmins(conn, server, desiredGuids) {
 }
 
 async function syncPurchasesToServers() {
+  // Sellable/synced servers only — eu3 is a dev box now and must not be written to.
   const servers = listServers();
   if (servers.length === 0) {
     console.log('[sync] No game servers configured');
@@ -417,7 +421,7 @@ async function searchSaveFiles(serverId, query, limit = 50) {
   const q = String(query == null ? '' : query).trim();
   if (!q) return { results: [], total: 0, shown: 0 };
 
-  const servers = listServers();
+  const servers = listAllServers();
   const server = servers.find(s => s.id === serverId);
   if (!server) throw new Error('Unknown server');
   const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
@@ -471,7 +475,7 @@ async function searchSaveFiles(serverId, query, limit = 50) {
 // Overview of a server's save: per-world, per-category JSON counts. Powers the
 // inspector's browse view + download targets.
 async function listSaveCategories(serverId) {
-  const servers = listServers();
+  const servers = listAllServers();
   const server = servers.find(s => s.id === serverId);
   if (!server) throw new Error('Unknown server');
   const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
@@ -499,7 +503,7 @@ async function listSaveCategories(serverId) {
 // world, a single record, or '.' for the whole save). Path is sanitised + sent
 // base64 so traversal/shell injection is impossible. Returns {conn, stream}.
 async function openSaveDownloadStream(serverId, relPath) {
-  const servers = listServers();
+  const servers = listAllServers();
   const server = servers.find(s => s.id === serverId);
   if (!server) throw new Error('Unknown server');
   const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
@@ -541,7 +545,7 @@ async function getSaveRecord(serverId, entityId) {
   const id = String(entityId == null ? '' : entityId).trim();
   if (!/^[0-9a-fA-F-]{6,64}$/.test(id)) throw new Error('Invalid entity id');
 
-  const servers = listServers();
+  const servers = listAllServers();
   const server = servers.find(s => s.id === serverId);
   if (!server) throw new Error('Unknown server');
   const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
@@ -577,7 +581,7 @@ function trashBaseFromSave(saveBase) {
 }
 
 async function saveOpContext(serverId) {
-  const servers = listServers();
+  const servers = listAllServers();
   const server = servers.find(s => s.id === serverId);
   if (!server) throw new Error('Unknown server');
   const saveBase = server.savePath || saveGamePathFromShopPath(server.path);
@@ -1129,7 +1133,7 @@ async function getSaveDbCopyStatus(jobId) {
   if (!job) return { found: false, error: 'Unknown job (website restarted mid-copy?). The copy itself keeps running - check the destination .save on the box.' };
 
   const probe = `if [ -f ${job.marker} ]; then echo "MARK:$(cat ${job.marker})"; fi; echo "LOGTAIL:"; tail -n 6 ${job.log} 2>/dev/null`;
-  const servers = listServers();
+  const servers = listAllServers();
   const entryHost = servers.find(s => s.region === 'eu') || servers[0];
   const privateKey = getPrivateKey();
   if (!privateKey) throw new Error('SSH key not configured');
