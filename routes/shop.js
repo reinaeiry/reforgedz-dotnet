@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../db');
 const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus } = require('../sync');
-const { SERVER_IDS, SERVER_LABELS, isValidServerId } = require('../gameServers');
+const { SERVER_IDS, SERVER_LABELS, isValidServerId, isSaveServerId, listSaveServers } = require('../gameServers');
 const discord = require('../discord');
 
 // ---- PayPal setup ----
@@ -1663,13 +1663,15 @@ function deriveHolderExpiry(guid) {
 //  Save Inspector — freetext search over a server's persistence
 //  (the .save JSON files), since Pterodactyl's file browser can't.
 // ============================================================
+// Every reachable server, not just the sellable ones — EU3 is a dev box now but
+// its saves still need inspecting.
 router.get('/api/shop/admin/save-servers', requireAdmin, (req, res) => {
-  res.json(priorityQueueServers());
+  res.json(listSaveServers());
 });
 
 router.get('/api/shop/admin/save-search', requireAdmin, async (req, res) => {
   const { server, q, limit } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   if (!q || !String(q).trim()) return res.status(400).json({ error: 'Enter something to search for.' });
   try {
     const out = await searchSaveFiles(server, String(q), limit);
@@ -1683,7 +1685,7 @@ router.get('/api/shop/admin/save-search', requireAdmin, async (req, res) => {
 // Is the game server running? (destructive edits/deletes are blocked while it is)
 router.get('/api/shop/admin/save-status', requireAdmin, async (req, res) => {
   const { server } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json({ running: await getServerRunning(server) });
   } catch (e) {
@@ -1694,7 +1696,7 @@ router.get('/api/shop/admin/save-status', requireAdmin, async (req, res) => {
 
 router.post('/api/shop/admin/save-update', requireAdmin, async (req, res) => {
   const { server, id, json, force } = req.body || {};
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     const r = await updateSaveRecord(server, id, json, force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first (changes would be overwritten).' });
@@ -1709,7 +1711,7 @@ router.post('/api/shop/admin/save-update', requireAdmin, async (req, res) => {
 
 router.post('/api/shop/admin/save-delete', requireAdmin, async (req, res) => {
   const { server, ids, force } = req.body || {};
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     const r = await deleteSaveRecords(server, ids, force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first (a delete can reappear).' });
@@ -1722,7 +1724,7 @@ router.post('/api/shop/admin/save-delete', requireAdmin, async (req, res) => {
 
 router.get('/api/shop/admin/save-orphans', requireAdmin, async (req, res) => {
   const { server, category } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await scanOrphans(server, category || 'Item'));
   } catch (e) {
@@ -1733,7 +1735,7 @@ router.get('/api/shop/admin/save-orphans', requireAdmin, async (req, res) => {
 
 router.post('/api/shop/admin/save-purge-orphans', requireAdmin, async (req, res) => {
   const { server, category, force } = req.body || {};
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     const r = await purgeOrphans(server, category || 'Item', force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
@@ -1747,7 +1749,7 @@ router.post('/api/shop/admin/save-purge-orphans', requireAdmin, async (req, res)
 // Fast read-only counts for the loose sweep: total / protected / prunable.
 router.get('/api/shop/admin/save-scan-loose', requireAdmin, async (req, res) => {
   const { server, category } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await scanLooseItems(server, category || 'Item'));
   } catch (e) {
@@ -1762,7 +1764,7 @@ router.get('/api/shop/admin/save-scan-loose', requireAdmin, async (req, res) => 
 // Recoverable trash. Verified against a live DB copy on DEV.
 router.post('/api/shop/admin/save-purge-loose', requireAdmin, async (req, res) => {
   const { server, category, force } = req.body || {};
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     const r = await purgeLooseItems(server, category || 'Item', force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
@@ -1776,7 +1778,7 @@ router.post('/api/shop/admin/save-purge-loose', requireAdmin, async (req, res) =
 // Inactive-character prune: count / remove Character records for accounts not seen in N days.
 router.get('/api/shop/admin/save-scan-inactive', requireAdmin, async (req, res) => {
   const { server, days } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await scanInactiveCharacters(server, days || 14));
   } catch (e) {
@@ -1787,7 +1789,7 @@ router.get('/api/shop/admin/save-scan-inactive', requireAdmin, async (req, res) 
 
 router.post('/api/shop/admin/save-purge-inactive', requireAdmin, async (req, res) => {
   const { server, days, force } = req.body || {};
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     const r = await purgeInactiveCharacters(server, days || 14, force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
@@ -1803,7 +1805,7 @@ router.post('/api/shop/admin/save-purge-inactive', requireAdmin, async (req, res
 // UI polls the status route below with the returned jobId.
 router.post('/api/shop/admin/save-copy-db', requireAdmin, async (req, res) => {
   const { from, to, confirm } = req.body || {};
-  if (!isValidServerId(from) || !isValidServerId(to)) return res.status(400).json({ error: 'Pick valid servers.' });
+  if (!isSaveServerId(from) || !isSaveServerId(to)) return res.status(400).json({ error: 'Pick valid servers.' });
   if (from === to) return res.status(400).json({ error: 'Source and destination must differ.' });
   if (confirm !== to) return res.status(400).json({ error: 'Confirmation mismatch — type the destination server id.' });
   try {
@@ -1828,7 +1830,7 @@ router.get('/api/shop/admin/save-copy-db-status', requireAdmin, async (req, res)
 
 router.get('/api/shop/admin/save-collection', requireAdmin, async (req, res) => {
   const { server, category } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await listCollectionRecords(server, category || 'Item'));
   } catch (e) {
@@ -1839,7 +1841,7 @@ router.get('/api/shop/admin/save-collection', requireAdmin, async (req, res) => 
 
 router.get('/api/shop/admin/save-collection-stats', requireAdmin, async (req, res) => {
   const { server, category } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await getCollectionStats(server, category || 'Item'));
   } catch (e) {
@@ -1850,7 +1852,7 @@ router.get('/api/shop/admin/save-collection-stats', requireAdmin, async (req, re
 
 router.get('/api/shop/admin/save-extra-stats', requireAdmin, async (req, res) => {
   const { server } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await getExtraStats(server));
   } catch (e) {
@@ -1861,7 +1863,7 @@ router.get('/api/shop/admin/save-extra-stats', requireAdmin, async (req, res) =>
 
 router.get('/api/shop/admin/save-players', requireAdmin, async (req, res) => {
   const { server } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await listPlayers(server));
   } catch (e) {
@@ -1872,7 +1874,7 @@ router.get('/api/shop/admin/save-players', requireAdmin, async (req, res) => {
 
 router.get('/api/shop/admin/save-scan-dead', requireAdmin, async (req, res) => {
   const { server } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await scanDeadCharacters(server));
   } catch (e) {
@@ -1883,7 +1885,7 @@ router.get('/api/shop/admin/save-scan-dead', requireAdmin, async (req, res) => {
 
 router.post('/api/shop/admin/save-purge-dead', requireAdmin, async (req, res) => {
   const { server, force } = req.body || {};
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     const r = await purgeDeadCharacters(server, force === true);
     if (!r.ok && r.error === 'server_running') return res.status(409).json({ error: 'Server is running — stop it first.' });
@@ -1896,7 +1898,7 @@ router.post('/api/shop/admin/save-purge-dead', requireAdmin, async (req, res) =>
 
 router.get('/api/shop/admin/save-record', requireAdmin, async (req, res) => {
   const { server, id } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await getSaveRecord(server, id));
   } catch (e) {
@@ -1907,7 +1909,7 @@ router.get('/api/shop/admin/save-record', requireAdmin, async (req, res) => {
 
 router.get('/api/shop/admin/save-categories', requireAdmin, async (req, res) => {
   const { server } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Pick a valid server.' });
   try {
     res.json(await listSaveCategories(server));
   } catch (e) {
@@ -1920,7 +1922,7 @@ router.get('/api/shop/admin/save-categories', requireAdmin, async (req, res) => 
 // session cookie) so it can be triggered as a plain browser download.
 router.get('/api/shop/admin/save-download', requireAdmin, async (req, res) => {
   const { server, path: relPath } = req.query;
-  if (!isValidServerId(server)) return res.status(400).json({ error: 'Invalid server' });
+  if (!isSaveServerId(server)) return res.status(400).json({ error: 'Invalid server' });
   let dl;
   try {
     dl = await openSaveDownloadStream(server, relPath);
