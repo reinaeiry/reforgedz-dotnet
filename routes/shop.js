@@ -251,15 +251,22 @@ function attachStock(product) {
 }
 
 // Stale-pending sweeper. Pending orders older than this are auto-cancelled.
-// If a user pays after the order is auto-cancelled, the
-// `checkout.session.completed` webhook still flips it back to completed
-// without a status check, so payments are not lost.
+// A payment that lands after the sweep still fulfils: fulfillOrder() accepts a
+// 'cancelled' row precisely so a slow checkout can't cost someone their order.
+//
+// Orders already handed to PayPal are left alone regardless of age — once a
+// subscription or order id is attached the buyer is mid-checkout on PayPal's
+// side, and cancelling underneath them is what caused paid orders to sit
+// 'cancelled'. Only rows that never reached PayPal are swept.
 const PENDING_TIMEOUT_SECONDS = 5 * 60;
 const SWEEPER_INTERVAL_MS = 5 * 60 * 1000;
 
 const sweepStmt = db.prepare(`
   UPDATE orders SET status = 'cancelled'
   WHERE status = 'pending' AND created_at < ?
+    AND paypal_subscription_id IS NULL
+    AND paypal_order_id IS NULL
+    AND paypal_capture_id IS NULL
 `);
 
 function sweepStalePending() {
@@ -685,11 +692,27 @@ function fulfillOrder(orderId, cap) {
   if (!order) return false;
   if (order.status === 'completed' || order.status === 'refunded') return false; // already done
 
-  db.prepare(`
+  // A buyer who lingers on PayPal for more than PENDING_TIMEOUT_SECONDS gets
+  // swept to 'cancelled' before their payment lands, so fulfilment has to
+  // rescue that row too — not just 'pending' ones. Restricting the UPDATE to
+  // 'pending' silently matched zero rows while the rest of this function still
+  // sent a "payment completed" notification and ran the sync, leaving people
+  // who had genuinely paid with a cancelled order and no entitlement.
+  const res = db.prepare(`
     UPDATE orders SET status = 'completed', completed_at = unixepoch(),
       paypal_capture_id = ?, payer_email = ?, fee_cents = ?
-    WHERE id = ? AND status = 'pending'
+    WHERE id = ? AND status IN ('pending', 'cancelled')
   `).run(cap.captureId || null, cap.payerEmail || null, cap.feeCents ?? null, orderId);
+
+  // Never fulfil silently: if nothing moved, the caller's assumptions are wrong
+  // and someone has paid without being granted anything.
+  if (res.changes === 0) {
+    console.error(`[orders] fulfillOrder(${orderId}) matched no row — status was '${order.status}'. NOT fulfilled; investigate.`);
+    return false;
+  }
+  if (order.status === 'cancelled') {
+    console.warn(`[orders] order ${orderId} was rescued from 'cancelled' — payment arrived after the stale-pending sweep.`);
+  }
 
   sendDiscordNotification({
     eventType: 'payment_completed',
@@ -2870,11 +2893,19 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         });
         // Pin the entitlement end-date to PayPal's next billing time so a
         // mid-cycle cancellation still honours the period the buyer paid for.
+        // Only ever on a completed order: writing a future entitlement onto a
+        // cancelled row is what produced orders that looked paid-up but granted
+        // nothing, because every reader filters on status = 'completed'.
         const nextBilling = resource.billing_info?.next_billing_time;
         if (nextBilling) {
           const untilUnix = Math.floor(new Date(nextBilling).getTime() / 1000);
           if (isFinite(untilUnix) && untilUnix > 0) {
-            db.prepare('UPDATE orders SET effective_until = ? WHERE id = ?').run(untilUnix, found.id);
+            const upd = db.prepare(
+              "UPDATE orders SET effective_until = ? WHERE id = ? AND status = 'completed'"
+            ).run(untilUnix, found.id);
+            if (upd.changes === 0) {
+              console.error(`[paypal] sub ${subId} activated but order ${found.id} is not completed — entitlement NOT set. Buyer has paid; investigate.`);
+            }
           }
         }
       }
