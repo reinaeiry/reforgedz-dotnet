@@ -77,6 +77,12 @@ function sshRun(conn, command, timeoutMs = 30000) {
   });
 }
 
+// Entries written to each server's purchases.json. Expired entitlements are
+// excluded: the game-side mod reads this file, so a lapsed subscription left in
+// it keeps granting its perk forever, and a former buyer who has since been made
+// a GM ends up listed as both. Lifetime purchases (effective_until NULL) stay.
+// Mirrors the filter used by buildPriorityQueueGuidsPerServer below, which the
+// game.admins sync has always applied - only this file was missing it.
 function buildPerServerPurchaseBuckets() {
   const rows = db.prepare(`
     SELECT
@@ -89,6 +95,7 @@ function buildPerServerPurchaseBuckets() {
     JOIN users u ON o.steam_id = u.steam_id
     JOIN products p ON o.product_id = p.id
     WHERE o.status = 'completed' AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
+      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
   `).all();
 
   // Manual priority-queue grants need to land in purchases.json too — otherwise
