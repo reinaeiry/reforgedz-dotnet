@@ -371,12 +371,26 @@ async function syncPurchasesToServers() {
 
   try {
     // 1) Write purchases.json — single combined shell command, matches old behaviour
+    // The per-server commands are chained with ';' so one failure doesn't stop
+    // the rest, which also means the chain's exit code only reflects the LAST
+    // command — a failed nested hop to NA would still look like success. Each
+    // command echoes "[sync] <id> OK" on completion, so confirm every server
+    // individually rather than trusting the exit code.
     const purchaseCmds = servers.map(s => wrapForRegion(s, buildWritePurchasesCmd(s, JSON.stringify(buckets[s.id], null, 2))));
     try {
-      await sshRun(conn, purchaseCmds.join(' ; '));
-      console.log('[sync] purchases.json synced');
+      const out = await sshRun(conn, purchaseCmds.join(' ; '));
+      const missing = servers.filter(s => !out.includes(`[sync] ${s.id} OK`));
+      if (missing.length === 0) {
+        console.log(`[sync] purchases.json synced to all ${servers.length} servers`);
+      } else {
+        const wrote = servers.filter(s => !missing.includes(s)).map(s => s.id);
+        console.error(
+          `[sync] purchases.json NOT confirmed on: ${missing.map(s => s.id).join(', ')}` +
+          ` — those servers are STALE. Written OK: ${wrote.join(', ') || 'none'}`
+        );
+      }
     } catch (e) {
-      console.error('[sync] purchases.json failed:', e.message);
+      console.error('[sync] purchases.json failed for ALL servers:', e.message);
     }
 
     // 2) Patch each server's game.admins additively
