@@ -2032,16 +2032,21 @@ router.post('/api/shop/admin/priority-queue/toggle', requireAdmin, (req, res) =>
   const existing = db.prepare('SELECT removed, expires_at FROM priority_queue_grants WHERE guid = ? AND server_id = ?').get(guid, serverId);
 
   if (present) {
-    // Grant this server (and clear any deny on it). Seed the expiry only for a
-    // brand-new row or one that was previously a deny, so switching servers keeps
-    // the holder's removal date. An existing live grant keeps whatever it has —
-    // including a deliberate permanent (NULL).
+    // Grant this server (and clear any deny on it). Seed the expiry for a
+    // brand-new row, one that was previously a deny, or one whose date has
+    // LAPSED — an expired grant row is dead weight, and keeping its past date
+    // made the toggle a silent no-op: the row stayed filtered out of the list,
+    // the holder gained no presence, and the admin could not assign a server to
+    // someone whose renewal had just paid for one. Only a LIVE grant keeps
+    // whatever it has (including a deliberate permanent NULL).
+    const lapsed = existing && !existing.removed
+      && existing.expires_at != null && existing.expires_at <= Math.floor(Date.now() / 1000);
     if (!existing) {
       db.prepare(`
         INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at, expires_at)
         VALUES (?, ?, ?, 0, ?, unixepoch(), ?)
       `).run(guid, serverId, name, by, deriveHolderExpiry(guid));
-    } else if (existing.removed) {
+    } else if (existing.removed || lapsed) {
       db.prepare(`
         UPDATE priority_queue_grants
         SET removed = 0, display_name = COALESCE(?, display_name), expires_at = ?
