@@ -1682,6 +1682,25 @@ function deriveHolderExpiry(guid) {
   return Math.max(...rows.map(r => Number(r.exp)));
 }
 
+// A server move is implemented as a deny row on the purchased server plus a
+// dated grant on the new one. Renewals extend the ORDER's effective_until, so
+// without this the move's grant died on its original date every cycle and the
+// holder silently lost queue access mid-subscription — while still paying.
+// Roll the buyer's dated grants forward with the entitlement. Extend-only:
+// permanents (NULL) and deny rows are never touched, and a date already
+// further out is kept.
+function rollGrantsForward(guid, untilUnix) {
+  if (!guid || !Number.isFinite(untilUnix) || untilUnix <= 0) return 0;
+  const r = db.prepare(`
+    UPDATE priority_queue_grants SET expires_at = ?
+    WHERE guid = ? AND removed = 0 AND expires_at IS NOT NULL AND expires_at < ?
+  `).run(untilUnix, guid, untilUnix);
+  if (r.changes) {
+    console.log(`[orders] rolled ${r.changes} manual grant(s) for ${guid} forward to ${new Date(untilUnix * 1000).toISOString().slice(0, 10)}`);
+  }
+  return r.changes;
+}
+
 // ============================================================
 //  Save Inspector — freetext search over a server's persistence
 //  (the .save JSON files), since Pterodactyl's file browser can't.
@@ -2910,6 +2929,10 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             ).run(untilUnix, found.id);
             if (upd.changes === 0) {
               console.error(`[paypal] sub ${subId} activated but order ${found.id} is not completed — entitlement NOT set. Buyer has paid; investigate.`);
+            } else {
+              // Keep a moved holder's grant alive from the first cycle too.
+              const buyer = db.prepare('SELECT bi_uid FROM users WHERE steam_id = ?').get(found.steam_id);
+              if (buyer && buyer.bi_uid) rollGrantsForward(buyer.bi_uid, untilUnix);
             }
           }
         }
@@ -3000,6 +3023,10 @@ async function dispatchPayPalEvent(event, resource, orderId) {
                 feeCents, effectiveUntil
               );
               newOrderId = ins.lastInsertRowid;
+            }
+            // Keep a moved holder's grant alive across the new cycle.
+            if (effectiveUntil && original.bi_uid) {
+              rollGrantsForward(original.bi_uid, effectiveUntil);
             }
             // Side effects (Discord notif, invoice, role grant, sync) only
             // fire on TRUE renewals. The first cycle already went through
