@@ -2038,6 +2038,56 @@ router.post('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
   res.json({ ok: true, entry });
 });
 
+// Grant a holder queue access on a server (clear any deny on it). Seed the
+// expiry for a brand-new row, one that was previously a deny, or one whose date
+// has LAPSED — an expired grant row is dead weight, and keeping its past date
+// made the toggle a silent no-op: the row stayed filtered out of the list, the
+// holder gained no presence, and the admin could not assign a server to someone
+// whose renewal had just paid for one. Only a LIVE grant keeps whatever it has
+// (including a deliberate permanent NULL).
+function applyPqGrant(guid, serverId, name, by) {
+  const existing = db.prepare('SELECT removed, expires_at FROM priority_queue_grants WHERE guid = ? AND server_id = ?').get(guid, serverId);
+  const lapsed = existing && !existing.removed
+    && existing.expires_at != null && existing.expires_at <= Math.floor(Date.now() / 1000);
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at, expires_at)
+      VALUES (?, ?, ?, 0, ?, unixepoch(), ?)
+    `).run(guid, serverId, name, by, deriveHolderExpiry(guid));
+  } else if (existing.removed || lapsed) {
+    db.prepare(`
+      UPDATE priority_queue_grants
+      SET removed = 0, display_name = COALESCE(?, display_name), expires_at = ?
+      WHERE guid = ? AND server_id = ?
+    `).run(name, deriveHolderExpiry(guid), guid, serverId);
+  } else {
+    db.prepare(`
+      UPDATE priority_queue_grants SET display_name = COALESCE(?, display_name)
+      WHERE guid = ? AND server_id = ?
+    `).run(name, guid, serverId);
+  }
+}
+
+// Hide a server for a holder. A deny row (removed=1) keeps a PURCHASE-driven
+// server off too, and turns a plain manual grant off — sync ignores denied
+// rows. The name is kept so a holder whose servers are all off still reads
+// properly in the list.
+function applyPqDeny(guid, serverId, name, by) {
+  db.prepare(`
+    INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
+    VALUES (?, ?, ?, 1, ?, unixepoch())
+    ON CONFLICT(guid, server_id) DO UPDATE SET
+      removed = 1,
+      display_name = COALESCE(display_name, excluded.display_name)
+  `).run(guid, serverId, name, by);
+}
+
+// Refreshed list entry for a guid (or a stub when no presence remains).
+function pqEntryFor(guid) {
+  const entries = buildPriorityQueueList();
+  return entries.find(e => e.guid === guid) || { guid, displayName: '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])) };
+}
+
 // Toggle priority queue on/off for a given (guid, serverId).
 // Only affects manual grants. Purchase-derived presence is untouched.
 router.post('/api/shop/admin/priority-queue/toggle', requireAdmin, (req, res) => {
@@ -2048,54 +2098,54 @@ router.post('/api/shop/admin/priority-queue/toggle', requireAdmin, (req, res) =>
 
   const by = req.user && req.user.steam_id ? req.user.steam_id : 'api';
   const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
-  const existing = db.prepare('SELECT removed, expires_at FROM priority_queue_grants WHERE guid = ? AND server_id = ?').get(guid, serverId);
 
-  if (present) {
-    // Grant this server (and clear any deny on it). Seed the expiry for a
-    // brand-new row, one that was previously a deny, or one whose date has
-    // LAPSED — an expired grant row is dead weight, and keeping its past date
-    // made the toggle a silent no-op: the row stayed filtered out of the list,
-    // the holder gained no presence, and the admin could not assign a server to
-    // someone whose renewal had just paid for one. Only a LIVE grant keeps
-    // whatever it has (including a deliberate permanent NULL).
-    const lapsed = existing && !existing.removed
-      && existing.expires_at != null && existing.expires_at <= Math.floor(Date.now() / 1000);
-    if (!existing) {
-      db.prepare(`
-        INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at, expires_at)
-        VALUES (?, ?, ?, 0, ?, unixepoch(), ?)
-      `).run(guid, serverId, name, by, deriveHolderExpiry(guid));
-    } else if (existing.removed || lapsed) {
-      db.prepare(`
-        UPDATE priority_queue_grants
-        SET removed = 0, display_name = COALESCE(?, display_name), expires_at = ?
-        WHERE guid = ? AND server_id = ?
-      `).run(name, deriveHolderExpiry(guid), guid, serverId);
-    } else {
-      db.prepare(`
-        UPDATE priority_queue_grants SET display_name = COALESCE(?, display_name)
-        WHERE guid = ? AND server_id = ?
-      `).run(name, guid, serverId);
-    }
-  } else {
-    // Hide this server. A deny row (removed=1) keeps a PURCHASE-driven server off too,
-    // and turns a plain manual grant off — sync ignores denied rows. The name is kept
-    // so a holder whose servers are all off still reads properly in the list.
-    db.prepare(`
-      INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
-      VALUES (?, ?, ?, 1, ?, unixepoch())
-      ON CONFLICT(guid, server_id) DO UPDATE SET
-        removed = 1,
-        display_name = COALESCE(display_name, excluded.display_name)
-    `).run(guid, serverId, name, by);
-  }
+  if (present) applyPqGrant(guid, serverId, name, by);
+  else applyPqDeny(guid, serverId, name, by);
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
 
-  // Return refreshed entry (or stub if no presence remains)
-  const entries = buildPriorityQueueList();
-  const entry = entries.find(e => e.guid === guid) || { guid, displayName: '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])) };
-  res.json({ ok: true, entry });
+  res.json({ ok: true, entry: pqEntryFor(guid) });
+});
+
+// Move a holder's queue access from one server to another in ONE atomic step —
+// the supported way to honour "I bought priority queue on X, please switch me
+// to Y" for subscriptions. Deliberately grant-layer only: the order row keeps
+// its original server_id (purchase history + per-server sales stats stay
+// truthful), while a deny row hides the purchased server and a dated manual
+// grant provides the new one. Renewals then roll the grant forward with the
+// subscription (rollGrantsForward), so the move survives every billing cycle.
+//
+// Ordering matters: the grant is written BEFORE the deny, because a fresh
+// grant's expiry is seeded from the holder's still-active sources
+// (deriveHolderExpiry). Denying first would drop the old grant out of that
+// derivation and could turn a dated entitlement into an accidental permanent.
+// Both writes commit in one transaction so a crash can't leave the holder
+// stripped of the old server without the new one.
+router.post('/api/shop/admin/priority-queue/switch', requireAdmin, (req, res) => {
+  const { guid: rawGuid, from, to, displayName } = req.body || {};
+  const guid = cleanGuid(rawGuid);
+  if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
+  if (!SERVER_IDS.includes(to)) return res.status(400).json({ error: 'Invalid destination server' });
+  // from is optional: a holder with no live presence (all lapsed/denied) can
+  // still be moved onto a server — there is simply nothing to deny.
+  if (from !== undefined && from !== null && from !== '' && !SERVER_IDS.includes(from)) {
+    return res.status(400).json({ error: 'Invalid source server' });
+  }
+  const fromId = SERVER_IDS.includes(from) ? from : null;
+  if (fromId === to) return res.status(400).json({ error: 'Source and destination must differ.' });
+
+  const by = req.user && req.user.steam_id ? req.user.steam_id : 'api';
+  const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
+
+  db.transaction(() => {
+    applyPqGrant(guid, to, name, by);
+    if (fromId) applyPqDeny(guid, fromId, name, by);
+  })();
+  console.log(`[pq-switch] ${by} moved ${guid} ${fromId || '(none)'} -> ${to}`);
+
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+
+  res.json({ ok: true, from: fromId, to, entry: pqEntryFor(guid) });
 });
 
 // Remove all manual grants for a guid (purchase-driven presence is unaffected)
