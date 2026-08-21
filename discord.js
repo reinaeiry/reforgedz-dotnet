@@ -8,7 +8,18 @@ function guildId() {
   return process.env.DISCORD_GUILD_ID || '1352364195211120660'; // ReforgedZ
 }
 
-async function discordFetch(path, opts = {}) {
+// This token is shared with the ticket bot, which uses discord.js and queues
+// its own requests -- but its bulk role commands (/addsurvivors walks ~14k
+// members) can hold the role-write bucket for hours. This client is
+// hand-rolled, so without a retry a single 429 meant a paying customer
+// silently never received their role. Retry on the bucket, honouring the
+// window Discord tells us to wait.
+const RATE_LIMIT_MAX_ATTEMPTS = 5;
+const RATE_LIMIT_MAX_WAIT_MS = 60_000;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function discordFetch(path, opts = {}, attempt = 0) {
   const tk = botToken();
   if (!tk) throw new Error('DISCORD_BOT_TOKEN not set');
   const res = await fetch(`${DISCORD_API}${path}`, {
@@ -19,7 +30,26 @@ async function discordFetch(path, opts = {}) {
       ...(opts.headers || {})
     }
   });
-  return res;
+
+  if (res.status !== 429 || attempt >= RATE_LIMIT_MAX_ATTEMPTS) return res;
+
+  // Discord gives the wait in the Retry-After header and again as
+  // retry_after (seconds, fractional) in the body. Prefer the header; fall
+  // back to the body, then to exponential backoff.
+  let waitMs = NaN;
+  const hdr = parseFloat(res.headers.get('retry-after') || '');
+  if (isFinite(hdr)) waitMs = hdr * 1000;
+  if (!isFinite(waitMs)) {
+    const body = await res.clone().json().catch(() => null);
+    if (body && isFinite(body.retry_after)) waitMs = body.retry_after * 1000;
+  }
+  if (!isFinite(waitMs)) waitMs = 2 ** attempt * 1000;
+  waitMs = Math.min(Math.max(waitMs, 250), RATE_LIMIT_MAX_WAIT_MS);
+
+  console.warn('[discord] 429 on %s, waiting %dms (attempt %d/%d)',
+    path, Math.round(waitMs), attempt + 1, RATE_LIMIT_MAX_ATTEMPTS);
+  await sleep(waitMs);
+  return discordFetch(path, opts, attempt + 1);
 }
 
 // In-memory cache: role list + bot's hierarchy position. 5-minute TTL.
