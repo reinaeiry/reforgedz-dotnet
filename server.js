@@ -817,6 +817,14 @@ app.get('/shop', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'shop.html'));
 });
 
+// Player account area: linked accounts, subscription health, purchase
+// history. The page itself is public HTML -- everything on it comes from
+// /api/shop/account/summary, which is requireAuth-gated and scoped to the
+// session user, so a signed-out visitor just gets the sign-in prompt.
+app.get('/account', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'account.html'));
+});
+
 // Gate the admin pages server-side. The APIs behind them are already
 // requireAdmin-guarded, but serving the HTML to anyone leaks the full admin
 // surface (endpoint names, destructive operations). Return 404 to non-admins so

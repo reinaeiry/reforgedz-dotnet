@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Account | ReforgedZ</title>
+  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#cc1f1f">
+
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .account-page {
+      padding-top: 140px;
+      padding-bottom: 96px;
+      min-height: 100vh;
+      background: var(--bg-dark);
+    }
+
+    .account-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 32px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .account-header h1 {
+      font-family: var(--display);
+      font-size: clamp(1.8rem, 4vw, 2.5rem);
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #fff;
+      line-height: 1;
+    }
+
+    .account-header .back-link {
+      color: var(--text-ghost);
+      font-size: 0.85rem;
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .account-header .back-link:hover { color: var(--text); border-bottom-color: var(--border-hover); }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 22px 24px;
+      margin-bottom: 20px;
+    }
+
+    .card h2 {
+      font-family: var(--display);
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: #fff;
+      margin: 0 0 4px;
+    }
+
+    .card .card-sub {
+      color: var(--text-ghost);
+      font-size: 0.82rem;
+      margin: 0 0 18px;
+      line-height: 1.5;
+    }
+
+    /* ---- linked accounts ---- */
+    .link-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+    }
+
+    .link-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: rgba(255,255,255,0.015);
+    }
+
+    .link-label {
+      color: var(--text-ghost);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 6px;
+    }
+
+    .link-value {
+      color: var(--text);
+      font-size: 0.92rem;
+      font-weight: 500;
+      word-break: break-all;
+    }
+
+    .link-value.missing { color: #fbbf24; font-weight: 400; }
+
+    .link-action {
+      margin-top: 10px;
+      display: inline-block;
+      padding: 5px 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-ghost);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .link-action:hover { color: var(--text); border-color: var(--border-hover); }
+    .link-action:disabled { opacity: 0.5; cursor: default; }
+
+    .link-input {
+      margin-top: 10px;
+      width: 100%;
+      padding: 7px 10px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.82rem;
+      font-family: inherit;
+    }
+
+    .link-hint { margin-top: 7px; font-size: 0.74rem; color: var(--text-ghost); line-height: 1.45; }
+    .link-hint.error { color: #f87171; }
+    .link-hint.ok { color: #4ade80; }
+
+    /* ---- subscriptions ---- */
+    .sub-card {
+      border: 1px solid var(--border);
+      border-left-width: 3px;
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-bottom: 12px;
+      background: rgba(255,255,255,0.015);
+    }
+    .sub-card.state-active { border-left-color: #4ade80; }
+    .sub-card.state-payment_failing { border-left-color: #f87171; }
+    .sub-card.state-lapsed { border-left-color: #6b7280; }
+    .sub-card.state-cancelled { border-left-color: #6b7280; }
+
+    .sub-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .sub-title { font-weight: 600; color: #fff; font-size: 1rem; }
+    .sub-meta { color: var(--text-ghost); font-size: 0.78rem; margin-top: 3px; }
+
+    .sub-pill {
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      white-space: nowrap;
+    }
+    .pill-active { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .pill-failing { background: rgba(248,113,113,0.15); color: #f87171; }
+    .pill-lapsed { background: rgba(107,114,128,0.2); color: #9ca3af; }
+    .pill-cancelled { background: rgba(107,114,128,0.2); color: #9ca3af; }
+
+    .sub-alert {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 6px;
+      background: rgba(248,113,113,0.08);
+      border-left: 3px solid #f87171;
+      font-size: 0.84rem;
+      line-height: 1.55;
+      color: var(--text);
+    }
+    .sub-alert strong { color: #fff; }
+    .sub-alert a { color: var(--accent); }
+
+    /* Specificity note: .sub-alert a (0,1,1) beats a bare .sub-fix-btn (0,1,0),
+       which painted the label accent-red on an accent-red button -- invisible.
+       Scope the rule so the button wins inside the alert. */
+    .sub-alert a.sub-fix-btn,
+    .sub-fix-btn {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 9px 16px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .sub-alert a.sub-fix-btn:hover,
+    .sub-fix-btn:hover { background: var(--accent-hover); color: #fff; }
+
+    .sub-actions { margin-top: 12px; }
+
+    /* ---- history ---- */
+    .history-table { width: 100%; overflow-x: auto; }
+    .history-table table { width: 100%; border-collapse: collapse; }
+    .history-table th {
+      text-align: left;
+      padding: 10px 14px;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-ghost);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .history-table td {
+      padding: 12px 14px;
+      font-size: 0.85rem;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+    }
+    .history-table tr:last-child td { border-bottom: none; }
+
+    .status-chip {
+      padding: 2px 9px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+    .chip-completed { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .chip-pending   { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .chip-cancelled { background: rgba(248,113,113,0.15); color: #f87171; }
+    .chip-refunded  { background: rgba(192,132,252,0.15); color: #c084fc; }
+
+    .empty-state { padding: 28px; text-align: center; color: var(--text-ghost); font-size: 0.88rem; }
+
+    .signed-out {
+      max-width: 520px;
+      margin: 0 auto;
+      text-align: center;
+      padding: 48px 24px;
+    }
+    .signed-out h2 { font-family: var(--display); color: #fff; margin: 0 0 10px; }
+    .signed-out p { color: var(--text-ghost); line-height: 1.6; margin: 0 0 22px; }
+    .signed-out a.cta {
+      display: inline-block;
+      padding: 12px 24px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+
+    @media (max-width: 640px) {
+      .account-page { padding-top: 110px; }
+      .history-table table { min-width: 620px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav scrolled" id="nav">
+    <div class="nav-inner">
+      <a class="nav-brand" href="/">
+        <span>REFORGED<span class="brand-z">Z</span></span>
+      </a>
+      <button class="nav-hamburger" id="navHamburger" aria-label="Menu">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="nav-links" id="navLinks">
+        <a class="nav-link" href="/">Home</a>
+        <a class="nav-link" href="/#about">About</a>
+        <a class="nav-link" href="/shop">Shop</a>
+        <a class="nav-link" href="https://discord.gg/reforgedz" target="_blank">Community</a>
+        <a class="nav-link" href="/#radio">Radio</a>
+        <a class="nav-link" href="/#contact">Contact</a>
+        <a class="nav-link" href="https://wiki.reforgedz.net" target="_blank">Wiki</a>
+        <a class="nav-link" href="/map">Map</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="account-page">
+    <div class="container">
+
+      <div id="signedOut" style="display:none">
+        <div class="signed-out">
+          <h2>Sign in to see your account</h2>
+          <p>Your subscriptions, linked accounts and purchase history live here. Sign in from the shop with Steam, Xbox or PlayStation and come back.</p>
+          <a class="cta" href="/shop">Go to the shop to sign in</a>
+        </div>
+      </div>
+
+      <div id="loading" class="empty-state">Loading your account&hellip;</div>
+
+      <div id="accountContent" style="display:none">
+        <div class="account-header">
+          <h1>My Account</h1>
+          <div style="display:flex;gap:14px;align-items:center">
+            <a href="/shop" class="back-link">Back to Shop</a>
+            <a href="/auth/logout" class="back-link">Sign out</a>
+          </div>
+        </div>
+
+        <!-- Linked accounts -->
+        <div class="card">
+          <h2>Linked accounts</h2>
+          <p class="card-sub">These are what your purchases attach to. If your in-game ID or Discord isn't linked, perks can't be delivered.</p>
+          <div class="link-grid" id="linkGrid"></div>
+        </div>
+
+        <!-- Subscriptions -->
+        <div class="card">
+          <h2>Subscriptions</h2>
+          <p class="card-sub">The live state of anything that renews.</p>
+          <div id="subsList"></div>
+        </div>
+
+        <!-- History -->
+        <div class="card">
+          <h2>Purchase history</h2>
+          <p class="card-sub">Every order on this account.</p>
+          <div class="history-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Product</th>
+                  <th>Server</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <span class="footer-brand">REFORGED<span class="brand-z">Z</span></span>
+        <div class="footer-links">
+          <a href="https://discord.gg/reforgedz" target="_blank">Discord</a>
+          <a href="https://wiki.reforgedz.net" target="_blank">Wiki</a>
+          <a href="mailto:contact@reforgedz.net">Contact</a>
+        </div>
+        <span class="footer-copy">&copy; 2026 ReforgedZ. Not affiliated with Bohemia Interactive.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    let account = null;
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : s;
+      return d.innerHTML;
+    }
+
+    function money(cents, currency) {
+      const cur = (currency || 'usd').toUpperCase();
+      const sym = cur === 'USD' ? '$' : cur === 'GBP' ? '£' : cur === 'EUR' ? '€' : '';
+      return sym + ((cents || 0) / 100).toFixed(2) + (sym ? '' : ' ' + cur);
+    }
+
+    function dateStr(unix) {
+      if (!unix) return '—';
+      return new Date(unix * 1000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+
+    const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
+
+    async function load() {
+      let res;
+      try {
+        res = await fetch('/api/shop/account/summary');
+      } catch (e) {
+        document.getElementById('loading').textContent = 'Could not reach the server. Try again in a moment.';
+        return;
+      }
+      if (res.status === 401) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('signedOut').style.display = '';
+        return;
+      }
+      if (!res.ok) {
+        document.getElementById('loading').textContent = 'Could not load your account (error ' + res.status + ').';
+        return;
+      }
+      account = await res.json();
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('accountContent').style.display = '';
+      renderLinks();
+      renderSubs();
+      renderHistory();
+    }
+
+    function renderLinks() {
+      const p = account.profile;
+      const items = [];
+
+      const platformLabel = PLATFORM_LABELS[p.platform] || p.platform;
+      items.push(`
+        <div class="link-item">
+          <div class="link-label">${esc(platformLabel)} account</div>
+          <div class="link-value">${esc(p.persona || p.gamertag || p.steamId)}</div>
+        </div>
+      `);
+
+      // In-game identity. Console UIDs come from BattleMetrics and are
+      // deliberately not self-editable, so only Steam users get the form.
+      items.push(`
+        <div class="link-item">
+          <div class="link-label">In-game ID (BI UID)</div>
+          <div class="link-value ${p.biUid ? '' : 'missing'}">${p.biUid ? esc(p.biUid) : 'Not set — perks can’t be delivered'}</div>
+          ${p.canEditBiUid ? `
+            <input class="link-input" id="biUidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${esc(p.biUid || '')}">
+            <button class="link-action" onclick="saveBiUid()">Save in-game ID</button>
+            <div class="link-hint" id="biUidHint">Find it in-game under Settings, or ask in Discord.</div>
+          ` : `
+            <div class="link-hint">Set automatically from your ${esc(platformLabel)} account. To change it, open a ticket in Discord.</div>
+          `}
+        </div>
+      `);
+
+      items.push(`
+        <div class="link-item">
+          <div class="link-label">Discord</div>
+          <div class="link-value ${p.discordId ? '' : 'missing'}">${p.discordId ? esc(p.discordId) : 'Not linked — you won’t get your role'}</div>
+          <input class="link-input" id="discordInput" placeholder="Your Discord user ID" value="${esc(p.discordId || '')}">
+          <button class="link-action" onclick="saveDiscord()">${p.discordId ? 'Update' : 'Link'} Discord</button>
+          ${p.discordId ? '<button class="link-action" onclick="unlinkDiscord()">Unlink</button>' : ''}
+          <div class="link-hint" id="discordHint">Discord → Settings → Advanced → Developer Mode, then right-click your name → Copy User ID.</div>
+        </div>
+      `);
+
+      document.getElementById('linkGrid').innerHTML = items.join('');
+    }
+
+    function setHint(id, msg, kind) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = msg;
+      el.className = 'link-hint' + (kind ? ' ' + kind : '');
+    }
+
+    async function saveBiUid() {
+      const val = document.getElementById('biUidInput').value.trim();
+      setHint('biUidHint', 'Saving…');
+      try {
+        const res = await fetch('/api/shop/set-bi-uid', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ biUid: val })
+        });
+        const j = await res.json();
+        if (!res.ok) return setHint('biUidHint', j.error || 'Could not save.', 'error');
+        setHint('biUidHint', 'Saved. Your perks will follow this ID.', 'ok');
+        account.profile.biUid = j.bi_uid;
+      } catch (e) {
+        setHint('biUidHint', 'Could not save: ' + e.message, 'error');
+      }
+    }
+
+    async function saveDiscord() {
+      const val = document.getElementById('discordInput').value.trim();
+      setHint('discordHint', 'Linking…');
+      try {
+        const res = await fetch('/api/shop/set-discord-id', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ discordId: val })
+        });
+        const j = await res.json();
+        if (!res.ok) return setHint('discordHint', j.error || 'Could not link.', 'error');
+        const extra = j.rolesAssigned ? ` ${j.rolesAssigned} role(s) applied.` : '';
+        setHint('discordHint', `Linked to ${j.displayName || val}.${extra}`, 'ok');
+        account.profile.discordId = j.discord_id;
+      } catch (e) {
+        setHint('discordHint', 'Could not link: ' + e.message, 'error');
+      }
+    }
+
+    async function unlinkDiscord() {
+      if (!confirm('Unlink Discord? Any roles the shop gave you will be removed.')) return;
+      setHint('discordHint', 'Unlinking…');
+      try {
+        const res = await fetch('/api/shop/set-discord-id', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ discordId: '' })
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          return setHint('discordHint', j.error || 'Could not unlink.', 'error');
+        }
+        account.profile.discordId = null;
+        renderLinks();
+      } catch (e) {
+        setHint('discordHint', 'Could not unlink: ' + e.message, 'error');
+      }
+    }
+
+    function renderSubs() {
+      const list = document.getElementById('subsList');
+      const subs = account.subscriptions || [];
+      if (!subs.length) {
+        list.innerHTML = '<div class="empty-state">No subscriptions on this account.</div>';
+        return;
+      }
+
+      list.innerHTML = subs.map(s => {
+        const pill = {
+          active: '<span class="sub-pill pill-active">Active</span>',
+          payment_failing: '<span class="sub-pill pill-failing">Payment problem</span>',
+          lapsed: '<span class="sub-pill pill-lapsed">Lapsed</span>',
+          cancelled: '<span class="sub-pill pill-cancelled">Cancelled</span>'
+        }[s.state] || '';
+
+        // The whole point of this page: a failing subscription must not read
+        // as "active" just because PayPal still says so.
+        let alert = '';
+        if (s.state === 'payment_failing') {
+          const bi = s.billingIssue || {};
+          alert = `
+            <div class="sub-alert">
+              <strong>We couldn't take your last payment.</strong>
+              PayPal has tried ${bi.failedCount || 1} time(s) and
+              ${bi.outstandingCents ? `${money(bi.outstandingCents, bi.currency)} is outstanding` : 'the payment hasn’t gone through'}.
+              Your PayPal will still show this subscription as active, which is why it can look fine from your side.
+              ${s.effectiveUntil ? `Your access ${s.effectiveUntil * 1000 < Date.now() ? 'ended on' : 'runs until'} <strong>${dateStr(s.effectiveUntil)}</strong>.` : ''}
+              ${bi.nextRetryAt ? ` PayPal will retry on <strong>${dateStr(bi.nextRetryAt)}</strong>.` : ''}
+              <br>
+              <a class="sub-fix-btn" href="https://www.paypal.com/myaccount/autopay/" target="_blank" rel="noopener noreferrer">Update payment method on PayPal</a>
+            </div>`;
+        } else if (s.state === 'lapsed') {
+          alert = `
+            <div class="sub-alert" style="background:rgba(107,114,128,0.1);border-left-color:#6b7280">
+              This subscription is no longer active${s.effectiveUntil ? ` &mdash; your access ended on <strong>${dateStr(s.effectiveUntil)}</strong>` : ''}.
+              You can start it again from the <a href="/shop">shop</a>.
+            </div>`;
+        }
+
+        const canCancel = s.state === 'active' || s.state === 'payment_failing';
+
+        return `
+          <div class="sub-card state-${esc(s.state)}">
+            <div class="sub-top">
+              <div>
+                <div class="sub-title">${esc(s.title)}</div>
+                <div class="sub-meta">
+                  ${money(s.amountCents, s.currency)}${s.serverId ? ' · ' + esc(String(s.serverId).toUpperCase()) : ''}
+                  ${s.effectiveUntil ? ' · ' + (s.state === 'active' ? 'Renews' : 'Ended') + ' ' + dateStr(s.effectiveUntil) : ''}
+                </div>
+              </div>
+              ${pill}
+            </div>
+            ${alert}
+            ${canCancel ? `<div class="sub-actions"><button class="link-action" onclick="cancelSub(${s.orderId}, this)">Cancel subscription</button></div>` : ''}
+          </div>`;
+      }).join('');
+    }
+
+    async function cancelSub(orderId, btn) {
+      if (!confirm('Cancel this subscription? You keep access until the end of the period you have already paid for.')) return;
+      btn.disabled = true;
+      btn.textContent = 'Cancelling…';
+      try {
+        const res = await fetch('/api/shop/cancel-subscription', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId })
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          btn.disabled = false;
+          btn.textContent = 'Cancel subscription';
+          alert(j.error || 'Could not cancel. Please open a ticket in Discord.');
+          return;
+        }
+        await load();
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Cancel subscription';
+        alert('Could not cancel: ' + e.message);
+      }
+    }
+
+    function renderHistory() {
+      const body = document.getElementById('historyBody');
+      const orders = account.orders || [];
+      if (!orders.length) {
+        body.innerHTML = '<tr><td colspan="5" class="empty-state">Nothing purchased yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = orders.map(o => `
+        <tr>
+          <td>${dateStr(o.completed_at || o.created_at)}</td>
+          <td>${esc(o.title)}${o.test_mode ? ' <span style="color:var(--text-ghost);font-size:0.72rem">(test)</span>' : ''}</td>
+          <td>${o.server_id ? esc(String(o.server_id).toUpperCase()) : '—'}</td>
+          <td>${money(o.amount_cents, o.currency)}</td>
+          <td><span class="status-chip chip-${esc(o.status)}">${esc(o.status)}</span></td>
+        </tr>
+      `).join('');
+    }
+
+    document.getElementById('navHamburger')?.addEventListener('click', function () {
+      document.getElementById('navLinks')?.classList.toggle('open');
+    });
+
+    load();
+  </script>
+</body>
+</html>

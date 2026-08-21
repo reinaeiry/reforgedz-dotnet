@@ -107,11 +107,32 @@ async function removeRole(userId, roleId) {
   }
 }
 
+// Post an embed into a guild channel as the bot. Used for staff-facing
+// alerts that need to land in a specific private channel rather than the
+// shop-orders webhook (which is a fixed, separate destination).
+// Best-effort: callers are notification paths, so a Discord outage must not
+// take down the thing that triggered it.
+async function postToChannel(channelId, payload) {
+  if (!/^\d{15,25}$/.test(String(channelId || ''))) {
+    throw new Error('Invalid channel id');
+  }
+  const res = await discordFetch(`/channels/${channelId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Channel post failed (${res.status}): ${body.slice(0, 200)}`);
+  }
+  return res.json().catch(() => null);
+}
+
 module.exports = {
   fetchAssignableRoles,
   invalidateRolesCache,
   verifyMember,
   assignRole,
   removeRole,
+  postToChannel,
   guildId
 };

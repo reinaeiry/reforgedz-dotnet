@@ -347,6 +347,51 @@
       transition: all 0.15s;
     }
     .tab-btn:hover { color: var(--text); }
+
+    /* Count of open billing issues, so a problem is visible without
+       opening the tab. */
+    .tab-badge {
+      display: inline-block;
+      margin-left: 7px;
+      padding: 1px 7px;
+      border-radius: 9px;
+      background: #f87171;
+      color: #1a0b0b;
+      font-size: 0.7rem;
+      font-weight: 700;
+      line-height: 1.5;
+    }
+
+    .billing-note {
+      margin: 0 0 16px;
+      padding: 12px 14px;
+      border-left: 3px solid #f59e0b;
+      background: rgba(245, 158, 11, 0.07);
+      color: var(--text-ghost);
+      font-size: 0.83rem;
+      line-height: 1.5;
+    }
+
+    .billing-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+
+    .billing-fail {
+      display: inline-block;
+      min-width: 22px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: rgba(248, 113, 113, 0.15);
+      color: #f87171;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .billing-resolved td { opacity: 0.45; }
     .tab-btn.active {
       color: #fff;
       background: var(--accent);
@@ -525,6 +570,7 @@
             <div class="tab-strip">
               <button class="tab-btn active" data-tab="orders">Orders</button>
               <button class="tab-btn" data-tab="finances">Finances</button>
+              <button class="tab-btn" data-tab="billing">Billing Issues<span id="billingBadge" class="tab-badge" style="display:none">0</span></button>
             </div>
             <button id="exportCsvBtn" onclick="exportCsv()" style="padding:6px 16px;font-size:0.78rem;font-weight:600;color:var(--text-ghost);background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.color='var(--text)';this.style.borderColor='var(--border-hover)'" onmouseout="this.style.color='var(--text-ghost)';this.style.borderColor='var(--border)'">Export CSV</button>
             <a href="/shop" class="back-link">Back to Shop</a>
@@ -558,6 +604,47 @@
               </thead>
               <tbody id="ordersBody">
                 <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="billingTab" style="display:none">
+          <p class="billing-note">
+            PayPal keeps a subscription at status <strong>ACTIVE</strong> while its payments
+            fail, so these players still see &ldquo;active&rdquo; on their side while their
+            access has already stopped and their Discord role has been removed. New failures
+            land here automatically; <strong>Rescan PayPal</strong> pulls in any that predate
+            failure tracking.
+          </p>
+
+          <div class="billing-actions">
+            <button class="revoke-btn" id="billingRescanBtn" onclick="rescanBilling()" style="color:var(--text-ghost);padding:6px 14px">Rescan PayPal</button>
+            <label style="display:flex;align-items:center;gap:6px;color:var(--text-ghost);font-size:0.8rem;cursor:pointer">
+              <input type="checkbox" id="billingShowResolved" onchange="loadBillingIssues()"> Show resolved
+            </label>
+            <span id="billingRescanStatus" style="color:var(--text-ghost);font-size:0.8rem"></span>
+          </div>
+
+          <div class="orders-stats" id="billingStats"></div>
+
+          <div class="orders-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Player</th>
+                  <th>Product</th>
+                  <th>Fails</th>
+                  <th>Owed</th>
+                  <th>Last paid</th>
+                  <th>Access ended</th>
+                  <th>Next retry</th>
+                  <th>Player told</th>
+                  <th>Subscription</th>
+                </tr>
+              </thead>
+              <tbody id="billingBody">
+                <tr><td colspan="9" class="empty-state">Loading&hellip;</td></tr>
               </tbody>
             </table>
           </div>
@@ -851,20 +938,152 @@
       bindTabs();
     }
 
+    // Panel + heading per tab. Was a boolean orders/finances toggle; kept as a
+    // table so adding another tab doesn't mean rewriting the switch again.
+    const TABS = {
+      orders:   { panel: 'ordersTab',   heading: 'All Orders' },
+      finances: { panel: 'financesTab', heading: 'Finances' },
+      billing:  { panel: 'billingTab',  heading: 'Billing Issues' }
+    };
+
     function bindTabs() {
       document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           currentTab = btn.dataset.tab;
-          const isOrders = currentTab === 'orders';
-          document.getElementById('ordersTab').style.display = isOrders ? '' : 'none';
-          document.getElementById('financesTab').style.display = isOrders ? 'none' : '';
-          document.getElementById('exportCsvBtn').style.display = isOrders ? '' : 'none';
-          document.getElementById('tabHeading').textContent = isOrders ? 'All Orders' : 'Finances';
-          if (!isOrders) loadFinances();
+          Object.entries(TABS).forEach(([name, cfg]) => {
+            const el = document.getElementById(cfg.panel);
+            if (el) el.style.display = name === currentTab ? '' : 'none';
+          });
+          document.getElementById('exportCsvBtn').style.display = currentTab === 'orders' ? '' : 'none';
+          document.getElementById('tabHeading').textContent =
+            (TABS[currentTab] || TABS.orders).heading;
+          if (currentTab === 'finances') loadFinances();
+          if (currentTab === 'billing') loadBillingIssues();
         });
       });
+    }
+
+    // ---- Billing issues ----------------------------------------------------
+
+    let billingPollTimer = null;
+
+    function billingDate(unix) {
+      if (!unix) return '<span style="color:var(--text-ghost)">--</span>';
+      const d = new Date(unix * 1000);
+      return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+
+    async function loadBillingIssues() {
+      const body = document.getElementById('billingBody');
+      const showResolved = document.getElementById('billingShowResolved').checked;
+      try {
+        const res = await fetch('/api/shop/admin/billing-issues' + (showResolved ? '?include=all' : ''));
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderBillingIssues(data);
+        updateBillingRescanState(data.rescan);
+      } catch (e) {
+        body.innerHTML = '<tr><td colspan="9" class="empty-state">Failed to load: ' + escHtml(e.message) + '</td></tr>';
+      }
+    }
+
+    function renderBillingIssues(data) {
+      const body = document.getElementById('billingBody');
+      const issues = data.issues || [];
+
+      const badge = document.getElementById('billingBadge');
+      badge.textContent = data.openCount;
+      badge.style.display = data.openCount > 0 ? '' : 'none';
+
+      document.getElementById('billingStats').innerHTML = `
+        <div class="stat-card"><div class="stat-value">${data.openCount}</div><div class="stat-label">Open issues</div></div>
+        <div class="stat-card"><div class="stat-value">${centsToUsd(data.outstandingCents || 0)}</div><div class="stat-label">Uncollected</div></div>
+      `;
+
+      if (!issues.length) {
+        body.innerHTML = '<tr><td colspan="9" class="empty-state">No billing issues. Run a rescan to check PayPal for older failures.</td></tr>';
+        return;
+      }
+
+      body.innerHTML = issues.map(i => {
+        const who = i.persona || i.gamertag || i.steam_id || 'Unknown';
+        const discord = i.discord_id
+          ? `<div style="color:var(--text-ghost);font-size:0.75rem">Discord linked</div>`
+          : `<div style="color:#fbbf24;font-size:0.75rem">No Discord linked</div>`;
+        const told = i.player_emailed_at
+          ? billingDate(i.player_emailed_at)
+          : '<span style="color:#fbbf24">Not emailed</span>';
+        return `
+        <tr class="${i.resolved_at ? 'billing-resolved' : ''}">
+          <td>
+            <div style="font-weight:600">${escHtml(who)}</div>
+            ${discord}
+            ${i.payer_email ? `<div style="color:var(--text-ghost);font-size:0.75rem">${escHtml(i.payer_email)}</div>` : ''}
+          </td>
+          <td>${escHtml(i.product_title || 'Unknown')}${i.server_id ? `<div style="color:var(--text-ghost);font-size:0.75rem">${escHtml(String(i.server_id).toUpperCase())}</div>` : ''}</td>
+          <td><span class="billing-fail">${i.failed_count}</span></td>
+          <td>${centsToUsd(i.outstanding_cents || 0)}</td>
+          <td>${billingDate(i.last_payment_at)}</td>
+          <td>${billingDate(i.effective_until)}</td>
+          <td>${billingDate(i.next_billing_at)}</td>
+          <td>${told}</td>
+          <td style="font-family:monospace;font-size:0.72rem">
+            <a href="https://www.paypal.com/billing/subscriptions/${encodeURIComponent(i.paypal_subscription_id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">${escHtml(i.paypal_subscription_id)}</a>
+            ${i.resolved_at ? '<div style="color:#4ade80">resolved ' + billingDate(i.resolved_at) + '</div>' : ''}
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    function updateBillingRescanState(rescan) {
+      const btn = document.getElementById('billingRescanBtn');
+      const status = document.getElementById('billingRescanStatus');
+      if (!rescan) return;
+
+      if (rescan.running) {
+        btn.disabled = true;
+        btn.textContent = 'Rescanning\u2026';
+        status.textContent = 'Checking every live subscription against PayPal. This takes a minute or two.';
+        // Poll until it finishes rather than leaving a stale "running" label.
+        if (!billingPollTimer) billingPollTimer = setInterval(loadBillingIssues, 4000);
+        return;
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Rescan PayPal';
+      if (billingPollTimer) { clearInterval(billingPollTimer); billingPollTimer = null; }
+
+      if (rescan.error) {
+        status.textContent = 'Last rescan failed: ' + rescan.error;
+      } else if (rescan.summary) {
+        const s = rescan.summary;
+        status.textContent = `Last rescan: ${s.scanned} checked, ${s.failing} failing, ${s.newIssues} new, ${s.resolved} resolved`
+          + (s.errors ? `, ${s.errors} lookup error(s)` : '');
+      } else {
+        status.textContent = '';
+      }
+    }
+
+    async function rescanBilling() {
+      const btn = document.getElementById('billingRescanBtn');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/shop/admin/billing-issues/rescan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        if (res.status === 409) {
+          document.getElementById('billingRescanStatus').textContent = 'A rescan is already running.';
+        } else if (!res.ok) {
+          throw new Error('HTTP ' + res.status);
+        }
+      } catch (e) {
+        document.getElementById('billingRescanStatus').textContent = 'Could not start rescan: ' + e.message;
+      }
+      loadBillingIssues();
     }
 
     function formatCentsList(arr) {

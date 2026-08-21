@@ -11,7 +11,7 @@ const discord = require('../discord');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
-const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation, sendCustomFlagConfirmation } = require('../invoiceMail');
+const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed } = require('../invoiceMail');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 // Resolved on boot by server.js calling registerPayPalWebhooks(); read at
@@ -37,6 +37,12 @@ const CUSTOM_FLAG_MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg' };
 // The #shop support-ticket channel, linked from the confirmation email/
 // onscreen message so buyers know where to follow up with their design.
 const CUSTOM_FLAG_TICKET_URL = 'https://discord.com/channels/1352364195211120660/1361079415324410026';
+
+// #Payment-Processor (Owner's category). Staff-only, so it can carry payer
+// emails and PayPal ids that must never reach a public channel. Overridable
+// so a test guild never posts into the live one.
+const PAYMENT_PROCESSOR_CHANNEL_ID =
+  process.env.DISCORD_PAYMENT_CHANNEL_ID || '1481277655826305204';
 
 const customFlagUpload = multer({
   storage: multer.memoryStorage(),
@@ -2838,6 +2844,438 @@ router.post('/api/shop/admin/subscriptions/send-migration-emails', requireAdmin,
 });
 
 // ============================================================
+//  Subscription billing issues
+// ============================================================
+//  PayPal holds a subscription at status ACTIVE while its payments fail, so
+//  a lapse is otherwise silent: effective_until stops advancing, the Discord
+//  role is auto-removed, and the player still sees "active" on PayPal's side.
+//  These helpers make that state durable and visible.
+
+// PayPal money values are decimal strings ("30.0"); we store integer cents.
+function ppValueToCents(v) {
+  if (v == null) return 0;
+  const n = parseFloat(v);
+  return isFinite(n) ? Math.round(n * 100) : 0;
+}
+
+function ppTimeToUnix(t) {
+  if (!t) return null;
+  const u = Math.floor(new Date(t).getTime() / 1000);
+  return isFinite(u) && u > 0 ? u : null;
+}
+
+// Everything the staff alert and the player email need, resolved from the
+// subscription id alone. Returns undefined when the sub isn't one of ours.
+function getBillingIssueContext(subId) {
+  return db.prepare(`
+    SELECT o.id AS order_id, o.steam_id, o.server_id, o.amount_cents, o.test_mode,
+           o.payer_email, o.effective_until,
+           u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid, u.discord_id,
+           p.title AS product_title, p.currency, p.discord_role_id
+    FROM orders o
+    JOIN users u    ON o.steam_id = u.steam_id
+    JOIN products p ON o.product_id = p.id
+    WHERE o.paypal_subscription_id = ?
+    ORDER BY o.id DESC LIMIT 1
+  `).get(subId);
+}
+
+// Upsert one subscription's failure state. Returns { escalated } so callers
+// only notify when the failure count actually moved -- PayPal retries the
+// same webhook, and the rescan re-reads every subscription, so notifying on
+// every observation would spam the channel.
+function recordBillingIssue(fields) {
+  const {
+    subId, orderId = null, steamId = null, paypalStatus = null,
+    failedCount = 0, outstandingCents = 0, currency = 'usd',
+    lastPaymentAt = null, nextBillingAt = null, source = 'webhook'
+  } = fields;
+  const now = Math.floor(Date.now() / 1000);
+  const prev = db.prepare(
+    'SELECT * FROM subscription_billing_issues WHERE paypal_subscription_id = ?'
+  ).get(subId);
+
+  if (!prev) {
+    db.prepare(`
+      INSERT INTO subscription_billing_issues
+        (paypal_subscription_id, order_id, steam_id, paypal_status, failed_count,
+         outstanding_cents, currency, last_payment_at, next_billing_at,
+         first_seen_at, last_seen_at, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(subId, orderId, steamId, paypalStatus, failedCount, outstandingCents,
+           currency, lastPaymentAt, nextBillingAt, now, now, source);
+    return { escalated: true, previousCount: 0 };
+  }
+
+  // A row that was resolved and is failing again reopens rather than
+  // inserting a second row -- the subscription id is the primary key.
+  const reopened = prev.resolved_at != null;
+  db.prepare(`
+    UPDATE subscription_billing_issues SET
+      order_id = COALESCE(?, order_id),
+      steam_id = COALESCE(?, steam_id),
+      paypal_status = ?, failed_count = ?, outstanding_cents = ?, currency = ?,
+      last_payment_at = ?, next_billing_at = ?, last_seen_at = ?,
+      resolved_at = NULL, source = ?
+    WHERE paypal_subscription_id = ?
+  `).run(orderId, steamId, paypalStatus, failedCount, outstandingCents, currency,
+         lastPaymentAt, nextBillingAt, now, source, subId);
+
+  return {
+    escalated: reopened || failedCount > (prev.failed_count || 0),
+    previousCount: prev.failed_count || 0
+  };
+}
+
+// Closes an open issue. Called when a cycle finally bills (recovered) and
+// when PayPal reports the agreement dead (no longer actionable).
+function resolveBillingIssue(subId, reason) {
+  if (!subId) return;
+  try {
+    const r = db.prepare(`
+      UPDATE subscription_billing_issues
+      SET resolved_at = ?
+      WHERE paypal_subscription_id = ? AND resolved_at IS NULL
+    `).run(Math.floor(Date.now() / 1000), subId);
+    if (r.changes > 0) {
+      console.log('[billing] issue resolved for %s (%s)', subId, reason || 'recovered');
+    }
+  } catch (e) {
+    console.error('[billing] resolve failed:', e.message);
+  }
+}
+
+// Staff alert into #Payment-Processor. Best-effort: a Discord outage must not
+// break webhook processing, so this never throws.
+async function postBillingIssueAlert(opts) {
+  const { subId, ctx, failedCount, outstandingCents, currency,
+          nextBillingAt, lastPaymentAt, source } = opts;
+  if (!PAYMENT_PROCESSOR_CHANNEL_ID) return false;
+  const money = (c) => '$' + ((c || 0) / 100).toFixed(2) + ' ' + (currency || 'usd').toUpperCase();
+  const when = (u) => (u ? '<t:' + u + ':D>' : 'Never');
+  const platform = (ctx && ctx.platform) || 'steam';
+
+  const fields = [
+    { name: 'Player', value: (ctx && (ctx.persona || ctx.gamertag)) || 'Unknown', inline: true },
+    { name: 'Platform', value: PLATFORM_LABELS[platform] || platform, inline: true },
+    { name: 'Discord', value: ctx && ctx.discord_id ? '<@' + ctx.discord_id + '>' : 'Not linked', inline: true },
+    { name: 'Product', value: (ctx && ctx.product_title) || 'Unknown', inline: true },
+    { name: 'Failed attempts', value: String(failedCount || 0), inline: true },
+    { name: 'Outstanding', value: money(outstandingCents), inline: true },
+    { name: 'Last successful payment', value: when(lastPaymentAt), inline: true },
+    { name: 'Access ended', value: when(ctx && ctx.effective_until), inline: true },
+    { name: 'Next retry', value: when(nextBillingAt), inline: true },
+    { name: 'Subscription', value: '`' + subId + '`', inline: false }
+  ];
+  if (ctx && ctx.payer_email) {
+    fields.push({ name: 'PayPal email', value: ctx.payer_email, inline: false });
+  }
+  if (ctx && ctx.discord_role_id) {
+    fields.push({ name: 'Role affected', value: '<@&' + ctx.discord_role_id + '>', inline: true });
+  }
+
+  try {
+    await discord.postToChannel(PAYMENT_PROCESSOR_CHANNEL_ID, {
+      embeds: [{
+        title: 'Subscription payment failed',
+        description: source === 'rescan'
+          ? 'Found by a rescan of PayPal -- this failure predates failure tracking.'
+          : 'PayPal could not take payment. The subscription still shows ACTIVE to the player, but their access has stopped renewing.',
+        color: 0xf87171,
+        fields,
+        timestamp: new Date().toISOString(),
+        footer: { text: 'ReforgedZ Shop - billing' }
+      }]
+    });
+    return true;
+  } catch (e) {
+    console.error('[billing] channel alert failed:', e.message);
+    return false;
+  }
+}
+
+// One subscription's failure, from either the webhook or the rescan.
+// emailPlayer is false for the rescan so a backfill can't blast historical
+// failures at people weeks after the fact.
+async function handleBillingFailure(opts) {
+  const { subId, billingInfo, paypalStatus, source, emailPlayer } = opts;
+  if (!subId) return { escalated: false };
+  const bi = billingInfo || {};
+  const ctx = getBillingIssueContext(subId);
+  const failedCount = bi.failed_payments_count || 0;
+  const outstandingCents = ppValueToCents(bi.outstanding_balance && bi.outstanding_balance.value);
+  const currency = (bi.outstanding_balance && bi.outstanding_balance.currency_code)
+    || (ctx && ctx.currency) || 'usd';
+  const lastPaymentAt = ppTimeToUnix(bi.last_payment && bi.last_payment.time);
+  const nextBillingAt = ppTimeToUnix(bi.next_billing_time);
+
+  const { escalated } = recordBillingIssue({
+    subId,
+    orderId: ctx ? ctx.order_id : null,
+    steamId: ctx ? ctx.steam_id : null,
+    paypalStatus, failedCount, outstandingCents, currency,
+    lastPaymentAt, nextBillingAt, source
+  });
+  if (!escalated) return { escalated: false };
+
+  const now = Math.floor(Date.now() / 1000);
+  const posted = await postBillingIssueAlert({
+    subId, ctx, failedCount, outstandingCents, currency,
+    nextBillingAt, lastPaymentAt, source
+  });
+  if (posted) {
+    db.prepare('UPDATE subscription_billing_issues SET notified_at = ? WHERE paypal_subscription_id = ?')
+      .run(now, subId);
+  }
+
+  if (emailPlayer && ctx && ctx.payer_email) {
+    try {
+      await sendPaymentFailed({
+        to: ctx.payer_email,
+        displayName: ctx.persona || ctx.gamertag || null,
+        productTitle: ctx.product_title,
+        amountCents: ctx.amount_cents,
+        currency: ctx.currency,
+        failedCount,
+        accessEndsAtMs: ctx.effective_until ? ctx.effective_until * 1000 : null,
+        nextRetryAtMs: nextBillingAt ? nextBillingAt * 1000 : null
+      });
+      db.prepare('UPDATE subscription_billing_issues SET player_emailed_at = ? WHERE paypal_subscription_id = ?')
+        .run(now, subId);
+    } catch (e) {
+      console.error('[billing] player email failed:', e.message);
+    }
+  }
+  return { escalated: true };
+}
+
+// Sweep every subscription we believe is live and reconcile it against
+// PayPal. This is what surfaces failures that predate the webhook handler --
+// PayPal does not replay old events. Sequential on purpose: PayPal rate-limits
+// and this runs detached, so wall-clock does not matter.
+async function rescanBillingIssues(opts) {
+  const { emailPlayers = false } = opts || {};
+  const subs = db.prepare(`
+    SELECT DISTINCT o.paypal_subscription_id AS sub_id, o.test_mode
+    FROM orders o
+    WHERE o.paypal_subscription_id IS NOT NULL
+      AND o.status IN ('completed', 'pending')
+      AND o.subscription_cancelled_at IS NULL
+  `).all();
+
+  const summary = { scanned: 0, failing: 0, newIssues: 0, resolved: 0, errors: 0 };
+  for (const row of subs) {
+    summary.scanned++;
+    let sub;
+    try {
+      sub = await paypal.getSubscription(!!row.test_mode, row.sub_id);
+    } catch (e) {
+      summary.errors++;
+      console.error('[billing] rescan lookup failed for %s: %s', row.sub_id, e.message);
+      continue;
+    }
+    const bi = sub && sub.billing_info ? sub.billing_info : {};
+    const failed = bi.failed_payments_count || 0;
+    const status = (sub && sub.status ? sub.status : '').toUpperCase();
+
+    // Only ACTIVE-but-failing is actionable. A CANCELLED/EXPIRED/SUSPENDED
+    // agreement is already dead and its own webhook handled the teardown.
+    if (status === 'ACTIVE' && failed > 0) {
+      summary.failing++;
+      const before = db.prepare(
+        'SELECT failed_count, resolved_at FROM subscription_billing_issues WHERE paypal_subscription_id = ?'
+      ).get(row.sub_id);
+      const res = await handleBillingFailure({
+        subId: row.sub_id, billingInfo: bi, paypalStatus: status,
+        source: 'rescan', emailPlayer: emailPlayers
+      });
+      if (res.escalated && (!before || before.resolved_at != null)) summary.newIssues++;
+    } else {
+      const open = db.prepare(
+        'SELECT 1 FROM subscription_billing_issues WHERE paypal_subscription_id = ? AND resolved_at IS NULL'
+      ).get(row.sub_id);
+      if (open) {
+        resolveBillingIssue(row.sub_id, 'rescan: ' + (status || 'unknown'));
+        summary.resolved++;
+      }
+    }
+  }
+  return summary;
+}
+
+// Guard so two rescans can't overlap (the button and the Discord command can
+// both start one, and each run makes ~100 sequential PayPal calls).
+let rescanState = { running: false, startedAt: null, finishedAt: null, summary: null, error: null };
+
+function startBillingRescan(opts) {
+  if (rescanState.running) return { started: false, state: rescanState };
+  rescanState = { running: true, startedAt: Date.now(), finishedAt: null, summary: null, error: null };
+  rescanBillingIssues(opts)
+    .then((summary) => {
+      rescanState = { running: false, startedAt: rescanState.startedAt, finishedAt: Date.now(), summary, error: null };
+      console.log('[billing] rescan complete: %j', summary);
+    })
+    .catch((e) => {
+      rescanState = { running: false, startedAt: rescanState.startedAt, finishedAt: Date.now(), summary: null, error: e.message };
+      console.error('[billing] rescan failed:', e.message);
+    });
+  return { started: true, state: rescanState };
+}
+
+// ---- Billing issues: admin API ---------------------------------------------
+
+// Pure DB read so the admin page stays instant; PayPal is only consulted by
+// the rescan below.
+router.get('/api/shop/admin/billing-issues', requireAdmin, (req, res) => {
+  const includeResolved = String(req.query.include || '') === 'all';
+  const rows = db.prepare(`
+    SELECT b.paypal_subscription_id, b.order_id, b.steam_id, b.paypal_status,
+           b.failed_count, b.outstanding_cents, b.currency,
+           b.last_payment_at, b.next_billing_at, b.first_seen_at, b.last_seen_at,
+           b.notified_at, b.player_emailed_at, b.resolved_at, b.source,
+           u.persona, u.platform, u.gamertag, u.discord_id, u.bi_uid,
+           o.server_id, o.amount_cents, o.effective_until, o.payer_email,
+           p.title AS product_title, p.discord_role_id
+    FROM subscription_billing_issues b
+    LEFT JOIN orders   o ON o.id = b.order_id
+    LEFT JOIN users    u ON u.steam_id = b.steam_id
+    LEFT JOIN products p ON p.id = o.product_id
+    ${includeResolved ? '' : 'WHERE b.resolved_at IS NULL'}
+    ORDER BY b.failed_count DESC, b.last_seen_at DESC
+  `).all();
+
+  const openRows = rows.filter(r => r.resolved_at == null);
+  res.json({
+    issues: rows,
+    openCount: openRows.length,
+    outstandingCents: openRows.reduce((n, r) => n + (r.outstanding_cents || 0), 0),
+    rescan: {
+      running: rescanState.running,
+      startedAt: rescanState.startedAt,
+      finishedAt: rescanState.finishedAt,
+      summary: rescanState.summary,
+      error: rescanState.error
+    }
+  });
+});
+
+// Kicks the PayPal sweep off in the background and returns immediately --
+// it makes ~100 sequential PayPal calls and cannot finish inside a request.
+// Poll GET /api/shop/admin/billing-issues for progress.
+router.post('/api/shop/admin/billing-issues/rescan', requireAdmin, (req, res) => {
+  const emailPlayers = req.body && req.body.emailPlayers === true;
+  const { started, state } = startBillingRescan({ emailPlayers });
+  if (!started) {
+    return res.status(409).json({ error: 'A rescan is already running', startedAt: state.startedAt });
+  }
+  res.json({ ok: true, started: true, emailPlayers });
+});
+
+// ---- Player account summary -------------------------------------------------
+
+// Everything the account page needs in one round trip: who you are, what is
+// linked, the health of each subscription, and full purchase history. DB-only
+// so it stays fast; subscription health comes from the billing-issues table
+// rather than a live PayPal call.
+router.get('/api/shop/account/summary', requireAuth, (req, res) => {
+  const me = db.prepare(`
+    SELECT steam_id, persona, avatar_url, platform, gamertag, bm_player_id,
+           bi_uid, discord_id, role, created_at
+    FROM users WHERE steam_id = ?
+  `).get(req.user.steam_id);
+  if (!me) return res.status(404).json({ error: 'Account not found' });
+
+  const orders = db.prepare(`
+    SELECT o.id, o.product_id, o.status, o.amount_cents, o.created_at, o.completed_at,
+           o.paypal_subscription_id, o.subscription_cancelled_at, o.effective_until,
+           o.server_id, o.test_mode,
+           p.title, p.type, p.currency, p.server_specific, p.discord_role_id
+    FROM orders o JOIN products p ON o.product_id = p.id
+    WHERE o.steam_id = ?
+    ORDER BY o.created_at DESC
+  `).all(req.user.steam_id);
+
+  const issues = db.prepare(`
+    SELECT paypal_subscription_id, failed_count, outstanding_cents, currency,
+           last_payment_at, next_billing_at, resolved_at
+    FROM subscription_billing_issues
+    WHERE steam_id = ? AND resolved_at IS NULL
+  `).all(req.user.steam_id);
+  const issueBySub = new Map(issues.map(i => [i.paypal_subscription_id, i]));
+
+  // One entry per subscription, newest cycle first, so a sub billed monthly
+  // for six months is one card rather than six history rows.
+  //
+  // Only subscriptions that actually took a payment get a card. An abandoned
+  // checkout leaves a 'pending' row with its own subscription id and no
+  // effective_until, which would otherwise render as a second, identical
+  // product card reading "no longer active" for something that was never
+  // active in the first place.
+  const subs = [];
+  const seen = new Set();
+  const now = Math.floor(Date.now() / 1000);
+  for (const o of orders) {
+    if (!o.paypal_subscription_id || seen.has(o.paypal_subscription_id)) continue;
+    if (o.status !== 'completed') {
+      const everPaid = orders.some(x =>
+        x.paypal_subscription_id === o.paypal_subscription_id && x.status === 'completed');
+      if (!everPaid) continue;
+      // A newer pending cycle on a subscription that has paid before is just
+      // the next renewal in flight; the completed row below carries the state.
+      continue;
+    }
+    seen.add(o.paypal_subscription_id);
+    const issue = issueBySub.get(o.paypal_subscription_id) || null;
+    const active = !!(o.effective_until && o.effective_until > now);
+    subs.push({
+      subscriptionId: o.paypal_subscription_id,
+      orderId: o.id,
+      title: o.title,
+      currency: o.currency,
+      amountCents: o.amount_cents,
+      serverId: o.server_id,
+      effectiveUntil: o.effective_until,
+      cancelledAt: o.subscription_cancelled_at,
+      roleId: o.discord_role_id,
+      active,
+      // The distinction the whole feature exists for: PayPal says ACTIVE, but
+      // the payments are failing and access has already stopped.
+      state: o.subscription_cancelled_at ? 'cancelled'
+        : issue ? 'payment_failing'
+        : active ? 'active'
+        : 'lapsed',
+      billingIssue: issue ? {
+        failedCount: issue.failed_count,
+        outstandingCents: issue.outstanding_cents,
+        currency: issue.currency,
+        lastPaymentAt: issue.last_payment_at,
+        nextRetryAt: issue.next_billing_at
+      } : null
+    });
+  }
+
+  res.json({
+    profile: {
+      steamId: me.steam_id,
+      persona: me.persona,
+      avatarUrl: me.avatar_url,
+      platform: me.platform,
+      gamertag: me.gamertag,
+      bmPlayerId: me.bm_player_id,
+      biUid: me.bi_uid,
+      discordId: me.discord_id,
+      isAdmin: me.role === 'admin',
+      createdAt: me.created_at,
+      // Console UIDs are resolved from BattleMetrics and deliberately not
+      // self-editable (see /api/shop/set-bi-uid).
+      canEditBiUid: me.platform !== 'psn' && me.platform !== 'xbox'
+    },
+    subscriptions: subs,
+    orders
+  });
+});
+
+// ============================================================
 //  PayPal webhook handler (exported separately for raw body)
 // ============================================================
 
@@ -2996,6 +3434,8 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       // buyer's order history both reflect the new cycle.
       const subId = resource.billing_agreement_id;
       if (subId) {
+        // A cycle billed, so any open failure on this subscription is over.
+        resolveBillingIssue(subId, 'payment_recovered');
         const original = db.prepare(`
           SELECT o.*, p.title AS product_title, p.currency,
                  u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid
@@ -3167,6 +3607,8 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       // to tell a still-active subscription from a cancelled one, so the
       // Cancel button never goes away.
       markSubscriptionCancelledLocally(subId);
+      // The agreement is dead, so a pending failure is no longer actionable.
+      resolveBillingIssue(subId, event.event_type);
       syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
 
       // Notify Discord + email the buyer.
@@ -3202,6 +3644,24 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             currency: ctx.currency
           }).catch(e => console.error('[cancel-mail] send failed:', e.message));
         }
+      }
+      break;
+    }
+
+    case 'BILLING.SUBSCRIPTION.PAYMENT.FAILED': {
+      // Already subscribed with PayPal (see WEBHOOK_EVENTS in paypal.js) but
+      // previously unhandled, so every one of these was dropped on the floor.
+      // PayPal leaves the agreement ACTIVE and retries, which is exactly why
+      // this needs recording: nothing else in the system notices.
+      const subId = resource.id;
+      if (subId) {
+        await handleBillingFailure({
+          subId,
+          billingInfo: resource.billing_info,
+          paypalStatus: (resource.status || 'ACTIVE').toUpperCase(),
+          source: 'webhook',
+          emailPlayer: true
+        });
       }
       break;
     }

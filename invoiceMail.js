@@ -595,4 +595,106 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
   }
 }
 
-module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation, sendCustomFlagConfirmation };
+// A subscription payment did not go through. The important thing this email
+// has to get across is that PayPal still SHOWS the subscription as active --
+// that is exactly why people think nothing is wrong and open a ticket about a
+// role being taken off them. No blame, no threat, one obvious action.
+async function sendPaymentFailed({ to, displayName, productTitle, amountCents, currency, failedCount, accessEndsAtMs, nextRetryAtMs }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to) return { ok: false, skipped: 'no_recipient' };
+
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const item = productTitle || 'your subscription';
+  const name = displayName || 'there';
+  const amount = amountCents ? money(amountCents, currency) : null;
+  const fmt = (ms) => new Date(ms).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC';
+  const endedStr = accessEndsAtMs ? fmt(accessEndsAtMs) : null;
+  const retryStr = nextRetryAtMs ? fmt(nextRetryAtMs) : null;
+  const attempts = failedCount > 1
+    ? `We've now tried ${failedCount} times.`
+    : '';
+
+  const lapsed = !!(accessEndsAtMs && accessEndsAtMs < Date.now());
+  const accessLine = lapsed
+    ? `Because of that, your ${esc(item)} perks (including your Discord role) stopped on <strong>${esc(endedStr)}</strong>. They come back automatically once a payment goes through.`
+    : (endedStr
+      ? `Your access is paid up until <strong>${esc(endedStr)}</strong>. If the payment still hasn't gone through by then, your perks will pause until it does.`
+      : 'Your perks will pause if the payment still has not gone through by the end of your current paid period.');
+
+  const accessLineText = lapsed
+    ? `Because of that, your ${item} perks (including your Discord role) stopped on ${endedStr}. They come back automatically once a payment goes through.`
+    : (endedStr
+      ? `Your access is paid up until ${endedStr}. If the payment still hasn't gone through by then, your perks will pause until it does.`
+      : 'Your perks will pause if the payment still has not gone through by the end of your current paid period.');
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <tr><td style="background:#0d0f12;padding:24px;color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.5px">ReforgedZ</td></tr>
+        <tr><td style="padding:28px 24px;font-size:15px;color:#1a1a1a;line-height:1.55">
+          <p style="margin:0 0 12px">Hi ${esc(name)},</p>
+          <p style="margin:0 0 12px">We couldn't take the${amount ? ' ' + esc(amount) : ''} payment for your <strong>${esc(item)}</strong> subscription. ${esc(attempts)}</p>
+          <p style="margin:0 0 12px">${accessLine}</p>
+          <div style="margin:0 0 16px;padding:12px 14px;background:#fff7ed;border-left:3px solid #f59e0b;color:#7c2d12;font-size:14px">
+            Worth knowing: PayPal will still show this subscription as <strong>active</strong>, so it can look like everything is fine from your side.
+          </div>
+          <p style="margin:0 0 12px">It's usually an expired card, a bank block, or not enough balance on the PayPal account. Updating the payment method on PayPal is normally all it takes${retryStr ? `, and PayPal will retry on <strong>${esc(retryStr)}</strong>` : ''}.</p>
+          <p style="margin:24px 0">
+            <a href="https://www.paypal.com/myaccount/autopay/" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">Update payment method on PayPal</a>
+          </p>
+          <p style="margin:0 0 12px;color:#4b5563;font-size:13px">You can check the state of your subscriptions anytime at <a href="${esc(base)}/account" style="color:#2563eb;text-decoration:none">${esc(base.replace(/^https?:\/\//, ''))}/account</a>.</p>
+          <p style="margin:0 0 12px;color:#4b5563;font-size:13px">If you meant to cancel, you can ignore this — nothing further will be taken. Any questions, just reply to this email or open a ticket in our Discord.</p>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:16px 24px;border-top:1px solid #ecedf0;font-size:12px;color:#6b7280">
+          ReforgedZ &middot; <a href="${esc(base)}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    `Hi ${name},`,
+    '',
+    `We couldn't take the${amount ? ' ' + amount : ''} payment for your ${item}`,
+    `subscription. ${attempts}`.trimEnd(),
+    '',
+    accessLineText,
+    '',
+    'Worth knowing: PayPal will still show this subscription as active, so it',
+    'can look like everything is fine from your side.',
+    '',
+    "It's usually an expired card, a bank block, or not enough balance on the",
+    'PayPal account. Updating the payment method on PayPal is normally all it',
+    retryStr ? `takes, and PayPal will retry on ${retryStr}.` : 'takes.',
+    '',
+    'Update payment method: https://www.paypal.com/myaccount/autopay/',
+    `Check your subscriptions: ${base}/account`,
+    '',
+    'If you meant to cancel, you can ignore this - nothing further will be',
+    'taken. Any questions, just reply to this email or open a ticket in our',
+    'Discord.'
+  ].join('\n');
+
+  try {
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject: `Payment problem with your ${item} subscription`,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] payment-failed send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed };

@@ -339,4 +339,36 @@ if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='mont
   }
 }
 
+// ---- Subscription billing issues ------------------------------------------
+// PayPal leaves a subscription ACTIVE while its payments fail, so a lapse is
+// otherwise invisible: effective_until quietly stops advancing, the Discord
+// role is removed, and nobody is told -- the player still sees "active" on
+// PayPal's side. One row per subscription, closed out (resolved_at) when a
+// payment finally lands or the agreement dies.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS subscription_billing_issues (
+    paypal_subscription_id TEXT PRIMARY KEY,
+    order_id               INTEGER,
+    steam_id               TEXT,
+    paypal_status          TEXT,
+    failed_count           INTEGER NOT NULL DEFAULT 0,
+    outstanding_cents      INTEGER NOT NULL DEFAULT 0,
+    currency               TEXT NOT NULL DEFAULT 'usd',
+    last_payment_at        INTEGER,
+    next_billing_at        INTEGER,
+    first_seen_at          INTEGER NOT NULL,
+    last_seen_at           INTEGER NOT NULL,
+    notified_at            INTEGER,
+    player_emailed_at      INTEGER,
+    resolved_at            INTEGER,
+    source                 TEXT NOT NULL DEFAULT 'webhook'
+  )
+`);
+
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_billing_issues_open
+  ON subscription_billing_issues(resolved_at)
+  WHERE resolved_at IS NULL
+`);
+
 module.exports = db;
