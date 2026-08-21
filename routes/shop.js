@@ -333,6 +333,10 @@ function sweepExpiredEntitlements() {
   if (just > 0) {
     console.log(`[orders] ${just} subscription cycle(s) just lapsed — re-syncing`);
     syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+    // In-game access is filtered by the sync above, but the Discord role is
+    // only ever removed by an explicit event -- and a lapse is not one. Without
+    // this, an expired subscriber keeps their role indefinitely.
+    startRoleReconcile({});
   }
 }
 setInterval(sweepExpiredEntitlements, 5 * 60 * 1000);
@@ -3078,11 +3082,15 @@ async function handleBillingFailure(opts) {
 // and this runs detached, so wall-clock does not matter.
 async function rescanBillingIssues(opts) {
   const { emailPlayers = false } = opts || {};
+  // 'completed' only. A 'pending' row is an abandoned checkout: the shop
+  // reserved a subscription id that the buyer never approved, so PayPal never
+  // created it and every lookup 404s forever. Including them made `errors`
+  // permanently non-zero and hid real lookup failures.
   const subs = db.prepare(`
     SELECT DISTINCT o.paypal_subscription_id AS sub_id, o.test_mode
     FROM orders o
     WHERE o.paypal_subscription_id IS NOT NULL
-      AND o.status IN ('completed', 'pending')
+      AND o.status = 'completed'
       AND o.subscription_cancelled_at IS NULL
   `).all();
 
@@ -3296,6 +3304,125 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
     subscriptions: subs,
     orders
   });
+});
+
+// ---- Discord role reconciliation -------------------------------------------
+//  Roles were granted on fulfilment and removed on revoke/refund/hard-delete,
+//  but nothing removed one when a subscription simply LAPSED -- expiry is the
+//  passage of time, not an event. sweepExpiredEntitlements already re-synced
+//  in-game priority queue on lapse; the Discord role was left behind.
+
+// A pair is entitled while any completed order for that role is unexpired.
+// effective_until IS NULL means a one-time purchase (e.g. Supporter), which
+// never lapses -- so those are always entitled.
+function entitledRolePairKeys() {
+  const rows = db.prepare(`
+    SELECT DISTINCT u.discord_id AS user_id, p.discord_role_id AS role_id
+    FROM orders o
+    JOIN products p ON p.id = o.product_id
+    JOIN users u    ON u.steam_id = o.steam_id
+    WHERE o.status = 'completed'
+      AND p.discord_role_id IS NOT NULL
+      AND u.discord_id IS NOT NULL
+      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
+  `).all();
+  return new Set(rows.map(r => r.user_id + ':' + r.role_id));
+}
+
+// Every pair the shop has ever granted. Anyone NOT here is untouched, so a
+// role staff applied by hand to someone with no matching order is never
+// stripped by this.
+function everGrantedRolePairs() {
+  return db.prepare(`
+    SELECT DISTINCT u.discord_id AS user_id, p.discord_role_id AS role_id,
+           u.persona, p.title AS product_title
+    FROM orders o
+    JOIN products p ON p.id = o.product_id
+    JOIN users u    ON u.steam_id = o.steam_id
+    WHERE o.status = 'completed'
+      AND p.discord_role_id IS NOT NULL
+      AND u.discord_id IS NOT NULL
+  `).all();
+}
+
+async function reconcileLapsedDiscordRoles(opts) {
+  const { dryRun = false } = opts || {};
+  const entitled = entitledRolePairKeys();
+  const stale = everGrantedRolePairs()
+    .filter(r => !entitled.has(r.user_id + ':' + r.role_id));
+
+  const summary = { candidates: stale.length, removed: 0, notInGuild: 0, alreadyGone: 0, errors: 0, details: [] };
+
+  // Group by user so a member with two lapsed roles costs one lookup.
+  const byUser = new Map();
+  for (const r of stale) {
+    if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
+    byUser.get(r.user_id).push(r);
+  }
+
+  for (const [userId, rows] of byUser) {
+    let held;
+    try {
+      held = await discord.getMemberRoleIds(userId);
+    } catch (e) {
+      summary.errors++;
+      console.error('[roles] lookup failed for %s: %s', userId, e.message);
+      continue;
+    }
+    if (held === null) { summary.notInGuild += rows.length; continue; }
+
+    for (const r of rows) {
+      if (!held.includes(r.role_id)) { summary.alreadyGone++; continue; }
+      summary.details.push({
+        userId, roleId: r.role_id, persona: r.persona, product: r.product_title
+      });
+      if (dryRun) continue;
+      try {
+        await discord.removeRole(userId, r.role_id);
+        summary.removed++;
+        console.log('[roles] removed lapsed %s from %s (%s)', r.product_title, r.persona || userId, userId);
+      } catch (e) {
+        summary.errors++;
+        console.error('[roles] remove failed for %s/%s: %s', userId, r.role_id, e.message);
+      }
+      // Discord rate-limits role writes to roughly 1/sec.
+      await new Promise(res => setTimeout(res, 1100));
+    }
+  }
+  return summary;
+}
+
+let roleReconcileState = { running: false, startedAt: null, finishedAt: null, summary: null, error: null };
+
+function startRoleReconcile(opts) {
+  if (roleReconcileState.running) return { started: false, state: roleReconcileState };
+  roleReconcileState = { running: true, startedAt: Date.now(), finishedAt: null, summary: null, error: null };
+  reconcileLapsedDiscordRoles(opts)
+    .then((summary) => {
+      roleReconcileState = { running: false, startedAt: roleReconcileState.startedAt, finishedAt: Date.now(), summary, error: null };
+      console.log('[roles] reconcile complete: %j', { ...summary, details: summary.details.length });
+    })
+    .catch((e) => {
+      roleReconcileState = { running: false, startedAt: roleReconcileState.startedAt, finishedAt: Date.now(), summary: null, error: e.message };
+      console.error('[roles] reconcile failed:', e.message);
+    });
+  return { started: true, state: roleReconcileState };
+}
+
+router.get('/api/shop/admin/role-reconcile', requireAdmin, async (req, res) => {
+  // Always safe to call: reports what WOULD be removed without touching Discord.
+  try {
+    const preview = await reconcileLapsedDiscordRoles({ dryRun: true });
+    res.json({ preview, state: roleReconcileState });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+router.post('/api/shop/admin/role-reconcile', requireAdmin, (req, res) => {
+  const { started, state } = startRoleReconcile({ dryRun: req.body && req.body.dryRun === true });
+  if (!started) return res.status(409).json({ error: 'A reconcile is already running', startedAt: state.startedAt });
+  res.json({ ok: true, started: true });
 });
 
 // ============================================================

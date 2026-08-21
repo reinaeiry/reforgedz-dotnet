@@ -107,6 +107,17 @@ async function removeRole(userId, roleId) {
   }
 }
 
+// Role ids a member currently holds, or null if they are not in the guild.
+// Used to avoid firing a role-removal write at someone who does not have the
+// role -- Discord rate-limits role writes hard (roughly 1/sec).
+async function getMemberRoleIds(userId) {
+  if (!/^\d{15,25}$/.test(String(userId || ''))) return null;
+  const res = await discordFetch(`/guilds/${guildId()}/members/${userId}`);
+  if (!res.ok) return null;
+  const member = await res.json();
+  return Array.isArray(member.roles) ? member.roles : [];
+}
+
 // Post an embed into a guild channel as the bot. Used for staff-facing
 // alerts that need to land in a specific private channel rather than the
 // shop-orders webhook (which is a fixed, separate destination).
@@ -133,6 +144,7 @@ module.exports = {
   verifyMember,
   assignRole,
   removeRole,
+  getMemberRoleIds,
   postToChannel,
   guildId
 };
