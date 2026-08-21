@@ -319,7 +319,11 @@ setInterval(reapOrphanUploads, SWEEPER_INTERVAL_MS);
 // re-run the purchase sync so the GUID drops out of game.admins. No state
 // change to the order row — sync.js's effective_until check handles the
 // entitlement filter; status stays 'completed' so revenue stats still see it.
-let lastEffectiveSweepUnix = Math.floor(Date.now() / 1000);
+// Starting this at "now" would silently skip any cycle that lapsed while the
+// process was down -- deploys land in that window. Back-date one sweep
+// interval so a restart re-examines the period it missed. The sync and the
+// reconcile are both idempotent, so an overlapping re-check costs nothing.
+let lastEffectiveSweepUnix = Math.floor(Date.now() / 1000) - 15 * 60;
 function sweepExpiredEntitlements() {
   const now = Math.floor(Date.now() / 1000);
   const just = db.prepare(`
@@ -2707,11 +2711,20 @@ router.post('/api/shop/set-discord-id', requireAuth, async (req, res) => {
   db.prepare('UPDATE users SET discord_id = ? WHERE steam_id = ?').run(cleaned, req.user.steam_id);
   req.user.discord_id = cleaned;
 
-  // Back-fill any role grants this user was owed.
+  // Back-fill any role grants this user is owed.
+  //
+  // The expiry filter matters: without it, linking Discord re-granted every
+  // role the account had EVER bought, including subscriptions that lapsed
+  // months ago -- and the reconciler only sweeps when a cycle just lapsed, so
+  // the role would stick around indefinitely. Same entitlement rule as
+  // entitledRolePairKeys(): effective_until IS NULL means a one-time purchase,
+  // which never expires.
   const owed = db.prepare(`
     SELECT DISTINCT p.discord_role_id AS role_id
     FROM orders o JOIN products p ON o.product_id = p.id
-    WHERE o.steam_id = ? AND o.status = 'completed' AND p.discord_role_id IS NOT NULL
+    WHERE o.steam_id = ? AND o.status = 'completed'
+      AND p.discord_role_id IS NOT NULL
+      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
   `).all(req.user.steam_id);
   let assigned = 0;
   for (const r of owed) {
@@ -2750,9 +2763,13 @@ function tryRemoveDiscordRoleForOrder(orderId) {
       WHERE o.id = ?
     `).get(orderId);
     if (!row || !row.role_id || !row.user_id) return;
+    // "Still owed" has to mean a LIVE entitlement. Counting lapsed orders here
+    // meant revoking someone's current subscription left the role in place
+    // because they had bought the same thing a year ago.
     const stillOwed = db.prepare(`
       SELECT 1 FROM orders o JOIN products p ON o.product_id = p.id
       WHERE o.steam_id = ? AND o.id != ? AND o.status = 'completed' AND p.discord_role_id = ?
+        AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
       LIMIT 1
     `).get(row.steam_id, orderId, row.role_id);
     if (stillOwed) return;
