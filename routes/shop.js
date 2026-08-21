@@ -39,8 +39,12 @@ const CUSTOM_FLAG_MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg' };
 const CUSTOM_FLAG_TICKET_URL = 'https://discord.com/channels/1352364195211120660/1361079415324410026';
 
 // #Payment-Processor (Owner's category). Staff-only, so it can carry payer
-// emails and PayPal ids that must never reach a public channel. Overridable
-// so a test guild never posts into the live one.
+// emails and PayPal ids that must never reach a public channel.
+//
+// Note this is the SAME channel DISCORD_WEBHOOK_URL ("ReforgedZ Payments")
+// already posts purchase notifications to. Billing alerts go out through that
+// webhook so everything payment-related in the channel comes from one
+// identity; this id is only the fallback target when no webhook is set.
 const PAYMENT_PROCESSOR_CHANNEL_ID =
   process.env.DISCORD_PAYMENT_CHANNEL_ID || '1481277655826305204';
 
@@ -2950,7 +2954,7 @@ function resolveBillingIssue(subId, reason) {
 async function postBillingIssueAlert(opts) {
   const { subId, ctx, failedCount, outstandingCents, currency,
           nextBillingAt, lastPaymentAt, source } = opts;
-  if (!PAYMENT_PROCESSOR_CHANNEL_ID) return false;
+  if (!DISCORD_WEBHOOK_URL && !PAYMENT_PROCESSOR_CHANNEL_ID) return false;
   const money = (c) => '$' + ((c || 0) / 100).toFixed(2) + ' ' + (currency || 'usd').toUpperCase();
   const when = (u) => (u ? '<t:' + u + ':D>' : 'Never');
   const platform = (ctx && ctx.platform) || 'steam';
@@ -2974,19 +2978,38 @@ async function postBillingIssueAlert(opts) {
     fields.push({ name: 'Role affected', value: '<@&' + ctx.discord_role_id + '>', inline: true });
   }
 
+  const embed = {
+    title: 'Subscription payment failed',
+    description: source === 'rescan'
+      ? 'Found by a rescan of PayPal -- this failure predates failure tracking.'
+      : 'PayPal could not take payment. The subscription still shows ACTIVE to the player, but their access has stopped renewing.',
+    color: 0xf87171,
+    fields,
+    timestamp: new Date().toISOString(),
+    footer: { text: 'ReforgedZ Shop - billing' }
+  };
+
+  // Preferred path: the "ReforgedZ Payments" webhook, which already delivers
+  // purchase notifications into this same channel. Keeps one identity for
+  // everything payment-related instead of introducing a second poster.
+  if (DISCORD_WEBHOOK_URL) {
+    try {
+      const res = await fetch(DISCORD_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ embeds: [embed] })
+      });
+      if (res.ok) return true;
+      console.error('[billing] webhook alert failed: HTTP %s', res.status);
+    } catch (e) {
+      console.error('[billing] webhook alert failed:', e.message);
+    }
+  }
+
+  // Fallback: post as the bot. Only reached when the webhook is unset or
+  // broken -- a staff alert about lost revenue is worth a second attempt.
   try {
-    await discord.postToChannel(PAYMENT_PROCESSOR_CHANNEL_ID, {
-      embeds: [{
-        title: 'Subscription payment failed',
-        description: source === 'rescan'
-          ? 'Found by a rescan of PayPal -- this failure predates failure tracking.'
-          : 'PayPal could not take payment. The subscription still shows ACTIVE to the player, but their access has stopped renewing.',
-        color: 0xf87171,
-        fields,
-        timestamp: new Date().toISOString(),
-        footer: { text: 'ReforgedZ Shop - billing' }
-      }]
-    });
+    await discord.postToChannel(PAYMENT_PROCESSOR_CHANNEL_ID, { embeds: [embed] });
     return true;
   } catch (e) {
     console.error('[billing] channel alert failed:', e.message);
