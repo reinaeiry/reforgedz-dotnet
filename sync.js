@@ -192,7 +192,22 @@ function buildPriorityQueueGuidsPerServer() {
 function buildWritePurchasesCmd(server, json) {
   const b64 = Buffer.from(json).toString('base64');
   const remotePath = server.path + '/purchases.json';
-  return `mkdir -p '${server.path}' && echo '${b64}' | base64 -d > '${remotePath}' && echo '[sync] ${server.id} OK'`;
+  const tmpPath = remotePath + '.tmp';
+  // Write to a sibling temp file and rename over the target. A plain
+  // redirect truncates the live file first, so a game server reading it at
+  // that moment sees an empty or half-written entitlement list -- and two
+  // syncs overlapping (this runs from ~15 call sites plus two timers) could
+  // interleave into it. rename(2) within the same directory is atomic, so a
+  // reader gets either the old file or the new one, never a partial one.
+  // chmod --reference keeps whatever mode that server's file already had;
+  // they are not consistent across servers, so don't impose one.
+  return [
+    `mkdir -p '${server.path}'`,
+    `echo '${b64}' | base64 -d > '${tmpPath}'`,
+    `{ chmod --reference='${remotePath}' '${tmpPath}' 2>/dev/null || true; }`,
+    `mv -f '${tmpPath}' '${remotePath}'`,
+    `echo '[sync] ${server.id} OK'`
+  ].join(' && ');
 }
 
 function wrapForRegion(server, innerCmd) {
@@ -341,7 +356,34 @@ async function patchServerAdmins(conn, server, desiredGuids) {
   console.error(`[admins-sync] ${server.id} game.admins CAS conflict — retries exhausted, will retry next sync`);
 }
 
+// Coalescing guard. Every caller is fire-and-forget, and a purchase can easily
+// land while the 10-minute periodic sync is mid-flight, which used to mean two
+// concurrent SSH sessions writing the same files. If a sync is requested while
+// one is running we do NOT drop it -- the request is remembered and one more
+// pass runs afterwards, so the last state always reaches the servers.
+let syncInFlight = null;
+let syncRequestedAgain = false;
+
 async function syncPurchasesToServers() {
+  if (syncInFlight) {
+    syncRequestedAgain = true;
+    return syncInFlight;
+  }
+  syncInFlight = (async () => {
+    try {
+      return await runPurchaseSync();
+    } finally {
+      syncInFlight = null;
+      if (syncRequestedAgain) {
+        syncRequestedAgain = false;
+        syncPurchasesToServers().catch(e => console.error('[sync] coalesced re-run failed:', e.message));
+      }
+    }
+  })();
+  return syncInFlight;
+}
+
+async function runPurchaseSync() {
   // Sellable/synced servers only — eu3 is a dev box now and must not be written to.
   const servers = listServers();
   if (servers.length === 0) {
