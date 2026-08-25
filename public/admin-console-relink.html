@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Console re-link | ReforgedZ Admin</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .arl-page { max-width: 640px; margin: 0 auto; padding: 48px 16px 80px; display: flex; flex-direction: column; gap: 22px; }
+    .arl-page h1 { font-family: var(--display); text-transform: uppercase; letter-spacing: 1px; font-size: 1.6rem; margin: 0; }
+    .arl-page p { margin: 0; color: var(--text-dim); font-size: 0.94rem; line-height: 1.65; }
+    .arl-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+    .arl-row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .arl-row input {
+      flex: 1 1 220px; padding: 12px 14px; background: var(--bg-black);
+      border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+      font-family: var(--body); font-size: 0.95rem;
+    }
+    .arl-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .arl-btn {
+      padding: 12px 20px; background: var(--accent); color: #fff; border: none;
+      border-radius: 8px; font-family: var(--body); font-size: 0.9rem; font-weight: 600; cursor: pointer;
+    }
+    .arl-btn:hover:not(:disabled) { background: var(--accent-hover); }
+    .arl-btn:disabled { opacity: 0.55; cursor: default; }
+    .arl-out { display: none; flex-direction: column; gap: 10px; }
+    .arl-out.show { display: flex; }
+    .arl-link {
+      padding: 12px; background: var(--bg-black); border: 1px solid var(--border);
+      border-radius: 8px; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem;
+      word-break: break-all; color: var(--text); line-height: 1.5;
+    }
+    .arl-meta { font-size: 0.8rem; color: var(--text-ghost); }
+    .arl-msg { font-size: 0.88rem; line-height: 1.6; }
+    .arl-msg.error { color: #e74c3c; }
+    .arl-msg.ok { color: #2ecc71; }
+    .arl-warn {
+      background: rgba(241,196,15,0.08); border: 1px solid rgba(241,196,15,0.35);
+      border-radius: 8px; padding: 12px 14px; font-size: 0.85rem; line-height: 1.6; color: var(--text-dim);
+    }
+  </style>
+</head>
+<body>
+  <div class="arl-page">
+    <h1>Console re-link</h1>
+    <p>
+      For console players who cannot sign in because their gamertag is already linked and they cleared
+      cookies or changed device. Generates a single-use link that hands the account lock to whatever
+      device opens it.
+    </p>
+
+    <div class="arl-warn">
+      <strong>Check who you are talking to first.</strong> A gamertag is public, so anyone can claim one.
+      This link gives whoever opens it full access to that account and its purchases.
+    </div>
+
+    <div class="arl-card">
+      <div class="arl-row">
+        <input id="gamertag" placeholder="Gamertag (or BattleMetrics player id)" spellcheck="false" autocomplete="off">
+        <button class="arl-btn" id="go">Generate link</button>
+      </div>
+      <div class="arl-msg" id="msg"></div>
+      <div class="arl-out" id="out">
+        <div class="arl-link" id="link"></div>
+        <div class="arl-row">
+          <button class="arl-btn" id="copy">Copy link</button>
+        </div>
+        <div class="arl-meta" id="meta"></div>
+      </div>
+    </div>
+
+    <p>
+      Issuing a new link immediately retires any previous unused one for that player, so if a link ends up
+      somewhere it should not, just generate another.
+    </p>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let currentUrl = '';
+
+    async function generate() {
+      const raw = $('gamertag').value.trim();
+      const msg = $('msg');
+      msg.textContent = '';
+      msg.className = 'arl-msg';
+      $('out').classList.remove('show');
+      if (!raw) { msg.textContent = 'Enter a gamertag or player id.'; msg.className = 'arl-msg error'; return; }
+
+      const btn = $('go');
+      btn.disabled = true;
+      btn.textContent = 'Working…';
+      try {
+        const body = /^\d+$/.test(raw) ? { bmPlayerId: raw } : { gamertag: raw };
+        const res = await fetch('/api/shop/admin/console/relink', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          msg.textContent = data.error || 'Could not generate a link.';
+          msg.className = 'arl-msg error';
+          return;
+        }
+        currentUrl = data.url;
+        $('link').textContent = data.url;
+        $('meta').textContent =
+          `${data.gamertag} (${data.platform}) · expires in ${data.expiresInMinutes} minutes · single use`;
+        $('out').classList.add('show');
+        msg.textContent = 'Send this to the player and have them open it on the device they want to use.';
+        msg.className = 'arl-msg ok';
+      } catch (e) {
+        msg.textContent = 'Request failed: ' + e.message;
+        msg.className = 'arl-msg error';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate link';
+      }
+    }
+
+    $('go').addEventListener('click', generate);
+    $('gamertag').addEventListener('keydown', (e) => { if (e.key === 'Enter') generate(); });
+    $('copy').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(currentUrl);
+        $('copy').textContent = 'Copied';
+        setTimeout(() => { $('copy').textContent = 'Copy link'; }, 1500);
+      } catch (e) {
+        $('msg').textContent = 'Could not copy. Select the link above and copy it manually.';
+        $('msg').className = 'arl-msg error';
+      }
+    });
+  </script>
+</body>
+</html>

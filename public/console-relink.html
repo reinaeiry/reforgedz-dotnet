@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Re-link your console | ReforgedZ</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .relink-page {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+    .relink-card {
+      width: 100%;
+      max-width: 440px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 28px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      text-align: center;
+    }
+    .relink-card h1 {
+      font-family: var(--display);
+      text-transform: uppercase;
+      font-size: 1.5rem;
+      letter-spacing: 1px;
+      margin: 0;
+    }
+    .relink-card p { margin: 0; color: var(--text-dim); font-size: 0.95rem; line-height: 1.6; }
+    .relink-who {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 14px;
+      background: var(--bg-black);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .relink-who .tag { font-weight: 600; font-size: 1.05rem; color: var(--text); }
+    .relink-btn {
+      padding: 14px 20px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-family: var(--body);
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .relink-btn:hover:not(:disabled) { background: var(--accent-hover); }
+    .relink-btn:disabled { opacity: 0.55; cursor: default; }
+    .relink-msg { font-size: 0.9rem; line-height: 1.6; }
+    .relink-msg.error { color: #e74c3c; }
+    .relink-msg.ok { color: #2ecc71; }
+    .relink-note { font-size: 0.75rem; color: var(--text-ghost); line-height: 1.6; }
+    .relink-hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="relink-page">
+    <div class="relink-card">
+      <h1>Re-link your console</h1>
+
+      <div id="loading">
+        <p>Checking your link&hellip;</p>
+      </div>
+
+      <div id="ready" class="relink-hidden">
+        <p>This will sign you in on this device and make it the one your ReforgedZ account trusts from now on.</p>
+        <div class="relink-who">
+          <span class="platform-mark" id="platformMark">?</span>
+          <span class="tag" id="gamertag"></span>
+        </div>
+        <p>Use the device you actually want to stay signed in on. If that is your phone, finish this on your phone.</p>
+        <button class="relink-btn" id="confirmBtn">Sign me in on this device</button>
+        <div class="relink-msg" id="msg"></div>
+      </div>
+
+      <div id="failed" class="relink-hidden">
+        <div class="relink-msg error" id="failMsg"></div>
+        <p>Open a ticket in our Discord and staff can send you a fresh link.</p>
+        <a class="relink-btn" style="display:inline-block;text-decoration:none" href="https://discord.gg/reforgedz">Open Discord</a>
+      </div>
+
+      <div id="done" class="relink-hidden">
+        <div class="relink-msg ok">You are signed in on this device.</div>
+        <a class="relink-btn" style="display:inline-block;text-decoration:none" href="/account">Go to my account</a>
+      </div>
+
+      <div class="relink-note">Links are single use and expire quickly. Do not share this page with anyone.</div>
+    </div>
+  </div>
+
+  <script>
+    const token = new URLSearchParams(location.search).get('token') || '';
+    const $ = (id) => document.getElementById(id);
+    const show = (id) => $(id).classList.remove('relink-hidden');
+    const hide = (id) => $(id).classList.add('relink-hidden');
+
+    function fail(text) {
+      hide('loading'); hide('ready');
+      $('failMsg').textContent = text;
+      show('failed');
+    }
+
+    async function check() {
+      if (!token) return fail('This link is missing its code.');
+      try {
+        const res = await fetch('/api/auth/console/relink/check?token=' + encodeURIComponent(token));
+        const data = await res.json();
+        if (!res.ok) return fail(data.error || 'This link is not valid.');
+        $('gamertag').textContent = data.gamertag || '';
+        const mark = $('platformMark');
+        mark.textContent = data.platform === 'xbox' ? 'X' : 'PS';
+        mark.classList.add(data.platform === 'xbox' ? 'xbox-mark' : 'psn-mark');
+        hide('loading');
+        show('ready');
+      } catch (e) {
+        fail('Could not reach ReforgedZ. Check your connection and try again.');
+      }
+    }
+
+    $('confirmBtn').addEventListener('click', async () => {
+      const btn = $('confirmBtn');
+      btn.disabled = true;
+      btn.textContent = 'Signing you in…';
+      $('msg').textContent = '';
+      $('msg').className = 'relink-msg';
+      try {
+        const res = await fetch('/api/auth/console/relink', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          btn.disabled = false;
+          btn.textContent = 'Sign me in on this device';
+          $('msg').textContent = data.error || 'That did not work.';
+          $('msg').className = 'relink-msg error';
+          return;
+        }
+        hide('ready');
+        show('done');
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Sign me in on this device';
+        $('msg').textContent = 'Could not reach ReforgedZ. Check your connection and try again.';
+        $('msg').className = 'relink-msg error';
+      }
+    });
+
+    check();
+  </script>
+</body>
+</html>

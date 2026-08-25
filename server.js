@@ -466,6 +466,136 @@ app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
   });
 });
 
+// ---- Console re-link (staff-issued, single use) ----------------------------
+// See db.js for why this exists: without it, a console player who clears
+// cookies or switches device is permanently locked out of their own account
+// and staff have no way to help, despite the refusal message promising one.
+
+const RELINK_TTL_MS = 15 * 60 * 1000;
+const RELINK_TOKEN_BYTES = 32;
+
+function hashRelinkToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+// Session-based admin gate returning JSON, matching requireAdminPage's check.
+function requireAdminApi(req, res, next) {
+  if (req.isAuthenticated && req.isAuthenticated() && req.user && req.user.role === 'admin') {
+    console.log(`[admin-audit] steam:${req.user.steam_id} ${req.method} ${req.originalUrl} from ${req.ip}`);
+    return next();
+  }
+  return res.status(403).json({ error: 'Admin only' });
+}
+
+function findConsoleUser({ bmPlayerId, gamertag }) {
+  if (bmPlayerId) {
+    return db.prepare('SELECT * FROM users WHERE bm_player_id = ?').get(String(bmPlayerId).trim());
+  }
+  if (gamertag) {
+    return db.prepare(
+      "SELECT * FROM users WHERE platform IN ('xbox','psn') AND lower(gamertag) = lower(?)"
+    ).get(String(gamertag).trim());
+  }
+  return null;
+}
+
+// Staff: issue a re-link for an EXISTING console account.
+app.post('/api/shop/admin/console/relink', writeLimiter, requireAdminApi, (req, res) => {
+  const { gamertag, bmPlayerId } = req.body || {};
+  if (!gamertag && !bmPlayerId) return res.status(400).json({ error: 'Give a gamertag or a BattleMetrics player id' });
+
+  const user = findConsoleUser({ bmPlayerId, gamertag });
+  if (!user) return res.status(404).json({ error: 'No account found for that gamertag or player id' });
+  if (!VALID_PLATFORMS.has(user.platform)) {
+    return res.status(400).json({ error: `That is a ${user.platform} account, not a console one. Only Xbox and PlayStation use the console lock.` });
+  }
+  if (!user.bm_player_id) return res.status(400).json({ error: 'That account has no BattleMetrics player id to re-link' });
+
+  const token = crypto.randomBytes(RELINK_TOKEN_BYTES).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + Math.floor(RELINK_TTL_MS / 1000);
+
+  const issue = db.transaction(() => {
+    // Only one live link per player: issuing a new one retires any earlier
+    // unused link, so a token that leaked into a Discord channel stops working
+    // the moment staff reissue.
+    db.prepare(
+      "UPDATE console_relink_tokens SET used_at = ?, used_note = 'superseded' WHERE bm_player_id = ? AND used_at IS NULL"
+    ).run(now, user.bm_player_id);
+    db.prepare(`
+      INSERT INTO console_relink_tokens (token_hash, bm_player_id, platform, issued_by, issued_at, expires_at)
+      VALUES (?,?,?,?,?,?)
+    `).run(hashRelinkToken(token), user.bm_player_id, user.platform, `steam:${req.user.steam_id}`, now, expiresAt);
+  });
+  issue();
+
+  const base = process.env.PUBLIC_BASE_URL || 'https://reforgedz.net';
+  console.log(`[console-relink] issued for ${user.gamertag} (${user.platform}/${user.bm_player_id}) by steam:${req.user.steam_id}`);
+  res.json({
+    ok: true,
+    url: `${base}/console-relink?token=${encodeURIComponent(token)}`,
+    expiresAt,
+    expiresInMinutes: Math.round(RELINK_TTL_MS / 60000),
+    gamertag: user.gamertag,
+    platform: user.platform
+  });
+});
+
+// Player-facing page. Static: the token is only ever read by the script on it.
+app.get('/console-relink', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'console-relink.html'));
+});
+
+function loadRelinkToken(token) {
+  if (!token || typeof token !== 'string') return { error: 'Missing link' };
+  const row = db.prepare('SELECT * FROM console_relink_tokens WHERE token_hash = ?').get(hashRelinkToken(token));
+  if (!row) return { error: 'This link is not valid. Ask staff for a new one.' };
+  if (row.used_at) return { error: 'This link has already been used. Ask staff for a new one.' };
+  if (row.expires_at < Math.floor(Date.now() / 1000)) return { error: 'This link has expired. Ask staff for a new one.' };
+  const user = db.prepare('SELECT * FROM users WHERE bm_player_id = ?').get(row.bm_player_id);
+  if (!user) return { error: 'The account this link points at no longer exists.' };
+  return { row, user };
+}
+
+// Read-only check so the page can say who it is for. Safe for link previews:
+// it never consumes the token.
+app.get('/api/auth/console/relink/check', authLimiter, (req, res) => {
+  const { row, user, error } = loadRelinkToken(req.query.token);
+  if (error) return res.status(400).json({ error });
+  res.json({ ok: true, gamertag: user.gamertag, platform: user.platform, expiresAt: row.expires_at });
+});
+
+// Consume. POST on purpose: Discord and other clients follow GET links to build
+// previews, which would burn a single-use token before the player ever clicked.
+app.post('/api/auth/console/relink', authLimiter, (req, res) => {
+  const { token } = req.body || {};
+  const { row, user, error } = loadRelinkToken(token);
+  if (error) return res.status(400).json({ error });
+
+  // Atomic claim: two requests racing the same link, only one can win.
+  const claimed = db.prepare(
+    'UPDATE console_relink_tokens SET used_at = ?, used_note = ? WHERE token_hash = ? AND used_at IS NULL'
+  ).run(Math.floor(Date.now() / 1000), String(req.ip || '').slice(0, 64), row.token_hash);
+  if (claimed.changes !== 1) {
+    return res.status(400).json({ error: 'This link has already been used. Ask staff for a new one.' });
+  }
+
+  req.login(user, (err) => {
+    if (err) {
+      console.error('[console-relink] session error:', err.message);
+      return res.status(500).json({ error: 'Could not sign you in. Ask staff for a new link.' });
+    }
+    setConsoleCookie(res, {
+      platform: user.platform,
+      gamertag: user.gamertag,
+      bmPlayerId: user.bm_player_id,
+      ts: Date.now()
+    });
+    console.log(`[console-relink] consumed for ${user.gamertag} (${user.platform}) from ${req.ip}`);
+    res.json({ ok: true, gamertag: user.gamertag, platform: user.platform });
+  });
+});
+
 // ---- FX rates ----
 app.get('/api/shop/fx', async (req, res) => {
   const data = await fx.getRates();
@@ -858,6 +988,10 @@ function requireAdminPage(req, res, next) {
 
 app.get('/admin/orders', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-orders.html'));
+});
+
+app.get('/admin/console-relink', requireAdminPage, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin-console-relink.html'));
 });
 
 app.get('/admin/saves', requireAdminPage, (req, res) => {

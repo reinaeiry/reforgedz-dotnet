@@ -371,6 +371,45 @@ db.exec(`
   WHERE resolved_at IS NULL
 `);
 
+// ---- Console re-link tokens ------------------------------------------------
+// Console sign-in has no ownership proof: a gamertag is public and the
+// BattleMetrics lookup only maps gamertag -> player id. So once an account
+// exists we only admit a browser carrying the signed rz_console_locked cookie
+// from the original link. That protects the account, but it also means a player
+// who clears cookies or picks up a different device is locked out of their own
+// account -- and the refusal message told them an admin would re-link them,
+// which was not something any admin could actually do.
+//
+// A token here is that missing remedy: staff verify identity in the ticket and
+// issue one, the player opens it on the device they want to use, and it hands
+// the lock to that browser. Deliberately NOT a way to clear the lock outright,
+// which would leave the account claimable by anyone who knows the gamertag.
+//
+// Only the SHA-256 of the token is stored, so read access to this table does
+// not yield a working link.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS console_relink_tokens (
+    token_hash   TEXT PRIMARY KEY,
+    bm_player_id TEXT NOT NULL,
+    platform     TEXT NOT NULL,
+    issued_by    TEXT NOT NULL,
+    issued_at    INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL,
+    used_at      INTEGER,
+    used_note    TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_relink_open
+  ON console_relink_tokens(bm_player_id) WHERE used_at IS NULL;
+`);
+
+// Spent and expired tokens have no value; keep the table from growing forever.
+{
+  const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
+  const res = db.prepare("DELETE FROM console_relink_tokens WHERE expires_at < ?").run(cutoff);
+  if (res.changes > 0) console.log(`[db] pruned ${res.changes} expired console re-link token(s)`);
+}
+
 // ---- Accounts and connected identities (renovation, phase 1) --------------
 // Today a customer record IS a platform account: `users` is keyed by steam_id
 // (or "console:<bm id>") and orders hang off that key, so one person with a PC
