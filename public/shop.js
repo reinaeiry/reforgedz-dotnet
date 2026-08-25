@@ -358,6 +358,7 @@ function renderAuth() {
             <span class="platform-mark psn-mark">PS</span>
             PlayStation
           </button>
+          <div class="signin-hint">Sign in with the platform you play on. You can link Discord afterwards from your <a href="/account">Account</a> page.</div>
         </div>
       </div>
     `;

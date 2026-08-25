@@ -2839,6 +2839,39 @@ img { display: block; max-width: 100%; }
    Responsive
    ============================================ */
 
+/* The nav has to hold nine links plus, on the shop, the currency pills and the
+   sign-in button. Past this width it overflowed the viewport and pushed "Sign in"
+   and "Join Discord" off the right edge, where they could not be reached at all.
+   Collapse the links into the hamburger while there is still room for both. */
+@media (max-width: 1240px) {
+  .nav-hamburger { display: flex !important; width: auto; height: auto; overflow: visible; }
+  .nav-links {
+    display: none;
+    position: fixed;
+    top: 68px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(8,8,8,0.98);
+    backdrop-filter: blur(12px);
+    flex-direction: column;
+    align-items: stretch;
+    padding: 24px 20px;
+    gap: 4px;
+    z-index: 105;
+    overflow-y: auto;
+  }
+  .nav-links.open { display: flex; }
+  .nav-links .nav-link {
+    padding: 14px 16px;
+    font-size: 1rem;
+    border-radius: 8px;
+    text-align: left;
+  }
+  .nav-links .nav-link:hover,
+  .nav-links .nav-link.active { background: rgba(255,255,255,0.06); }
+}
+
 @media (max-width: 960px) {
   .dossier-grid { grid-template-columns: repeat(3, 1fr); }
   .mods-grid { grid-template-columns: repeat(3, 1fr); }

@@ -653,6 +653,7 @@
         <a class="nav-link" href="/#contact">Contact</a>
         <a class="nav-link" href="https://wiki.reforgedz.net" target="_blank">Wiki</a>
         <a class="nav-link" href="/map">Map</a>
+        <a class="nav-link" href="/account">Account</a>
       </div>
       <div class="nav-auth" id="navAuth">
         <div class="currency-pills" id="currencyPills" role="group" aria-label="Currency">
@@ -677,6 +678,7 @@
               <span class="platform-mark psn-mark">PS</span>
               PlayStation
             </button>
+            <div class="signin-hint">Sign in with the platform you play on. You can link Discord afterwards from your <a href="/account">Account</a> page.</div>
           </div>
         </div>
       </div>
@@ -1300,6 +1302,7 @@
       font-family: var(--body);
       font-size: 0.82rem;
       font-weight: 600;
+      white-space: nowrap;
       cursor: pointer;
       transition: background 0.2s;
     }
@@ -1323,7 +1326,7 @@
       position: absolute;
       top: calc(100% + 6px);
       right: 0;
-      width: 200px;
+      width: 244px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -1334,6 +1337,16 @@
     }
 
     .signin-wrap.open .signin-menu { display: block; }
+
+    .signin-hint {
+      padding: 10px 14px 12px;
+      border-top: 1px solid var(--border);
+      font-size: 0.68rem;
+      line-height: 1.5;
+      color: var(--text-ghost);
+    }
+
+    .signin-hint a { color: var(--text); text-decoration: underline; }
 
     .signin-item {
       display: flex;
