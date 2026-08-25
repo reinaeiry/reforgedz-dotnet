@@ -371,4 +371,127 @@ db.exec(`
   WHERE resolved_at IS NULL
 `);
 
+// ---- Accounts and connected identities (renovation, phase 1) --------------
+// Today a customer record IS a platform account: `users` is keyed by steam_id
+// (or "console:<bm id>") and orders hang off that key, so one person with a PC
+// and an Xbox is two customers with two histories, and Discord is a text field
+// on the side with nowhere to live.
+//
+// These two tables introduce the missing middle: an `account` is a person, and
+// an `account_identity` is one way they sign in (discord / steam / xbox / psn).
+// NOTHING reads from them yet -- users.steam_id stays authoritative through this
+// phase. The backfill below is additive and re-runnable, so this migration can
+// be deployed and reverted without touching a single existing row.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS accounts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS account_identities (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id   INTEGER NOT NULL REFERENCES accounts(id),
+    provider     TEXT NOT NULL CHECK(provider IN ('discord','steam','xbox','psn')),
+    provider_id  TEXT NOT NULL,
+    display_name TEXT,
+    linked_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+    UNIQUE(provider, provider_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_identities_account ON account_identities(account_id);
+`);
+
+function tableHasColumn(table, name) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === name);
+}
+
+// Bridge columns. Nullable on purpose: while both models coexist, a NULL here
+// simply means "not backfilled yet" rather than an invalid row.
+if (!tableHasColumn('users', 'account_id')) {
+  db.exec("ALTER TABLE users ADD COLUMN account_id INTEGER REFERENCES accounts(id)");
+}
+if (!tableHasColumn('orders', 'account_id')) {
+  db.exec("ALTER TABLE orders ADD COLUMN account_id INTEGER REFERENCES accounts(id)");
+}
+
+// The platform identity a user record represents. Steam users are identified by
+// their steamid64; console users by their BattleMetrics player id, which is the
+// stable half of "console:<id>" (the gamertag is a display name and can change).
+function identityForUser(u) {
+  const platform = u.platform || 'steam';
+  if (platform === 'steam') {
+    return { provider: 'steam', providerId: u.steam_id, displayName: u.persona || null };
+  }
+  const providerId = u.bm_player_id || String(u.steam_id || '').replace(/^console:/, '');
+  if (!providerId) return null;
+  return { provider: platform, providerId, displayName: u.gamertag || u.persona || null };
+}
+
+{
+  const pending = db.prepare("SELECT * FROM users WHERE account_id IS NULL").all();
+  if (pending.length) {
+    const insertAccount  = db.prepare("INSERT INTO accounts DEFAULT VALUES");
+    const insertIdentity = db.prepare(
+      "INSERT OR IGNORE INTO account_identities (account_id, provider, provider_id, display_name) VALUES (?,?,?,?)"
+    );
+    const linkUser   = db.prepare("UPDATE users SET account_id = ? WHERE steam_id = ?");
+    const linkOrders = db.prepare("UPDATE orders SET account_id = ? WHERE steam_id = ? AND account_id IS NULL");
+
+    // A Discord id may already belong to another account -- the UNIQUE constraint
+    // is the whole point of this phase, since signing in with Discord requires it.
+    // Process the rows most likely to be someone's real account first (most
+    // completed orders, then oldest), so the duplicate that loses the race is the
+    // spare one. Losers are reported rather than dropped silently.
+    const orderCount = db.prepare(
+      "SELECT COUNT(*) c FROM orders WHERE steam_id = ? AND status = 'completed'"
+    );
+    const rank = (u) => (u.role === 'admin' ? 1 : 0);
+    pending.sort((a, b) => {
+      // Staff accounts first: when the same Discord is on a real account and a
+      // spare test one, the real one should keep it.
+      const r = rank(b) - rank(a);
+      if (r !== 0) return r;
+      const d = orderCount.get(b.steam_id).c - orderCount.get(a.steam_id).c;
+      return d !== 0 ? d : (a.created_at || 0) - (b.created_at || 0);
+    });
+
+    const skippedDiscord = [];
+    const migrate = db.transaction((rows) => {
+      for (const u of rows) {
+        const accountId = insertAccount.run().lastInsertRowid;
+        const ident = identityForUser(u);
+        if (ident) insertIdentity.run(accountId, ident.provider, ident.providerId, ident.displayName);
+        if (u.discord_id) {
+          const res = insertIdentity.run(accountId, 'discord', u.discord_id, null);
+          if (res.changes === 0) {
+            skippedDiscord.push({ steamId: u.steam_id, persona: u.persona, discordId: u.discord_id });
+          }
+        }
+        linkUser.run(accountId, u.steam_id);
+        linkOrders.run(accountId, u.steam_id);
+      }
+    });
+    migrate(pending);
+
+    console.log(`[db] accounts backfill: ${pending.length} user record(s) -> accounts + identities`);
+    for (const s of skippedDiscord) {
+      console.warn(
+        `[db] Discord ${s.discordId} already claimed by another account — left unlinked on ` +
+        `${s.persona || s.steamId} (${s.steamId}). Attach it by hand once the owner says which wins.`
+      );
+    }
+  }
+}
+
+// Orders created before the bridge column existed, whose user was already
+// backfilled on an earlier boot.
+{
+  const res = db.prepare(`
+    UPDATE orders SET account_id = (SELECT u.account_id FROM users u WHERE u.steam_id = orders.steam_id)
+    WHERE account_id IS NULL
+      AND EXISTS (SELECT 1 FROM users u WHERE u.steam_id = orders.steam_id AND u.account_id IS NOT NULL)
+  `).run();
+  if (res.changes > 0) console.log(`[db] accounts backfill: linked ${res.changes} order(s)`);
+}
+
 module.exports = db;
