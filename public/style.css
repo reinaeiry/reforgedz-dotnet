@@ -500,7 +500,10 @@ img { display: block; max-width: 100%; }
 
 .status-tiles {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* Regions hold however many servers they hold -- this was a fixed 3 columns,
+     which left a permanently empty third column once each region dropped to two.
+     auto-fit lets a region of 2 fill the row and a region of 4 wrap cleanly. */
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
 }
 
@@ -2876,7 +2879,7 @@ img { display: block; max-width: 100%; }
   .dossier-grid { grid-template-columns: repeat(3, 1fr); }
   .mods-grid { grid-template-columns: repeat(3, 1fr); }
   .features-grid { grid-template-columns: repeat(2, 1fr); }
-  .status-tiles { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .status-tiles { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .stat:nth-child(2) { border-right: none; }
   .stat:nth-child(3) { border-right: 1px solid var(--border); }

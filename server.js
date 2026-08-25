@@ -659,7 +659,9 @@ async function fetchBattleMetricsPlayers(bmId) {
     const data = await res.json();
     const a = data?.data?.attributes;
     if (!a) return null;
-    return { players: a.players ?? 0, max: a.maxPlayers ?? 0 };
+    // ip/port come back on the same request, so the caller can confirm this
+    // BattleMetrics record still belongs to the server we cached it for.
+    return { players: a.players ?? 0, max: a.maxPlayers ?? 0, ip: a.ip ?? null, port: a.port ?? null };
   } catch {
     return null;
   }
@@ -777,7 +779,27 @@ async function pollServerStatus() {
         reforgedzServers.rememberBmId(bmId);
       }
       if (bmId) {
-        const bm = await fetchBattleMetricsPlayers(bmId);
+        let bm = await fetchBattleMetricsPlayers(bmId);
+        // A cached id is only right until the server moves. When a server changes
+        // allocation the old id keeps resolving happily to somebody else's server
+        // -- that is how NA1 and NA2 both ended up reporting the NA Dev server's
+        // player count. Confirm the record still matches this allocation, and
+        // re-resolve once if it does not. Costs no extra request: the check uses
+        // the ip/port already returned above.
+        const wantIp = def?.attributes?.ip;
+        const wantPort = Number(def?.attributes?.port);
+        if (bm && wantIp && bm.ip && (bm.ip !== wantIp || Number(bm.port) !== wantPort)) {
+          console.warn(`[bm] cached id ${bmId} for ${attr.name} points at ${bm.ip}:${bm.port}, expected ${wantIp}:${wantPort} — re-resolving`);
+          bmIdCache.delete(id);
+          const fresh = await resolveBattleMetricsId(wantIp, wantPort, attr.name);
+          if (fresh && fresh !== bmId) {
+            bmId = fresh;
+            bmIdCache.set(id, bmId);
+            reforgedzServers.rememberBmId(bmId);
+            console.log(`Re-resolved BattleMetrics ID for ${attr.name}: ${bmId}`);
+            bm = await fetchBattleMetricsPlayers(bmId);
+          }
+        }
         if (bm) { players = bm.players; max = bm.max; }
       }
       if (state !== 'running') {
