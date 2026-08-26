@@ -478,15 +478,6 @@ function hashRelinkToken(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
 
-// Session-based admin gate returning JSON, matching requireAdminPage's check.
-function requireAdminApi(req, res, next) {
-  if (req.isAuthenticated && req.isAuthenticated() && req.user && req.user.role === 'admin') {
-    console.log(`[admin-audit] steam:${req.user.steam_id} ${req.method} ${req.originalUrl} from ${req.ip}`);
-    return next();
-  }
-  return res.status(403).json({ error: 'Admin only' });
-}
-
 function findConsoleUser({ bmPlayerId, gamertag }) {
   if (bmPlayerId) {
     return db.prepare('SELECT * FROM users WHERE bm_player_id = ?').get(String(bmPlayerId).trim());
@@ -500,9 +491,13 @@ function findConsoleUser({ bmPlayerId, gamertag }) {
 }
 
 // Staff: issue a re-link for an EXISTING console account.
-app.post('/api/shop/admin/console/relink', writeLimiter, requireAdminApi, (req, res) => {
+app.post('/api/shop/admin/console/relink', writeLimiter, shopRoutes.requireAdmin, (req, res) => {
   const { gamertag, bmPlayerId } = req.body || {};
   if (!gamertag && !bmPlayerId) return res.status(400).json({ error: 'Give a gamertag or a BattleMetrics player id' });
+
+  // requireAdmin admits a signed-in admin OR the shared key the ticket bot uses,
+  // so attribute whichever one actually got in.
+  const issuedBy = (req.user && req.user.steam_id) ? `steam:${req.user.steam_id}` : 'discord-bot';
 
   const user = findConsoleUser({ bmPlayerId, gamertag });
   if (!user) return res.status(404).json({ error: 'No account found for that gamertag or player id' });
@@ -525,12 +520,12 @@ app.post('/api/shop/admin/console/relink', writeLimiter, requireAdminApi, (req, 
     db.prepare(`
       INSERT INTO console_relink_tokens (token_hash, bm_player_id, platform, issued_by, issued_at, expires_at)
       VALUES (?,?,?,?,?,?)
-    `).run(hashRelinkToken(token), user.bm_player_id, user.platform, `steam:${req.user.steam_id}`, now, expiresAt);
+    `).run(hashRelinkToken(token), user.bm_player_id, user.platform, issuedBy, now, expiresAt);
   });
   issue();
 
   const base = process.env.PUBLIC_BASE_URL || 'https://reforgedz.net';
-  console.log(`[console-relink] issued for ${user.gamertag} (${user.platform}/${user.bm_player_id}) by steam:${req.user.steam_id}`);
+  console.log(`[console-relink] issued for ${user.gamertag} (${user.platform}/${user.bm_player_id}) by ${issuedBy}`);
   res.json({
     ok: true,
     url: `${base}/console-relink?token=${encodeURIComponent(token)}`,

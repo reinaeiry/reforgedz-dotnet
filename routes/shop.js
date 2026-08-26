@@ -3877,4 +3877,4 @@ async function dispatchPayPalEvent(event, resource, orderId) {
   }
 }
 
-module.exports = { router, webhookHandler, registerPayPalWebhooks };
+module.exports = { router, webhookHandler, registerPayPalWebhooks, requireAdmin };
