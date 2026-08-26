@@ -49,6 +49,25 @@
       border-radius: 8px;
     }
     .relink-who .tag { font-weight: 600; font-size: 1.05rem; color: var(--text); }
+    /* .platform-mark lives in shop.html's inline styles, not style.css, so this
+       page has to bring its own or the Xbox / PlayStation badge renders as bare
+       text. Sized up from the nav version: this is the page's focal point. */
+    .platform-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 6px;
+      font-family: var(--display);
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: #fff;
+      flex: 0 0 auto;
+    }
+    .xbox-mark { background: #107c10; }
+    .psn-mark { background: #003791; font-size: 0.72rem; }
     .relink-btn {
       padding: 14px 20px;
       background: var(--accent);
