@@ -1538,6 +1538,89 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
   res.json({ ok: true, refundedCents, subscriptionCancelled, subscriptionCancelError });
 });
 
+// Read-only resolver behind the Discord /refund command: turn an in-game GUID
+// into "exactly which order am I about to refund, and what will it cost the
+// player". Deliberately a preview rather than a second money path -- the actual
+// refund still goes through /api/shop/admin/revoke, which is the audited one.
+//
+// Called twice by the bot: once to build the confirmation, and again afterwards
+// to prove the subscription really did end up CANCELLED at PayPal.
+router.get('/api/shop/admin/refund-preview', requireAdmin, async (req, res) => {
+  const guid = String(req.query.guid || '').trim().toLowerCase();
+  if (!guid) return res.status(400).json({ error: 'Give a GUID' });
+
+  // A GUID is NOT unique: a player with both a Steam and a console account can
+  // carry the same in-game id on both. Refuse rather than guess which to refund.
+  const users = db.prepare(
+    "SELECT * FROM users WHERE lower(bi_uid) = ?"
+  ).all(guid);
+  if (!users.length) return res.status(404).json({ error: 'No account has that GUID' });
+  if (users.length > 1) {
+    return res.status(409).json({
+      error: 'That GUID is on more than one account, so I will not guess which to refund',
+      accounts: users.map(u => ({ steamId: u.steam_id, persona: u.persona, gamertag: u.gamertag, platform: u.platform }))
+    });
+  }
+  const user = users[0];
+
+  const orders = db.prepare(`
+    SELECT o.*, p.title AS product_title, p.type AS product_type
+    FROM orders o JOIN products p ON p.id = o.product_id
+    WHERE o.steam_id = ? ORDER BY o.completed_at DESC, o.id DESC
+  `).all(user.steam_id);
+
+  const target = orders.find(o => o.status === 'completed' && o.paypal_capture_id);
+  const now = Math.floor(Date.now() / 1000);
+
+  let subscription = null;
+  const subId = target && target.paypal_subscription_id;
+  if (subId) {
+    try {
+      const sub = await paypal.getSubscription(!!(target && target.test_mode), subId);
+      const b = sub.billing_info || {};
+      subscription = {
+        id: subId,
+        status: sub.status,
+        alreadyCancelled: sub.status === 'CANCELLED',
+        lastPayment: b.last_payment ? { amount: b.last_payment.amount.value, at: b.last_payment.time } : null,
+        nextBilling: b.next_billing_time || null,
+        failedPayments: b.failed_payments_count ?? null
+      };
+    } catch (e) {
+      subscription = { id: subId, status: 'UNKNOWN', error: e.message };
+    }
+  }
+
+  res.json({
+    ok: true,
+    player: {
+      persona: user.persona, gamertag: user.gamertag, platform: user.platform,
+      steamId: user.steam_id, guid: user.bi_uid, discordId: user.discord_id
+    },
+    target: target ? {
+      orderId: target.id,
+      product: target.product_title,
+      amountCents: target.amount_cents,
+      currency: target.currency || 'USD',
+      serverId: target.server_id,
+      paidAt: target.completed_at,
+      coversUntil: target.effective_until,
+      stillInPaidPeriod: !!(target.effective_until && target.effective_until > now),
+      captureId: target.paypal_capture_id
+    } : null,
+    refundable: !!target,
+    reason: target ? null
+      : (orders.some(o => o.status === 'completed')
+          ? 'Their most recent completed order has no PayPal capture stored, so it cannot be refunded through the API'
+          : 'They have no completed orders to refund'),
+    subscription,
+    orderHistory: orders.slice(0, 6).map(o => ({
+      id: o.id, status: o.status, product: o.product_title,
+      amountCents: o.amount_cents, paidAt: o.completed_at, coversUntil: o.effective_until
+    }))
+  });
+});
+
 // ============================================================
 //  Priority Queue management (used by reforgedz admin page)
 // ============================================================
