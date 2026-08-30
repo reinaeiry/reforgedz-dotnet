@@ -1549,6 +1549,18 @@ router.get('/api/shop/admin/refund-preview', requireAdmin, async (req, res) => {
   const guid = String(req.query.guid || '').trim().toLowerCase();
   if (!guid) return res.status(400).json({ error: 'Give a GUID' });
 
+  // Shape-check before touching the table. A truncated or mistyped GUID must
+  // fail loudly rather than fall through to whatever it happens to match.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(guid)) {
+    return res.status(400).json({ error: 'That is not a valid GUID. Expected xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' });
+  }
+  // The all-zero GUID is a placeholder someone can paste in, and it IS present
+  // on a real account -- so without this it resolves to a live, refundable
+  // player. Never a genuine identity; refuse it.
+  if (/^0+$/.test(guid.replace(/-/g, ''))) {
+    return res.status(400).json({ error: 'That is the placeholder all-zero GUID, not a real identity. Get their real one.' });
+  }
+
   // A GUID is NOT unique: a player with both a Steam and a console account can
   // carry the same in-game id on both. Refuse rather than guess which to refund.
   const users = db.prepare(
