@@ -471,7 +471,13 @@ app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
 // cookies or switches device is permanently locked out of their own account
 // and staff have no way to help, despite the refusal message promising one.
 
-const RELINK_TTL_MS = 15 * 60 * 1000;
+// 24h, widened from 15 min on 2026-09-04. The link is now issued through a
+// Founder approval in Discord (/relink), and the gap between "player asks" and
+// "Founder is at a keyboard" is hours, not minutes — a 15-minute link was dead
+// before the player ever saw it. Single use is what actually bounds the risk:
+// the token dies on first open, and issuing a new one retires the old one, so
+// the TTL is only the ceiling on a link nobody ever clicked.
+const RELINK_TTL_MS = 24 * 60 * 60 * 1000;
 const RELINK_TOKEN_BYTES = 32;
 
 function hashRelinkToken(token) {
@@ -501,8 +507,18 @@ app.post('/api/shop/admin/console/relink', writeLimiter, shopRoutes.requireAdmin
 
   const user = findConsoleUser({ bmPlayerId, gamertag });
   if (!user) return res.status(404).json({ error: 'No account found for that gamertag or player id' });
+  // Steam is refused on purpose, and it is not a guard waiting to be relaxed.
+  // A Steam account has no lockout to remedy: it signs in through real Steam
+  // OpenID, any browser, any time — `rz_console_locked` exists only because
+  // console sign-in has no ownership proof at all. Issuing a re-link for one
+  // would create a bearer link that signs someone into a Steam-authenticated
+  // account WITHOUT Steam, which is strictly worse than the problem it solves.
+  // It also does not fit the storage: console_relink_tokens keys on
+  // `bm_player_id TEXT NOT NULL`, and all 220 Steam users have it NULL
+  // (measured 2026-09-04), so supporting Steam means a schema change and a
+  // second lookup path as well as a second auth story.
   if (!VALID_PLATFORMS.has(user.platform)) {
-    return res.status(400).json({ error: `That is a ${user.platform} account, not a console one. Only Xbox and PlayStation use the console lock.` });
+    return res.status(400).json({ error: `That is a ${user.platform} account, not a console one. Only Xbox and PlayStation use the console lock — a Steam player can just sign in with Steam again.` });
   }
   if (!user.bm_player_id) return res.status(400).json({ error: 'That account has no BattleMetrics player id to re-link' });
 
@@ -531,6 +547,7 @@ app.post('/api/shop/admin/console/relink', writeLimiter, shopRoutes.requireAdmin
     url: `${base}/console-relink?token=${encodeURIComponent(token)}`,
     expiresAt,
     expiresInMinutes: Math.round(RELINK_TTL_MS / 60000),
+    expiresInHours: Math.round(RELINK_TTL_MS / 3600000),
     gamertag: user.gamertag,
     platform: user.platform
   });

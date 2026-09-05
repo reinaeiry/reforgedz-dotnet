@@ -110,8 +110,11 @@
         }
         currentUrl = data.url;
         $('link').textContent = data.url;
+        // The TTL is 24h now, so "1440 minutes" would read as a bug.
+        const mins = data.expiresInMinutes;
+        const life = mins >= 120 ? `${Math.round(mins / 60)} hours` : `${mins} minutes`;
         $('meta').textContent =
-          `${data.gamertag} (${data.platform}) · expires in ${data.expiresInMinutes} minutes · single use`;
+          `${data.gamertag} (${data.platform}) · expires in ${life} · single use`;
         $('out').classList.add('show');
         msg.textContent = 'Send this to the player and have them open it on the device they want to use.';
         msg.className = 'arl-msg ok';
