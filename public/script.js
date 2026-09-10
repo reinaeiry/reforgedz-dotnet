@@ -120,6 +120,7 @@ function shortName(name) {
 function mapName(name) {
   // Derive the map from the server's own name so it stays correct as servers
   // change (e.g. "[EU3] Official ReforgedZ Everon"). Defaults to Chernarus.
+  if (/faircroft/i.test(name)) return 'Faircroft';
   if (/everon/i.test(name)) return 'Everon';
   return 'Chernarus';
 }

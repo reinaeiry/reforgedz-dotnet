@@ -1,5 +1,5 @@
-// EU3 became the EU dev server and its Everon role moved to EU2 (NA2 is Everon
-// too). 'eu3' is deliberately absent from SERVER_IDS so it can't be sold or
+// EU3 became the EU dev server. EU2 and NA2 moved from Everon to Faircroft on
+// 2026-09-10. 'eu3' is deliberately absent from SERVER_IDS so it can't be sold or
 // synced, but its label is kept so historical eu3 orders still render a name.
 //
 // Two lists on purpose: SERVER_IDS is what the shop SELLS and SYNCS, while
@@ -8,7 +8,7 @@
 // saves away with it.
 const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2', 'dev1'];
 const ALL_SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2', 'dev1'];
-const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Everon)', eu3: 'EU3 (now EU Dev)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Everon)', dev1: 'NA Dev' };
+const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Faircroft)', eu3: 'EU3 (now EU Dev)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Faircroft)', dev1: 'NA Dev' };
 
 // Given the shop's purchases.json path (which sits deep inside the
 // pterodactyl volume), strip back to the volume root and append the
