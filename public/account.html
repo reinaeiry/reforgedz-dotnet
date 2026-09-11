@@ -148,6 +148,8 @@
     .sub-card.state-payment_failing { border-left-color: #f87171; }
     .sub-card.state-lapsed { border-left-color: #6b7280; }
     .sub-card.state-cancelled { border-left-color: #6b7280; }
+    .sub-card.state-suspended { border-left-color: #f59e0b; }
+    .sub-card.state-expired { border-left-color: #6b7280; }
 
     .sub-top {
       display: flex;
@@ -173,6 +175,8 @@
     .pill-failing { background: rgba(248,113,113,0.15); color: #f87171; }
     .pill-lapsed { background: rgba(107,114,128,0.2); color: #9ca3af; }
     .pill-cancelled { background: rgba(107,114,128,0.2); color: #9ca3af; }
+    .pill-suspended { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .pill-expired { background: rgba(107,114,128,0.2); color: #9ca3af; }
 
     .sub-alert {
       margin-top: 14px;
@@ -295,8 +299,8 @@
       <div id="signedOut" style="display:none">
         <div class="signed-out">
           <h2>Sign in to see your account</h2>
-          <p>Your subscriptions, linked accounts and purchase history live here. Sign in from the shop with Steam, Xbox or PlayStation and come back.</p>
-          <a class="cta" href="/shop">Go to the shop to sign in</a>
+          <p>Your subscriptions, linked accounts and purchase history live here. Sign in with Steam, Xbox or PlayStation and you'll come straight back to this page.</p>
+          <a class="cta" href="/shop?next=/account">Sign in</a>
         </div>
       </div>
 
@@ -529,13 +533,36 @@
           active: '<span class="sub-pill pill-active">Active</span>',
           payment_failing: '<span class="sub-pill pill-failing">Payment problem</span>',
           lapsed: '<span class="sub-pill pill-lapsed">Lapsed</span>',
-          cancelled: '<span class="sub-pill pill-cancelled">Cancelled</span>'
+          cancelled: '<span class="sub-pill pill-cancelled">Cancelled</span>',
+          suspended: '<span class="sub-pill pill-suspended">Stopped by PayPal</span>',
+          expired: '<span class="sub-pill pill-expired">Expired</span>'
         }[s.state] || '';
 
+        const stillPaidUp = !!(s.effectiveUntil && s.effectiveUntil * 1000 > Date.now());
+
         // The whole point of this page: a failing subscription must not read
-        // as "active" just because PayPal still says so.
+        // as "active" just because PayPal still says so — and a subscription
+        // PayPal stopped for non-payment must not read as one the player chose
+        // to cancel.
         let alert = '';
-        if (s.state === 'payment_failing') {
+        if (s.state === 'suspended') {
+          alert = `
+            <div class="sub-alert" style="background:rgba(245,158,11,0.1);border-left-color:#f59e0b">
+              <strong>PayPal stopped this subscription after repeated failed payments.</strong>
+              It won't retry again and nothing further will be taken.
+              ${s.effectiveUntil ? ` Your perks ended on <strong>${dateStr(s.effectiveUntil)}</strong>.` : ''}
+              This one can't be restarted &mdash; to get your perks back, start a new subscription from the <a href="/shop">shop</a>.
+            </div>`;
+        } else if (s.state === 'cancelled' || s.state === 'expired') {
+          alert = `
+            <div class="sub-alert" style="background:rgba(107,114,128,0.1);border-left-color:#6b7280">
+              ${s.state === 'expired' ? 'This subscription has run its course' : 'This subscription is cancelled'} and nothing further will be taken.
+              ${s.effectiveUntil ? (stillPaidUp
+                ? ` You keep your perks until <strong>${dateStr(s.effectiveUntil)}</strong>, the end of the period you already paid for.`
+                : ` Your perks ended on <strong>${dateStr(s.effectiveUntil)}</strong>.`) : ''}
+              You can start it again any time from the <a href="/shop">shop</a>.
+            </div>`;
+        } else if (s.state === 'payment_failing') {
           const bi = s.billingIssue || {};
           alert = `
             <div class="sub-alert">
@@ -565,7 +592,7 @@
                 <div class="sub-title">${esc(s.title)}</div>
                 <div class="sub-meta">
                   ${money(s.amountCents, s.currency)}${s.serverId ? ' · ' + esc(String(s.serverId).toUpperCase()) : ''}
-                  ${s.effectiveUntil ? ' · ' + (s.state === 'active' ? 'Renews' : 'Ended') + ' ' + dateStr(s.effectiveUntil) : ''}
+                  ${s.effectiveUntil ? ' · ' + (s.state === 'active' ? 'Renews' : (stillPaidUp ? 'Access until' : 'Ended')) + ' ' + dateStr(s.effectiveUntil) : ''}
                 </div>
               </div>
               ${pill}

@@ -282,6 +282,47 @@
       color: var(--text-ghost);
     }
 
+    /* Navigation-only dropdown: one clear route to /account, an admin route
+       for staff, and a line that only appears when a purchase could not be
+       delivered to this account as it stands. */
+    .dropdown-nav {
+      display: flex;
+      flex-direction: column;
+      padding: 6px 8px;
+      border-top: 1px solid var(--border);
+    }
+    .dropdown-nav a {
+      display: block;
+      padding: 10px 10px;
+      border-radius: 6px;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    .dropdown-nav a span {
+      display: block;
+      margin-top: 2px;
+      font-size: 0.7rem;
+      font-weight: 400;
+      color: var(--text-ghost);
+    }
+    .dropdown-nav a:hover { background: rgba(255,255,255,0.05); }
+    .dropdown-attention {
+      display: block;
+      margin: 0 8px 4px;
+      padding: 9px 10px;
+      border-radius: 6px;
+      background: rgba(241,196,15,0.10);
+      border: 1px solid rgba(241,196,15,0.35);
+      color: #f1c40f;
+      font-size: 0.74rem;
+      line-height: 1.45;
+      text-decoration: none;
+    }
+    .dropdown-attention:hover { background: rgba(241,196,15,0.16); }
+
     .dropdown-footer {
       padding: 10px 18px;
       border-top: 1px solid var(--border);

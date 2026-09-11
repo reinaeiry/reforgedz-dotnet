@@ -194,6 +194,16 @@ function bindCurrencyPills() {
 }
 
 // ---- Sign-in dropdown ----
+
+// /shop?next=/account : where to go once signed in. Set by pages that send a
+// signed-out player here to sign in (the account page does). Same-origin
+// paths only — the server applies the same rule for the Steam round-trip.
+const returnTo = (() => {
+  const raw = new URLSearchParams(location.search).get('next') || '';
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\') || raw.length > 200) return null;
+  return raw;
+})();
+
 function bindSigninDropdown() {
   const wrap = document.getElementById('signinWrap');
   const btn = document.getElementById('signinBtn');
@@ -256,31 +266,17 @@ function renderAuth() {
       ? `<img src="${escHtml(currentUser.avatar_url)}" alt="" onerror="this.style.display='none'">`
       : `<span class="platform-mark ${platform}-mark" style="width:40px;height:40px;border-radius:8px;font-size:0.78rem">${platform === 'xbox' ? 'X' : platform === 'psn' ? 'PS' : '?'}</span>`;
 
-    const biuidEditableHtml = isSteam ? `
-      <div class="dropdown-biuid-row">
-        <input type="text" id="dropdownBiUidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${escHtml(currentUser.bi_uid || '')}" spellcheck="false" autocomplete="off">
-        <button onclick="saveBiUidFromDropdown()">Save</button>
-      </div>
-    ` : `
-      <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px">Auto-linked from BattleMetrics. Open a Discord ticket if this looks wrong.</div>
-    `;
-
-    const discordSection = `
-      <div class="dropdown-biuid">
-        <div class="dropdown-biuid-label">Discord ID</div>
-        ${currentUser.discord_id
-          ? `<div class="dropdown-biuid-value">${escHtml(currentUser.discord_id)}</div>`
-          : `<div class="dropdown-biuid-value empty">Not linked</div>`
-        }
-        <div class="dropdown-biuid-row">
-          <input type="text" id="dropdownDiscordIdInput" placeholder="Your Discord User ID" value="${escHtml(currentUser.discord_id || '')}" spellcheck="false" autocomplete="off">
-          <button onclick="saveDiscordIdFromDropdown()">Save</button>
-        </div>
-        <div style="font-size:0.65rem;color:var(--text-ghost);margin-top:6px;line-height:1.5">
-          Enable Developer Mode in Discord, right-click your name, Copy User ID. Roles for products you've bought (or buy in future) get assigned automatically.
-        </div>
-      </div>
-    `;
+    // The dropdown is for getting around, not for editing. Everything a
+    // player manages — in-game ID, Discord, subscriptions, purchase history —
+    // lives on /account, where it fits on a phone and has room to explain
+    // itself. Two things still need saying up here, because they decide
+    // whether a purchase can actually be delivered.
+    const attention = [];
+    if (!currentUser.bi_uid) attention.push('In-game ID not set');
+    if (!currentUser.discord_id) attention.push('Discord not linked');
+    const attentionHtml = attention.length
+      ? `<a class="dropdown-attention" href="/account">${attention.map(escHtml).join(' · ')} — fix on your account page</a>`
+      : '';
 
     navAuth.innerHTML = `
       ${currencyHtml}
@@ -299,19 +295,11 @@ function renderAuth() {
             </div>
           </div>
         </div>
-        <div class="dropdown-biuid">
-          <div class="dropdown-biuid-label">Bohemia Identity ID</div>
-          ${currentUser.bi_uid
-            ? `<div class="dropdown-biuid-value">${escHtml(currentUser.bi_uid)}</div>`
-            : `<div class="dropdown-biuid-value empty">Not set</div>`
-          }
-          ${biuidEditableHtml}
-        </div>
-        ${discordSection}
-        <div class="dropdown-section-label">Purchase History</div>
-        <div class="dropdown-orders" id="dropdownOrders">
-          <div class="dropdown-empty">Loading...</div>
-        </div>
+        ${attentionHtml}
+        <nav class="dropdown-nav" aria-label="Account">
+          <a href="/account">Manage account<span>Subscriptions, linked accounts, purchase history</span></a>
+          ${currentUser.role === 'admin' ? `<a href="/admin/orders">Admin: orders &amp; billing<span>Revenue, billing issues, priority queue</span></a>` : ''}
+        </nav>
         <div class="dropdown-footer">
           <a href="/auth/logout">Sign out</a>
         </div>
@@ -346,7 +334,7 @@ function renderAuth() {
           Sign in <span class="chevron"></span>
         </button>
         <div class="signin-menu" id="signinMenu">
-          <a href="/auth/steam" class="signin-item">
+          <a href="/auth/steam${returnTo ? '?next=' + encodeURIComponent(returnTo) : ''}" class="signin-item">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.04 2 11.04c0 3.15 1.73 5.92 4.33 7.5l2.6-3.76c-.14-.04-.28-.1-.41-.17a2.5 2.5 0 1 1 3.45-.91l2.58 3.73C18.16 16.99 22 14.36 22 11.04 22 6.04 17.52 2 12 2zm4.5 9.54a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
             Steam
           </a>
@@ -470,6 +458,8 @@ async function consoleConfirm() {
       body: JSON.stringify({ platform: consoleState.platform, gamertag: consoleState.gamertag })
     });
     closeConsoleModal();
+    // Sent here from another page to sign in: go back there, signed in.
+    if (returnTo) { location.href = returnTo; return; }
     await loadUser();
     await loadProducts();
   } catch (e) {
@@ -994,50 +984,9 @@ document.getElementById('discordIdSubmit').addEventListener('click', async () =>
   }
 });
 
-async function saveBiUidFromDropdown() {
-  const input = document.getElementById('dropdownBiUidInput');
-  const raw = input.value.trim().toLowerCase();
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)) {
-    alert('Invalid format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx');
-    return;
-  }
-  try {
-    await api('/api/shop/set-bi-uid', {
-      method: 'POST',
-      body: JSON.stringify({ biUid: raw })
-    });
-    currentUser.bi_uid = raw;
-    renderAuth();
-  } catch (e) {
-    alert(e.message || 'Failed to save BI UID');
-  }
-}
-
-async function saveDiscordIdFromDropdown() {
-  const input = document.getElementById('dropdownDiscordIdInput');
-  const raw = input.value.trim();
-  if (raw && !/^\d{15,25}$/.test(raw)) {
-    alert('Invalid Discord ID. Enable Developer Mode in Discord, right-click your name, Copy User ID.');
-    return;
-  }
-  try {
-    const result = await api('/api/shop/set-discord-id', {
-      method: 'POST',
-      body: JSON.stringify({ discordId: raw || null })
-    });
-    currentUser.discord_id = result.discord_id || null;
-    renderAuth();
-    if (result.rolesAssigned && result.rolesAssigned > 0) {
-      alert(`Linked. ${result.rolesAssigned} role${result.rolesAssigned === 1 ? '' : 's'} assigned in Discord.`);
-    } else if (raw) {
-      alert(`Linked Discord as ${result.displayName || 'member'}.`);
-    } else {
-      alert('Discord unlinked.');
-    }
-  } catch (e) {
-    alert(e.message || 'Failed to save Discord ID');
-  }
-}
+// In-game ID and Discord are edited on /account now, not in the nav dropdown.
+// The checkout-time overlays (biuidOverlay, discordIdOverlay) still collect
+// them when a purchase needs one and the account is missing it.
 
 // ---- Custom Flag checkout (player details + image upload) ----
 let pendingFlagProductId = null;
@@ -1661,6 +1610,13 @@ async function init() {
   checkAlerts();
   await loadUser();
   await loadProducts();
+  // Arrived here to sign in and still signed out: open the sign-in menu so
+  // the next step is obvious. Already signed in: they only wanted the page
+  // they came from.
+  if (returnTo) {
+    if (currentUser) location.href = returnTo;
+    else openSigninFromCard();
+  }
 }
 
 window.buyProduct = buyProduct;
@@ -1668,8 +1624,6 @@ window.editProduct = editProduct;
 window.toggleProduct = toggleProduct;
 window.deleteProduct = deleteProduct;
 window.cancelSubscription = cancelSubscription;
-window.saveBiUidFromDropdown = saveBiUidFromDropdown;
-window.saveDiscordIdFromDropdown = saveDiscordIdFromDropdown;
 window.openProductDetail = openProductDetail;
 window.openSigninFromCard = openSigninFromCard;
 window.hardDeleteProduct = hardDeleteProduct;

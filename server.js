@@ -346,10 +346,33 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/radio', express.static(path.join(__dirname, 'radio')));
 
 // ---- Auth routes ----
-app.get('/auth/steam', authLimiter, passport.authenticate('steam'));
+
+// Where to send someone once they are signed in. Every sign-in used to land on
+// /shop, so a player who started on /account ("Go to the shop to sign in")
+// had to find their way back by hand. Only a same-origin path is honoured;
+// anything else — an absolute URL, a protocol-relative //host, a backslash
+// trick — falls through to /shop.
+function safeReturnTo(raw) {
+  if (typeof raw !== 'string' || raw.length > 200) return null;
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return null;
+  if (/[\r\n]/.test(raw)) return null;
+  return raw;
+}
+
+app.get('/auth/steam', authLimiter, (req, res, next) => {
+  const dest = safeReturnTo(req.query.next);
+  if (dest) req.session.returnTo = dest; else delete req.session.returnTo;
+  next();
+}, passport.authenticate('steam'));
 app.get('/auth/steam/callback', authLimiter,
-  passport.authenticate('steam', { failureRedirect: '/shop' }),
-  (req, res) => res.redirect('/shop')
+  // passport ≥0.6 regenerates the session on login and would drop returnTo
+  // without keepSessionInfo.
+  passport.authenticate('steam', { failureRedirect: '/shop', keepSessionInfo: true }),
+  (req, res) => {
+    const dest = safeReturnTo(req.session.returnTo) || '/shop';
+    delete req.session.returnTo;
+    res.redirect(dest);
+  }
 );
 app.get('/auth/logout', (req, res) => {
   req.logout(() => {
