@@ -52,6 +52,9 @@
       gap: 12px;
       margin-left: auto;
       position: relative;
+      /* Let the auth block give up width before it overhangs the container:
+         the persona below is the only part allowed to shrink. */
+      min-width: 0;
     }
 
     .nav-avatar {
@@ -89,6 +92,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
+      min-width: 0;
       padding: 5px 12px 5px 5px;
       background: var(--surface);
       border: 1px solid var(--border);
@@ -105,6 +109,10 @@
       font-weight: 500;
       color: var(--text);
       white-space: nowrap;
+      min-width: 0;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .account-toggle .chevron {
@@ -1308,7 +1316,7 @@
     }
 
     .currency-pill {
-      padding: 5px 10px;
+      padding: 5px 8px;
       background: none;
       border: none;
       color: var(--text-ghost);

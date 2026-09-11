@@ -275,7 +275,7 @@ function renderAuth() {
     if (!currentUser.bi_uid) attention.push('In-game ID not set');
     if (!currentUser.discord_id) attention.push('Discord not linked');
     const attentionHtml = attention.length
-      ? `<a class="dropdown-attention" href="/account">${attention.map(escHtml).join(' · ')} — fix on your account page</a>`
+      ? `<a class="dropdown-attention" href="/account">${attention.map(escHtml).join(' · ')}. Fix this on your account page.</a>`
       : '';
 
     navAuth.innerHTML = `
