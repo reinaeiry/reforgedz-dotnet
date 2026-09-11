@@ -414,9 +414,13 @@ db.exec(`
   ON console_relink_tokens(bm_player_id) WHERE used_at IS NULL;
 `);
 
-// Spent and expired tokens have no value; keep the table from growing forever.
+// Spent and expired tokens are the only structured record of who was handed an account and from
+// where: issued_by, issued_at, used_at, and the consuming IP in used_note. Keep them for a year,
+// which is as long as the console lock cookie a consumed link produces stays valid server-side
+// (CONSOLE_COOKIE_MAX_AGE in server.js) -- a takeover dispute can surface long after the link was
+// used. The table is tiny (17 rows after its first month), so this costs nothing.
 {
-  const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
+  const cutoff = Math.floor(Date.now() / 1000) - 365 * 86400;
   const res = db.prepare("DELETE FROM console_relink_tokens WHERE expires_at < ?").run(cutoff);
   if (res.changes > 0) console.log(`[db] pruned ${res.changes} expired console re-link token(s)`);
 }

@@ -251,7 +251,12 @@ app.use(session({
     maxAge: 30 * 24 * 60 * 60 * 1000,
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production'
+    // 'auto' marks the session cookie Secure whenever the request arrived over HTTPS, as Express
+    // sees it through `trust proxy` (Cloudflare sets X-Forwarded-Proto). It used to key on
+    // NODE_ENV === 'production', which is unset in this container, so the 30-day login cookie
+    // was never Secure. 'auto' cannot break sign-in: if a request is not seen as HTTPS the cookie
+    // is still set, just without the flag -- whereas secure: true would refuse to set it at all.
+    secure: 'auto'
   }
 }));
 app.use(passport.initialize());
@@ -414,7 +419,9 @@ function setConsoleCookie(res, payload) {
   res.cookie(CONSOLE_COOKIE, signConsoleCookie(payload), {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    // Secure whenever this request came in over HTTPS; see the session cookie for why this no
+    // longer keys on NODE_ENV. res.req is the request Express attached to this response.
+    secure: !!(res.req && res.req.secure),
     maxAge: CONSOLE_COOKIE_MAX_AGE,
     path: '/'
   });
