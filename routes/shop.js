@@ -3182,6 +3182,19 @@ async function handleBillingFailure(opts) {
     return { escalated: false };
   }
 
+  // An agreement that never took a payment (the buyer approved it at PayPal
+  // and the first charge bounced) has no entitlement behind it, no player to
+  // warn and nothing for staff to do. If a charge ever lands, ACTIVATED
+  // fulfils the order like any first payment. Tracking these only filled the
+  // channel and /billing with names nobody could act on.
+  const everPaid = db.prepare(
+    "SELECT 1 FROM orders WHERE paypal_subscription_id = ? AND status IN ('completed', 'refunded') LIMIT 1"
+  ).get(subId);
+  if (!everPaid) {
+    resolveBillingIssue(subId, 'payment failed on an agreement that never paid');
+    return { escalated: false };
+  }
+
   const bi = billingInfo || {};
   let ctx = getBillingIssueContext(subId);
   const failedCount = bi.failed_payments_count || 0;
@@ -3279,6 +3292,30 @@ async function rescanBillingIssues(opts) {
   `).all();
 
   const summary = { scanned: 0, failing: 0, newIssues: 0, resolved: 0, errors: 0 };
+
+  // Two kinds of open issue the loop above can never reach, because it only
+  // walks subscriptions we still believe are live:
+  //  - the agreement has since ended (cancelled / suspended / expired), so
+  //    the row is history, not a task;
+  //  - the agreement never took a payment at all (an approved checkout whose
+  //    first charge failed), so there is no entitlement to protect and
+  //    nothing for anyone to do.
+  // Both sat in /billing and the admin tab as if actionable. No PayPal call
+  // needed for either; the answer is already in our own tables.
+  const unreachable = db.prepare(`
+    SELECT b.paypal_subscription_id AS sub_id,
+           EXISTS (SELECT 1 FROM orders o WHERE o.paypal_subscription_id = b.paypal_subscription_id
+                     AND o.subscription_cancelled_at IS NOT NULL) AS ended,
+           EXISTS (SELECT 1 FROM orders o WHERE o.paypal_subscription_id = b.paypal_subscription_id
+                     AND o.status IN ('completed', 'refunded')) AS ever_paid
+    FROM subscription_billing_issues b
+    WHERE b.resolved_at IS NULL
+  `).all();
+  for (const u of unreachable) {
+    if (u.ended) { resolveBillingIssue(u.sub_id, 'rescan: agreement already ended'); summary.resolved++; }
+    else if (!u.ever_paid) { resolveBillingIssue(u.sub_id, 'rescan: agreement never took a payment'); summary.resolved++; }
+  }
+
   for (const row of subs) {
     summary.scanned++;
     let sub;
