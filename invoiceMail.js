@@ -697,4 +697,85 @@ async function sendPaymentFailed({ to, displayName, productTitle, amountCents, c
   }
 }
 
-module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed };
+// PayPal gave up after repeated failed payments. This is the end of the road
+// for that agreement — it cannot be resumed from the player's side — so the
+// message has to be different from a cancellation ("you won't be charged
+// again") and from a first failure ("PayPal will retry"). Money is owed and
+// the only way forward is a fresh subscription.
+async function sendSubscriptionSuspended({ to, displayName, productTitle, accessEndsAtMs, failedCount, outstandingCents, currency }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to) return { ok: false, skipped: 'no_recipient' };
+
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const item = productTitle || 'your subscription';
+  const name = displayName || 'there';
+  const attempts = failedCount ? `${failedCount} failed payment attempt${failedCount === 1 ? '' : 's'}` : 'repeated failed payment attempts';
+  const owed = outstandingCents ? money(outstandingCents, currency) : null;
+  const endedStr = accessEndsAtMs
+    ? new Date(accessEndsAtMs).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC'
+    : null;
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <tr><td style="background:#0d0f12;padding:24px;color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.5px">ReforgedZ</td></tr>
+        <tr><td style="padding:28px 24px;font-size:15px;color:#1a1a1a;line-height:1.55">
+          <p style="margin:0 0 12px">Hi ${esc(name)},</p>
+          <p style="margin:0 0 12px">PayPal has stopped your <strong>${esc(item)}</strong> subscription after ${esc(attempts)}${owed ? `, with <strong>${esc(owed)}</strong> outstanding` : ''}. It will not retry again and nothing further will be taken.</p>
+          ${endedStr ? `<p style="margin:0 0 12px">Your ${esc(item)} perks, including your Discord role, ended on <strong>${esc(endedStr)}</strong>.</p>` : ''}
+          <div style="margin:0 0 16px;padding:12px 14px;background:#fff7ed;border-left:3px solid #f59e0b;color:#7c2d12;font-size:14px">
+            This subscription can't be restarted. If you'd like your perks back, start a new one from the shop — it takes a minute and your perks return automatically once the first payment goes through.
+          </div>
+          <p style="margin:24px 0">
+            <a href="${esc(base)}/shop" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">Start a new subscription</a>
+          </p>
+          <p style="margin:0 0 12px;color:#4b5563;font-size:13px">If you meant to stop, there's nothing to do. Any questions, reply to this email or open a ticket in our Discord.</p>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:16px 24px;border-top:1px solid #ecedf0;font-size:12px;color:#6b7280">
+          ReforgedZ &middot; <a href="${esc(base)}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    `Hi ${name},`,
+    '',
+    `PayPal has stopped your ${item} subscription after ${attempts}${owed ? `, with ${owed} outstanding` : ''}.`,
+    'It will not retry again and nothing further will be taken.',
+    '',
+    endedStr ? `Your ${item} perks, including your Discord role, ended on ${endedStr}.` : '',
+    '',
+    "This subscription can't be restarted. If you'd like your perks back, start",
+    'a new one from the shop - your perks return automatically once the first',
+    'payment goes through.',
+    '',
+    `Start a new subscription: ${base}/shop`,
+    '',
+    "If you meant to stop, there's nothing to do. Any questions, reply to this",
+    'email or open a ticket in our Discord.'
+  ].join('\n');
+
+  try {
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject: `Your ${item} subscription has been stopped`,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] suspended send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed };

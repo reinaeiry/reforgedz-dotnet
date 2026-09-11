@@ -324,6 +324,17 @@ if (!orderHasColumn('subscription_cancelled_at')) {
   db.exec("ALTER TABLE orders ADD COLUMN subscription_cancelled_at INTEGER");
 }
 
+// WHY the agreement ended. subscription_cancelled_at only records WHEN, and
+// PayPal's three terminal events mean very different things to the player:
+// 'cancelled' = they (or staff) chose to stop, 'suspended' = PayPal gave up
+// after payment_failure_threshold failed payments and money is owed,
+// 'expired' = the plan ran out. Collapsing all three into "cancelled" is how
+// the account page told suspended players they "won't be charged again" and
+// the Discord channel filled with cancellations that were not cancellations.
+if (!orderHasColumn('subscription_ended_reason')) {
+  db.exec("ALTER TABLE orders ADD COLUMN subscription_ended_reason TEXT");
+}
+
 // Self-healing backfill: Stripe session IDs encode their environment in
 // the prefix (cs_test_* vs cs_live_*), so any order still flagged as live
 // with a cs_test_ session is sandbox pollution that should be hidden from

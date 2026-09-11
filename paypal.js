@@ -214,6 +214,9 @@ const WEBHOOK_EVENTS = [
   'BILLING.SUBSCRIPTION.SUSPENDED',
   'BILLING.SUBSCRIPTION.EXPIRED',
   'BILLING.SUBSCRIPTION.PAYMENT.FAILED',
+  // A suspended agreement PayPal brings back. Without this the shop kept it
+  // marked as ended forever, even while PayPal billed it again.
+  'BILLING.SUBSCRIPTION.RE-ACTIVATED',
   'PAYMENT.SALE.COMPLETED'
 ];
 

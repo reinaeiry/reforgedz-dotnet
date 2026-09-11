@@ -11,7 +11,7 @@ const discord = require('../discord');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
-const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed } = require('../invoiceMail');
+const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed } = require('../invoiceMail');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 // Resolved on boot by server.js calling registerPayPalWebhooks(); read at
@@ -85,23 +85,32 @@ function detectImageExt(buf) {
 
 const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
 
-function sendDiscordNotification({ eventType, user, biUid, productTitle, amountCents, currency, status, serverId }) {
+function sendDiscordNotification({ eventType, user, biUid, productTitle, amountCents, currency, status, serverId, extraFields }) {
   if (!DISCORD_WEBHOOK_URL) return;
 
   const colors = {
     pending: 0xfbbf24,
     completed: 0x4ade80,
+    active: 0x4ade80,
     cancelled: 0xf87171,
+    suspended: 0xf59e0b,
+    expired: 0x6b7280,
     failed: 0xf87171,
     refunded: 0xc084fc
   };
 
+  // One title per PayPal outcome. These used to share "Subscription Cancelled",
+  // which had staff reading a wave of payment-failure suspensions as players
+  // walking away.
   const titles = {
     'payment_completed': 'Payment Completed',
     'payment_failed': 'Payment Failed',
     'subscription_started': 'Subscription Started',
     'subscription_renewed': 'Subscription Renewed',
     'subscription_cancelled': 'Subscription Cancelled',
+    'subscription_suspended': 'Subscription Suspended (payments failed)',
+    'subscription_expired': 'Subscription Expired',
+    'subscription_reactivated': 'Subscription Reactivated',
     'order_revoked': 'Order Revoked'
   };
 
@@ -127,6 +136,7 @@ function sendDiscordNotification({ eventType, user, biUid, productTitle, amountC
     { name: 'Amount', value: amount, inline: true },
     { name: 'Status', value: status || 'unknown', inline: true }
   );
+  if (Array.isArray(extraFields)) fields.push(...extraFields);
 
   const embed = {
     title: titles[eventType] || eventType,
@@ -1038,11 +1048,11 @@ router.post('/api/shop/cancel-subscription', requireAuth, async (req, res) => {
       // webhook never landed, or it was cancelled from PayPal's own
       // dashboard) — bring our record in line so the buyer stops seeing an
       // active Cancel button for it.
-      markSubscriptionCancelledLocally(order.paypal_subscription_id);
+      markSubscriptionCancelledLocally(order.paypal_subscription_id, status.toLowerCase());
       return res.json({ ok: true, alreadyCancelled: true });
     }
     await paypal.cancelSubscription(useTest, order.paypal_subscription_id, 'Cancelled by customer');
-    markSubscriptionCancelledLocally(order.paypal_subscription_id);
+    markSubscriptionCancelledLocally(order.paypal_subscription_id, 'cancelled');
     res.json({ ok: true });
   } catch (e) {
     console.error('[cancel-subscription] PayPal cancel failed:', e.message);
@@ -1056,9 +1066,22 @@ router.post('/api/shop/cancel-subscription', requireAuth, async (req, res) => {
 // COALESCE keeps the earliest-known cancellation time rather than
 // clobbering it on repeat calls (customer double-clicking, webhook arriving
 // after a self-heal already ran, etc).
-function markSubscriptionCancelledLocally(subscriptionId) {
+function markSubscriptionCancelledLocally(subscriptionId, reason = 'cancelled') {
   db.prepare(`
-    UPDATE orders SET subscription_cancelled_at = COALESCE(subscription_cancelled_at, unixepoch())
+    UPDATE orders SET
+      subscription_cancelled_at = COALESCE(subscription_cancelled_at, unixepoch()),
+      subscription_ended_reason = COALESCE(subscription_ended_reason, ?)
+    WHERE paypal_subscription_id = ?
+  `).run(reason, subscriptionId);
+}
+
+// The reverse, for BILLING.SUBSCRIPTION.RE-ACTIVATED. Nothing ever cleared
+// these before, so a suspended agreement that PayPal brought back stayed
+// "cancelled" on the account page for good — no Cancel button, wrong pill —
+// while PayPal billed it again.
+function clearSubscriptionEndedLocally(subscriptionId) {
+  db.prepare(`
+    UPDATE orders SET subscription_cancelled_at = NULL, subscription_ended_reason = NULL
     WHERE paypal_subscription_id = ?
   `).run(subscriptionId);
 }
@@ -1497,7 +1520,7 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
     try {
       await paypal.cancelSubscription(!!order.test_mode, order.paypal_subscription_id,
         refund ? 'Revoked with refund by admin' : 'Revoked by admin');
-      markSubscriptionCancelledLocally(order.paypal_subscription_id);
+      markSubscriptionCancelledLocally(order.paypal_subscription_id, 'cancelled');
       subscriptionCancelled = true;
     } catch (e) {
       subscriptionCancelError = e.message;
@@ -3024,7 +3047,7 @@ function recordBillingIssue(fields) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(subId, orderId, steamId, paypalStatus, failedCount, outstandingCents,
            currency, lastPaymentAt, nextBillingAt, now, now, source);
-    return { escalated: true, previousCount: 0 };
+    return { escalated: true, previousCount: 0, prevEmailedAt: null, firstSeenAt: now };
   }
 
   // A row that was resolved and is failing again reopens rather than
@@ -3043,7 +3066,9 @@ function recordBillingIssue(fields) {
 
   return {
     escalated: reopened || failedCount > (prev.failed_count || 0),
-    previousCount: prev.failed_count || 0
+    previousCount: prev.failed_count || 0,
+    prevEmailedAt: prev.player_emailed_at || null,
+    firstSeenAt: prev.first_seen_at || now
   };
 }
 
@@ -3136,11 +3161,29 @@ async function postBillingIssueAlert(opts) {
 // One subscription's failure, from either the webhook or the rescan.
 // emailPlayer is false for the rescan so a backfill can't blast historical
 // failures at people weeks after the fact.
+// Owner's rule (2026-08-25): let PayPal retry, but the player keeps their perks
+// for three days from the FIRST failed payment, then loses them until a payment
+// lands. Before this the perks ended on the renewal date itself, i.e. a card
+// that declined once cost someone their queue and role the same morning.
+const BILLING_GRACE_SECONDS = 3 * 86400;
+
 async function handleBillingFailure(opts) {
   const { subId, billingInfo, paypalStatus, source, emailPlayer } = opts;
   if (!subId) return { escalated: false };
+
+  // PayPal delivers the third PAYMENT.FAILED *after* the SUSPENDED event that
+  // already closed this issue. Re-opening it here posted a second card for a
+  // subscription that was dead, and left it listed as actionable in /billing
+  // and the admin Billing Issues tab. A failure on anything but an ACTIVE
+  // agreement is not something anyone can act on, so record nothing.
+  const status = String(paypalStatus || 'ACTIVE').toUpperCase();
+  if (status !== 'ACTIVE') {
+    resolveBillingIssue(subId, 'payment failed on ' + status + ' agreement');
+    return { escalated: false };
+  }
+
   const bi = billingInfo || {};
-  const ctx = getBillingIssueContext(subId);
+  let ctx = getBillingIssueContext(subId);
   const failedCount = bi.failed_payments_count || 0;
   const outstandingCents = ppValueToCents(bi.outstanding_balance && bi.outstanding_balance.value);
   const currency = (bi.outstanding_balance && bi.outstanding_balance.currency_code)
@@ -3148,26 +3191,55 @@ async function handleBillingFailure(opts) {
   const lastPaymentAt = ppTimeToUnix(bi.last_payment && bi.last_payment.time);
   const nextBillingAt = ppTimeToUnix(bi.next_billing_time);
 
-  const { escalated } = recordBillingIssue({
+  const { escalated, prevEmailedAt, firstSeenAt } = recordBillingIssue({
     subId,
     orderId: ctx ? ctx.order_id : null,
     steamId: ctx ? ctx.steam_id : null,
-    paypalStatus, failedCount, outstandingCents, currency,
+    paypalStatus: status, failedCount, outstandingCents, currency,
     lastPaymentAt, nextBillingAt, source
   });
-  if (!escalated) return { escalated: false };
 
-  const now = Math.floor(Date.now() / 1000);
-  const posted = await postBillingIssueAlert({
-    subId, ctx, failedCount, outstandingCents, currency,
-    nextBillingAt, lastPaymentAt, source
-  });
-  if (posted) {
-    db.prepare('UPDATE subscription_billing_issues SET notified_at = ? WHERE paypal_subscription_id = ?')
-      .run(now, subId);
+  // The grace window. Only the cycle that just ended is extended: it has to
+  // have expired within a week of the first failure, so a subscription that
+  // lapsed months ago (the launch cohort the August rescan surfaced, whose
+  // first_seen_at is the rescan date) is left alone. Idempotent — a retry
+  // failing on day 2 finds effective_until already at the grace date.
+  const graceUntil = firstSeenAt + BILLING_GRACE_SECONDS;
+  const ext = db.prepare(`
+    UPDATE orders SET effective_until = ?
+    WHERE paypal_subscription_id = ? AND status = 'completed'
+      AND effective_until IS NOT NULL
+      AND effective_until < ?
+      AND effective_until > ? - 7 * 86400
+  `).run(graceUntil, subId, graceUntil, firstSeenAt);
+  if (ext.changes > 0) {
+    if (ctx && ctx.bi_uid) rollGrantsForward(ctx.bi_uid, graceUntil);
+    console.log('[billing] %s: perks kept until %s (3-day grace after first failed payment)',
+      subId, new Date(graceUntil * 1000).toISOString());
+    syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+    ctx = getBillingIssueContext(subId); // so the email quotes the grace date
   }
 
-  if (emailPlayer && ctx && ctx.payer_email) {
+  // Alert staff only when the failure count moved; email the player on that
+  // AND whenever they have never been told. The August rescan ran with
+  // emailPlayers off and later retries did not raise the count, which left a
+  // third of the failing subscribers never having heard from us at all.
+  const needsEmail = !!(emailPlayer && ctx && ctx.payer_email && (escalated || !prevEmailedAt));
+  if (!escalated && !needsEmail) return { escalated: false };
+
+  const now = Math.floor(Date.now() / 1000);
+  if (escalated) {
+    const posted = await postBillingIssueAlert({
+      subId, ctx, failedCount, outstandingCents, currency,
+      nextBillingAt, lastPaymentAt, source
+    });
+    if (posted) {
+      db.prepare('UPDATE subscription_billing_issues SET notified_at = ? WHERE paypal_subscription_id = ?')
+        .run(now, subId);
+    }
+  }
+
+  if (needsEmail) {
     try {
       await sendPaymentFailed({
         to: ctx.payer_email,
@@ -3185,7 +3257,7 @@ async function handleBillingFailure(opts) {
       console.error('[billing] player email failed:', e.message);
     }
   }
-  return { escalated: true };
+  return { escalated };
 }
 
 // Sweep every subscription we believe is live and reconcile it against
@@ -3330,8 +3402,8 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
 
   const orders = db.prepare(`
     SELECT o.id, o.product_id, o.status, o.amount_cents, o.created_at, o.completed_at,
-           o.paypal_subscription_id, o.subscription_cancelled_at, o.effective_until,
-           o.server_id, o.test_mode,
+           o.paypal_subscription_id, o.subscription_cancelled_at, o.subscription_ended_reason,
+           o.effective_until, o.server_id, o.test_mode,
            p.title, p.type, p.currency, p.server_specific, p.discord_role_id
     FROM orders o JOIN products p ON o.product_id = p.id
     WHERE o.steam_id = ?
@@ -3382,11 +3454,14 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
       roleId: o.discord_role_id,
       active,
       // The distinction the whole feature exists for: PayPal says ACTIVE, but
-      // the payments are failing and access has already stopped.
-      state: o.subscription_cancelled_at ? 'cancelled'
+      // the payments are failing and access has already stopped. And an ended
+      // agreement is 'cancelled' | 'suspended' | 'expired' — three different
+      // messages to the player, never one.
+      state: o.subscription_cancelled_at ? (o.subscription_ended_reason || 'cancelled')
         : issue ? 'payment_failing'
         : active ? 'active'
         : 'lapsed',
+      endedReason: o.subscription_ended_reason || null,
       billingIssue: issue ? {
         failedCount: issue.failed_count,
         outstandingCents: issue.outstanding_cents,
@@ -3870,7 +3945,11 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       // status='completed' forever (by design) and the frontend has no way
       // to tell a still-active subscription from a cancelled one, so the
       // Cancel button never goes away.
-      markSubscriptionCancelledLocally(subId);
+      // 'cancelled' | 'suspended' | 'expired'. Three different things happened
+      // to the player, and the card, the email and the account page each need
+      // to say which. They all used to say "cancelled".
+      const endedReason = event.event_type.replace('BILLING.SUBSCRIPTION.', '').toLowerCase();
+      markSubscriptionCancelledLocally(subId, endedReason);
       // The agreement is dead, so a pending failure is no longer actionable.
       resolveBillingIssue(subId, event.event_type);
       syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
@@ -3886,28 +3965,76 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         ORDER BY o.id DESC LIMIT 1
       `).get(subId);
       if (ctx) {
+        const bi = resource.billing_info || {};
+        const failedCount = bi.failed_payments_count || 0;
+        const outstandingCents = ppValueToCents(bi.outstanding_balance && bi.outstanding_balance.value);
+        const extraFields = [];
+        if (endedReason === 'cancelled') {
+          // PayPal records who ended it. "Cancelled by customer" is written
+          // only by our own cancel endpoint; an empty note means the buyer did
+          // it from PayPal's side. Staff kept reading one as the other.
+          const note = resource.status_change_note || null;
+          extraFields.push({ name: 'Cancelled via', value: note || 'PayPal, by the buyer (no note)', inline: false });
+        } else if (endedReason === 'suspended') {
+          extraFields.push({ name: 'Why', value: `PayPal stopped retrying after ${failedCount} failed payment${failedCount === 1 ? '' : 's'}`, inline: false });
+          if (outstandingCents) {
+            extraFields.push({ name: 'Outstanding', value: `$${(outstandingCents / 100).toFixed(2)} ${(ctx.currency || 'usd').toUpperCase()}`, inline: true });
+          }
+        }
         // Use what this order actually charged (o.amount_cents), not the
         // product's current listed price — those can drift apart if the
         // price changes after the order was placed.
         sendDiscordNotification({
-          eventType: 'subscription_cancelled',
+          eventType: 'subscription_' + endedReason,
           user: { platform: ctx.platform, persona: ctx.persona, steam_id: ctx.steam_id, gamertag: ctx.gamertag, bm_player_id: ctx.bm_player_id },
           biUid: ctx.bi_uid, productTitle: ctx.product_title,
           amountCents: ctx.amount_cents, currency: ctx.currency,
-          status: event.event_type.replace('BILLING.SUBSCRIPTION.', '').toLowerCase(),
-          serverId: ctx.server_id
+          status: endedReason,
+          serverId: ctx.server_id,
+          extraFields
         });
         const to = resource.subscriber?.email_address || ctx.payer_email;
         if (to) {
-          sendSubscriptionCancelled({
-            to,
-            displayName: ctx.persona || ctx.gamertag || null,
-            productTitle: ctx.product_title,
-            accessEndsAtMs: until ? until * 1000 : null,
-            priceCents: ctx.amount_cents,
-            currency: ctx.currency
-          }).catch(e => console.error('[cancel-mail] send failed:', e.message));
+          const displayName = ctx.persona || ctx.gamertag || null;
+          const mail = endedReason === 'suspended'
+            ? sendSubscriptionSuspended({
+                to, displayName,
+                productTitle: ctx.product_title,
+                accessEndsAtMs: until ? until * 1000 : null,
+                failedCount, outstandingCents,
+                currency: ctx.currency
+              })
+            : sendSubscriptionCancelled({
+                to, displayName,
+                productTitle: ctx.product_title,
+                accessEndsAtMs: until ? until * 1000 : null,
+                priceCents: ctx.amount_cents,
+                currency: ctx.currency
+              });
+          mail.catch(e => console.error('[cancel-mail] send failed:', e.message));
         }
+      }
+      break;
+    }
+
+    case 'BILLING.SUBSCRIPTION.RE-ACTIVATED': {
+      // A suspended agreement PayPal brought back. Access itself returns when
+      // the next PAYMENT.SALE.COMPLETED books a cycle; what has to happen here
+      // is un-marking it as ended, or the account page keeps calling it
+      // stopped and the Cancel button never comes back.
+      const subId = resource.id;
+      if (!subId) break;
+      clearSubscriptionEndedLocally(subId);
+      const ctx = getBillingIssueContext(subId);
+      if (ctx) {
+        sendDiscordNotification({
+          eventType: 'subscription_reactivated',
+          user: { platform: ctx.platform, persona: ctx.persona, steam_id: ctx.steam_id, gamertag: ctx.gamertag, bm_player_id: ctx.bm_player_id },
+          biUid: ctx.bi_uid, productTitle: ctx.product_title,
+          amountCents: ctx.amount_cents, currency: ctx.currency,
+          status: 'active',
+          serverId: ctx.server_id
+        });
       }
       break;
     }

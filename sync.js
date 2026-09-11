@@ -134,11 +134,15 @@ function buildPerServerPurchaseBuckets() {
   // Dedupe per bucket on (guid|item) — keeps the first occurrence, so a
   // purchase entry's `name` (which comes from the user's persona/gamertag)
   // wins over a manual grant's display_name if both exist for the same guid.
-  // Also drop any (guid, server) hidden by a deny row.
+  //
+  // A deny row means "no priority queue on THIS server" and nothing more, so it
+  // only hides the priority-queue entry. It used to hide every entry for that
+  // (guid, server) — a player whose queue was moved from EU2 to EU1 lost their
+  // lifetime Supporter entry on EU2 along with it.
   for (const id of SERVER_IDS) {
     const seen = new Set();
     buckets[id] = buckets[id].filter(e => {
-      if (denied.has(`${e.guid}|${id}`)) return false;
+      if (e.item === pqItemTitle && denied.has(`${e.guid}|${id}`)) return false;
       const k = `${e.guid}|${e.item}`;
       if (seen.has(k)) return false;
       seen.add(k);
