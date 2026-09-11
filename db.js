@@ -451,6 +451,25 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_identities_account ON account_identities(account_id);
 `);
 
+// Every Discord entitlement role the shop grants or takes away, and why.
+// Ticket 5996: a player lost a paid role and nothing could establish what removed
+// it -- container logs rotate within days, and the reconcile endpoint keeps only
+// its last run in memory. Rows are small, so they are kept.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS discord_role_events (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       INTEGER NOT NULL DEFAULT (unixepoch()),
+    action   TEXT NOT NULL CHECK(action IN ('assign','remove')),
+    user_id  TEXT NOT NULL,
+    role_id  TEXT NOT NULL,
+    reason   TEXT NOT NULL,
+    ok       INTEGER NOT NULL,
+    detail   TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_role_events_user ON discord_role_events(user_id, ts);
+`);
+
 function tableHasColumn(table, name) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === name);
 }

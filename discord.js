@@ -115,26 +115,51 @@ async function verifyMember(userId) {
   };
 }
 
-async function assignRole(userId, roleId) {
+// A durable record of every entitlement role the shop grants or takes away, and
+// why (see discord_role_events in db.js). db is required lazily so loading this
+// module never opens the database on its own, and the write is wrapped so a
+// failed audit can never turn a successful grant or removal into an error.
+function recordRoleEvent(action, userId, roleId, reason, ok, detail) {
+  try {
+    require('./db').prepare(
+      'INSERT INTO discord_role_events (action, user_id, role_id, reason, ok, detail) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(
+      action,
+      String(userId),
+      String(roleId),
+      String(reason || 'unspecified').slice(0, 200),
+      ok ? 1 : 0,
+      detail ? String(detail).slice(0, 300) : null
+    );
+  } catch (e) {
+    console.error('[roles-audit] could not record %s %s/%s: %s', action, userId, roleId, e.message);
+  }
+}
+
+async function assignRole(userId, roleId, reason) {
   const res = await discordFetch(
     `/guilds/${guildId()}/members/${userId}/roles/${roleId}`,
     { method: 'PUT' }
   );
   if (!res.ok && res.status !== 204) {
     const body = await res.text().catch(() => '');
+    recordRoleEvent('assign', userId, roleId, reason, false, `HTTP ${res.status}`);
     throw new Error(`Assign role failed (${res.status}): ${body.slice(0, 200)}`);
   }
+  recordRoleEvent('assign', userId, roleId, reason, true, null);
 }
 
-async function removeRole(userId, roleId) {
+async function removeRole(userId, roleId, reason) {
   const res = await discordFetch(
     `/guilds/${guildId()}/members/${userId}/roles/${roleId}`,
     { method: 'DELETE' }
   );
   if (!res.ok && res.status !== 204 && res.status !== 404) {
     const body = await res.text().catch(() => '');
+    recordRoleEvent('remove', userId, roleId, reason, false, `HTTP ${res.status}`);
     throw new Error(`Remove role failed (${res.status}): ${body.slice(0, 200)}`);
   }
+  recordRoleEvent('remove', userId, roleId, reason, true, res.status === 404 ? 'HTTP 404 (member or role already gone)' : null);
 }
 
 // Role ids a member currently holds, or null if they are not in the guild.

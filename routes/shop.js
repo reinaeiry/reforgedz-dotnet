@@ -1430,7 +1430,7 @@ router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res
       LIMIT 1
     `).get(r.steam_id, r.role_id);
     if (stillOwed) continue;
-    discord.removeRole(r.user_id, r.role_id)
+    discord.removeRole(r.user_id, r.role_id, 'product-hard-delete')
       .catch(e => console.error('[discord] hard-delete role remove %s/%s: %s', r.user_id, r.role_id, e.message));
   }
 
@@ -2784,7 +2784,7 @@ router.post('/api/shop/set-discord-id', requireAuth, async (req, res) => {
         WHERE o.steam_id = ? AND o.status = 'completed' AND p.discord_role_id IS NOT NULL
       `).all(req.user.steam_id);
       for (const r of roles) {
-        try { await discord.removeRole(existing.discord_id, r.role_id); }
+        try { await discord.removeRole(existing.discord_id, r.role_id, `discord-unlink:${req.user.steam_id}`); }
         catch (e) { console.error('[discord] remove on unlink failed:', e.message); }
       }
     }
@@ -2823,7 +2823,7 @@ router.post('/api/shop/set-discord-id', requireAuth, async (req, res) => {
   `).all(req.user.steam_id);
   let assigned = 0;
   for (const r of owed) {
-    try { await discord.assignRole(cleaned, r.role_id); assigned++; }
+    try { await discord.assignRole(cleaned, r.role_id, `discord-link-backfill:${req.user.steam_id}`); assigned++; }
     catch (e) { console.error('[discord] back-fill assign failed:', e.message); }
   }
 
@@ -2840,7 +2840,7 @@ function tryAssignDiscordRoleForOrder(orderId) {
       WHERE o.id = ?
     `).get(orderId);
     if (!row || !row.role_id || !row.user_id) return;
-    discord.assignRole(row.user_id, row.role_id)
+    discord.assignRole(row.user_id, row.role_id, `order-fulfilled:${orderId}`)
       .catch(e => console.error('[discord] assign role for order %s failed: %s', orderId, e.message));
   } catch (e) {
     console.error('[discord] assign helper failed:', e.message);
@@ -2868,7 +2868,7 @@ function tryRemoveDiscordRoleForOrder(orderId) {
       LIMIT 1
     `).get(row.steam_id, orderId, row.role_id);
     if (stillOwed) return;
-    discord.removeRole(row.user_id, row.role_id)
+    discord.removeRole(row.user_id, row.role_id, `order-revoked:${orderId}`)
       .catch(e => console.error('[discord] remove role for order %s failed: %s', orderId, e.message));
   } catch (e) {
     console.error('[discord] remove helper failed:', e.message);
@@ -3492,7 +3492,7 @@ async function reconcileLapsedDiscordRoles(opts) {
       });
       if (dryRun) continue;
       try {
-        await discord.removeRole(userId, r.role_id);
+        await discord.removeRole(userId, r.role_id, `lapsed-reconcile:${r.product_title || r.role_id}`);
         summary.removed++;
         console.log('[roles] removed lapsed %s from %s (%s)', r.product_title, r.persona || userId, userId);
       } catch (e) {
