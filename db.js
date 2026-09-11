@@ -143,6 +143,17 @@ if (!productHasColumn('stock_limit_overrides')) {
 if (!userHasColumn('discord_id')) {
   db.exec("ALTER TABLE users ADD COLUMN discord_id TEXT");
 }
+// Console lock generation. rz_console_locked is a signed proof that this browser
+// originally linked the console account, and it lives for a year. Before this
+// column nothing could revoke one: a staff re-link gave the real owner a fresh
+// cookie, but every earlier cookie -- including one taken by whoever grabbed a
+// leaked link -- still verified. Consuming a re-link now bumps this, and only a
+// cookie carrying the current generation proves ownership. Cookies issued before
+// the column existed carry no generation, which reads as 0 and matches the
+// default, so the migration itself signs nobody out.
+if (!userHasColumn('console_lock_gen')) {
+  db.exec("ALTER TABLE users ADD COLUMN console_lock_gen INTEGER NOT NULL DEFAULT 0");
+}
 
 // PayPal Subscriptions API: cache the live + sandbox catalog-product + plan
 // ids per product so checkout doesn't recreate them on every purchase.

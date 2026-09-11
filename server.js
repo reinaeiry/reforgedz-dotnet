@@ -314,6 +314,22 @@ app.use('/downloads', (req, res, next) => {
   next();
 });
 
+// public/admin-*.html are only meant to be reached through their requireAdminPage
+// routes (/admin/orders, /admin/console-relink, /admin/saves), which sendFile
+// them. Left to express.static they went to anyone who asked for the file
+// directly -- including as /admin%2Dorders.html, /%2e/admin-orders.html or
+// /x/../admin-orders.html, because send decodes and normalises a path before it
+// touches the disk. So match the way send does: decode once, resolve dot
+// segments, then test the file name. Answer exactly as requireAdminPage does, so
+// the two responses are indistinguishable.
+app.use((req, res, next) => {
+  let requested;
+  try { requested = decodeURIComponent(req.path); } catch { return next(); }
+  if (/^admin-.*\.html$/i.test(path.posix.basename(path.posix.normalize(requested)))) {
+    return res.status(404).send('Not found');
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/radio', express.static(path.join(__dirname, 'radio')));
 
@@ -390,6 +406,16 @@ function setConsoleCookie(res, payload) {
   });
 }
 
+// A lock cookie proves ownership only if it names this console identity AND was
+// issued at the account's current lock generation. Cookies minted before the
+// generation existed carry none, which counts as 0 -- the column default -- so
+// they keep working until the first re-link for that account is consumed.
+function cookieProvesOwnership(lockCookie, user) {
+  return !!lockCookie
+    && lockCookie.bmPlayerId === user.bm_player_id
+    && (Number(lockCookie.gen) || 0) === (Number(user.console_lock_gen) || 0);
+}
+
 const VALID_PLATFORMS = new Set(['xbox', 'psn']);
 
 app.post('/api/auth/console/lookup', authLimiter, async (req, res) => {
@@ -432,7 +458,7 @@ app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
   // console cookie proves they're the same person who originally linked.
   // First-time account creation is unrestricted because there's nothing yet
   // to take over.
-  if (existing && (!lockCookie || lockCookie.bmPlayerId !== existing.bm_player_id)) {
+  if (existing && !cookieProvesOwnership(lockCookie, existing)) {
     return res.status(409).json({
       error: 'This gamertag is already linked to an account. If it is yours and you cleared your cookies (or switched browsers), open a ticket in our Discord and an admin will re-link you.'
     });
@@ -461,7 +487,7 @@ app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
       console.error('Console login error:', err.message);
       return res.status(500).json({ error: 'Session creation failed' });
     }
-    setConsoleCookie(res, { platform, gamertag: existing.gamertag, bmPlayerId: existing.bm_player_id, ts: Date.now() });
+    setConsoleCookie(res, { platform, gamertag: existing.gamertag, bmPlayerId: existing.bm_player_id, gen: Number(existing.console_lock_gen) || 0, ts: Date.now() });
     res.json({ ok: true, persona: existing.persona, gamertag: existing.gamertag, platform: existing.platform, bi_uid: existing.bi_uid || null });
   });
 });
@@ -584,11 +610,22 @@ app.post('/api/auth/console/relink', authLimiter, (req, res) => {
   const { row, user, error } = loadRelinkToken(token);
   if (error) return res.status(400).json({ error });
 
-  // Atomic claim: two requests racing the same link, only one can win.
-  const claimed = db.prepare(
-    'UPDATE console_relink_tokens SET used_at = ?, used_note = ? WHERE token_hash = ? AND used_at IS NULL'
-  ).run(Math.floor(Date.now() / 1000), String(req.ip || '').slice(0, 64), row.token_hash);
-  if (claimed.changes !== 1) {
+  // Atomic claim, and in the same transaction retire every lock cookie already
+  // issued for this account. Two requests racing the same link, only one can win;
+  // the winner's cookie is then the only one that proves ownership -- which is
+  // the point of a re-link when someone else has got into the account. Keyed on
+  // steam_id: the primary key of the exact row confirm reads back.
+  let newGen = 0;
+  const claimAndRetire = db.transaction(() => {
+    const claimed = db.prepare(
+      'UPDATE console_relink_tokens SET used_at = ?, used_note = ? WHERE token_hash = ? AND used_at IS NULL'
+    ).run(Math.floor(Date.now() / 1000), String(req.ip || '').slice(0, 64), row.token_hash);
+    if (claimed.changes !== 1) return false;
+    db.prepare('UPDATE users SET console_lock_gen = console_lock_gen + 1 WHERE steam_id = ?').run(user.steam_id);
+    newGen = db.prepare('SELECT console_lock_gen FROM users WHERE steam_id = ?').get(user.steam_id).console_lock_gen;
+    return true;
+  });
+  if (!claimAndRetire()) {
     return res.status(400).json({ error: 'This link has already been used. Ask staff for a new one.' });
   }
 
@@ -601,6 +638,7 @@ app.post('/api/auth/console/relink', authLimiter, (req, res) => {
       platform: user.platform,
       gamertag: user.gamertag,
       bmPlayerId: user.bm_player_id,
+      gen: newGen,
       ts: Date.now()
     });
     console.log(`[console-relink] consumed for ${user.gamertag} (${user.platform}) from ${req.ip}`);
