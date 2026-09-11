@@ -3407,7 +3407,9 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
       bmPlayerId: me.bm_player_id,
       biUid: me.bi_uid,
       discordId: me.discord_id,
-      isAdmin: me.role === 'admin',
+      // From the per-request user, which derives admin from ADMIN_STEAM_IDS -- not the
+      // stored row, which still says 'admin' for someone removed from that list.
+      isAdmin: req.user.role === 'admin',
       createdAt: me.created_at,
       // Console UIDs are resolved from BattleMetrics and deliberately not
       // self-editable (see /api/shop/set-bi-uid).

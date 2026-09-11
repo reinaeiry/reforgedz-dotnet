@@ -125,7 +125,20 @@
   </div>
 
   <script>
-    const token = new URLSearchParams(location.search).get('token') || '';
+    // The token is a live account-takeover credential until it is used. Take it out
+    // of the address bar straight away so it is not left in history, bookmarks, a
+    // screen share or a same-origin Referer. sessionStorage keeps it for this tab
+    // only, so a refresh before pressing the button still works; it is cleared once
+    // the sign-in succeeds.
+    const RELINK_KEY = 'rz_relink_token';
+    const fromUrl = new URLSearchParams(location.search).get('token') || '';
+    if (fromUrl) {
+      try { sessionStorage.setItem(RELINK_KEY, fromUrl); } catch (e) {}
+      history.replaceState(null, '', location.pathname);
+    }
+    let stored = '';
+    try { stored = sessionStorage.getItem(RELINK_KEY) || ''; } catch (e) {}
+    const token = fromUrl || stored;
     const $ = (id) => document.getElementById(id);
     const show = (id) => $(id).classList.remove('relink-hidden');
     const hide = (id) => $(id).classList.add('relink-hidden');
@@ -173,6 +186,7 @@
           $('msg').className = 'relink-msg error';
           return;
         }
+        try { sessionStorage.removeItem(RELINK_KEY); } catch (e) {}
         hide('ready');
         show('done');
       } catch (e) {

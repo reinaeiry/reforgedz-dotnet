@@ -51,6 +51,13 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 10000) {
 passport.serializeUser((user, done) => done(null, user.steam_id));
 passport.deserializeUser((steamId, done) => {
   const user = db.prepare('SELECT * FROM users WHERE steam_id = ?').get(steamId);
+  // Admin is decided by ADMIN_STEAM_IDS on every request, not by whatever the row
+  // said when this person last logged in. The Steam callback below persists role
+  // at login and nothing ever writes it back, so removing someone from
+  // ADMIN_STEAM_IDS used to leave their existing 30-day session -- and their row --
+  // with refund, revoke, save-purge and re-link rights. Only 'admin' is derived
+  // here; any other role on the row is left as it is.
+  if (user) user.role = ADMIN_IDS.includes(user.steam_id) ? 'admin' : (user.role === 'admin' ? 'user' : user.role);
   done(null, user || null);
 });
 
@@ -392,8 +399,15 @@ function verifyConsoleCookie(req) {
   try { sigBuf = Buffer.from(sig, 'base64url'); expBuf = Buffer.from(expected, 'base64url'); }
   catch { return null; }
   if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
-  try { return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); }
+  let payload;
+  try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); }
   catch { return null; }
+  // The signed ts is the server's own expiry. CONSOLE_COOKIE_MAX_AGE on the cookie
+  // is only a hint to the browser, so a copied cookie value used to verify for ever.
+  // Every issued cookie carries ts; one without it (none are known) is left valid
+  // rather than signing someone out on a guess.
+  if (payload && typeof payload.ts === 'number' && Date.now() - payload.ts > CONSOLE_COOKIE_MAX_AGE) return null;
+  return payload;
 }
 
 function setConsoleCookie(res, payload) {
