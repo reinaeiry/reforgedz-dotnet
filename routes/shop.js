@@ -11,6 +11,7 @@ const discord = require('../discord');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
+const { describeNextRestart, RESTART_UTC_HOURS } = require('../restartSchedule');
 const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed } = require('../invoiceMail');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
@@ -431,7 +432,10 @@ router.get('/api/shop/config', (req, res) => {
     // set CUSTOM_FLAG_TUTORIAL_URL when a real video exists; until then the
     // frontend shows the placeholder string as-is.
     customFlagTutorialUrl: process.env.CUSTOM_FLAG_TUTORIAL_URL || null,
-    customFlagTicketUrl: CUSTOM_FLAG_TICKET_URL
+    customFlagTicketUrl: CUSTOM_FLAG_TICKET_URL,
+    // The game reads its admin list only at start, so queue priority begins at
+    // the next of these (UTC hours). The confirmation page says when.
+    restartUtcHours: RESTART_UTC_HOURS
   });
 });
 
@@ -715,11 +719,31 @@ async function ensurePlanForProduct(product, useTest) {
 // Discord/email payload from just an order id.
 function getOrderWithContext(orderId) {
   return db.prepare(`
-    SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id,
-           p.title AS product_title, p.type, p.currency
+    SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id, u.discord_id,
+           p.title AS product_title, p.type, p.currency, p.grants_priority_queue, p.discord_role_id, p.server_specific
     FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
     WHERE o.id = ?
   `).get(orderId);
+}
+
+// The lines under "What happens next" on the receipt. Queue priority only
+// takes effect when a server restarts, and a role only lands if Discord is
+// linked; until now the buyer was told neither.
+function purchaseNextSteps(order) {
+  const steps = [];
+  const base = BASE_URL.replace(/\/+$/, '');
+  if (order.grants_priority_queue) {
+    const label = order.server_id ? (SERVER_LABELS[order.server_id] || order.server_id) : 'your server';
+    steps.push(`Queue priority on ${label} starts at the next scheduled restart, ${describeNextRestart().text}. Servers restart every 4 hours, so it is never a long wait.`);
+    if (!order.bi_uid) steps.push(`Set your in-game id on your account page first, or the priority has nowhere to go: ${base}/account`);
+  }
+  if (order.discord_role_id) {
+    steps.push(order.discord_id
+      ? 'Your Discord role is applied automatically, usually within a minute.'
+      : `Link your Discord on your account page to receive your role: ${base}/account`);
+  }
+  steps.push(`See or change any of this on your account page: ${base}/account`);
+  return steps;
 }
 
 function fulfillOrder(orderId, cap) {
@@ -797,7 +821,8 @@ function fulfillOrder(orderId, cap) {
       feeCents: cap.feeCents,
       serverLabel: order.server_id ? (SERVER_LABELS[order.server_id] || order.server_id) : null,
       buyerName: cap.payerName || order.persona || null,
-      dateMs: Date.now()
+      dateMs: Date.now(),
+      nextSteps: purchaseNextSteps(order)
     }).catch(() => {});
   }
   return true;
@@ -868,7 +893,7 @@ router.get('/api/shop/paypal/return', async (req, res) => {
   // bill the buyer without granting entitlement (fulfillOrder's UPDATE is
   // gated by status='pending'). Completed orders just bounce to success.
   if (order.status === 'completed') {
-    return res.redirect(BASE_URL + '/shop?success=1');
+    return res.redirect(BASE_URL + '/shop?success=1&order=' + orderId);
   }
   if (order.status !== 'pending') {
     return res.redirect(BASE_URL + '/shop?cancelled=1');
@@ -878,7 +903,7 @@ router.get('/api/shop/paypal/return', async (req, res) => {
     const cap = await paypal.captureOrder(useTest, order.paypal_order_id);
     if (cap.status === 'COMPLETED') {
       fulfillOrder(orderId, cap);
-      return res.redirect(BASE_URL + '/shop?success=1');
+      return res.redirect(BASE_URL + '/shop?success=1&order=' + orderId);
     }
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   } catch (err) {
@@ -903,7 +928,7 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
   // Already-fulfilled order: just bounce to success. Anything not pending is
   // treated as terminal — don't re-touch it.
   if (order.status === 'completed') {
-    return res.redirect(BASE_URL + '/shop?success=1');
+    return res.redirect(BASE_URL + '/shop?success=1&order=' + orderId);
   }
   if (order.status !== 'pending') {
     return res.redirect(BASE_URL + '/shop?cancelled=1');
@@ -918,11 +943,11 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
         payerEmail: sub.subscriber?.email_address || null,
         feeCents: null
       });
-      return res.redirect(BASE_URL + '/shop?success=1');
+      return res.redirect(BASE_URL + '/shop?success=1&order=' + orderId);
     }
     if (status === 'APPROVED') {
       // First payment not yet captured. Webhook will activate within seconds.
-      return res.redirect(BASE_URL + '/shop?processing=1');
+      return res.redirect(BASE_URL + '/shop?processing=1&order=' + orderId);
     }
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   } catch (err) {
@@ -935,11 +960,93 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
 router.get('/api/shop/orders', requireAuth, (req, res) => {
   const orders = db.prepare(`
     SELECT o.id, o.product_id, o.status, o.amount_cents, o.created_at, o.completed_at,
-           o.stripe_subscription_id, o.paypal_subscription_id, o.subscription_cancelled_at, o.server_id, p.title, p.type, p.currency, p.server_specific
+           o.stripe_subscription_id, o.paypal_subscription_id, o.subscription_cancelled_at, o.server_id,
+           p.title, p.type, p.currency, p.server_specific, p.grants_priority_queue, p.discord_role_id
     FROM orders o JOIN products p ON o.product_id = p.id
     WHERE o.steam_id = ? ORDER BY o.created_at DESC
   `).all(req.user.steam_id);
   res.json(orders);
+});
+
+// ---- Self-service priority queue move ---------------------------------------
+// "I bought queue priority on EU2, can you put me on EU1?" used to be a ticket.
+// The move itself is the one staff make (grant on the new server, deny on the
+// old, the order row untouched so sales stats stay true); this just lets the
+// holder do it, once per cooldown, only onto a server with room.
+const PQ_MOVE_COOLDOWN_DAYS = 14;
+
+function pqMoveState(steamId) {
+  const now = Math.floor(Date.now() / 1000);
+  const last = db.prepare('SELECT moved_at FROM priority_queue_moves WHERE steam_id = ? ORDER BY moved_at DESC LIMIT 1').get(steamId);
+  const nextMoveAt = last ? last.moved_at + PQ_MOVE_COOLDOWN_DAYS * 86400 : null;
+  return { lastMovedAt: last ? last.moved_at : null, nextMoveAt, canMove: !nextMoveAt || nextMoveAt <= now };
+}
+
+// Where a player's queue priority is and where it could go, for the account page.
+function pqSelfServiceInfo(user, order) {
+  const product = attachStock(db.prepare('SELECT * FROM products WHERE id = ?').get(order.product_id));
+  const presence = user.bi_uid ? pqEntryFor(user.bi_uid).presence : Object.fromEntries(SERVER_IDS.map(id => [id, false]));
+  const state = pqMoveState(user.steam_id);
+  return {
+    current: SERVER_IDS.filter(id => presence[id]),
+    options: SERVER_IDS.map(id => ({
+      id, label: SERVER_LABELS[id] || id, current: !!presence[id],
+      available: product && product.per_server_available ? product.per_server_available[id] : null
+    })),
+    canMove: state.canMove && !!user.bi_uid,
+    nextMoveAt: state.nextMoveAt,
+    cooldownDays: PQ_MOVE_COOLDOWN_DAYS,
+    nextRestart: describeNextRestart().text
+  };
+}
+
+router.post('/api/shop/priority-queue/move', requireAuth, (req, res) => {
+  const orderId = parseInt(req.body && req.body.orderId, 10);
+  const to = req.body && req.body.to;
+  const now = Math.floor(Date.now() / 1000);
+  const order = db.prepare(`
+    SELECT o.*, p.grants_priority_queue, p.server_specific, p.title
+    FROM orders o JOIN products p ON p.id = o.product_id
+    WHERE o.id = ? AND o.steam_id = ?
+  `).get(orderId, req.user.steam_id);
+  if (!order) return res.status(404).json({ error: 'Purchase not found.' });
+  if (!order.grants_priority_queue || !order.server_specific) return res.status(400).json({ error: 'This purchase is not tied to a server.' });
+  if (order.status !== 'completed' || !(order.effective_until == null || order.effective_until > now)) {
+    return res.status(400).json({ error: 'This subscription is not active, so there is nothing to move.' });
+  }
+  if (!SERVER_IDS.includes(to)) return res.status(400).json({ error: 'Unknown server.' });
+  const guid = req.user.bi_uid;
+  if (!guid) return res.status(400).json({ error: 'Set your in-game id on this page first.' });
+  const state = pqMoveState(req.user.steam_id);
+  if (!state.canMove) {
+    return res.status(429).json({ error: `You moved recently. You can move again on ${new Date(state.nextMoveAt * 1000).toISOString().slice(0, 10)}.`, nextMoveAt: state.nextMoveAt });
+  }
+  const from = SERVER_IDS.filter(id => pqEntryFor(guid).presence[id]);
+  if (from.includes(to)) return res.status(400).json({ error: `Your queue priority is already on ${SERVER_LABELS[to] || to}.` });
+  const info = pqSelfServiceInfo(req.user, order);
+  const target = info.options.find(o => o.id === to);
+  if (target && target.available != null && target.available <= 0) {
+    return res.status(400).json({ error: `${SERVER_LABELS[to] || to} is full right now. Try another server or check back later.` });
+  }
+
+  const name = req.user.gamertag || req.user.persona || null;
+  const by = `self:${req.user.steam_id}`;
+  db.transaction(() => {
+    applyPqGrant(guid, to, name, by);
+    for (const f of from) applyPqDeny(guid, f, name, by);
+    db.prepare('INSERT INTO priority_queue_moves (steam_id, guid, from_server, to_server, moved_at) VALUES (?, ?, ?, ?, unixepoch())')
+      .run(req.user.steam_id, guid, from.join(',') || null, to);
+  })();
+  console.log(`[pq-move] ${req.user.steam_id} moved ${guid} ${from.join(',') || '(none)'} -> ${to}`);
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+  require('../tools/lib/discordCard').postCard({
+    title: 'Priority queue moved by the player',
+    color: 0x6b7280,
+    description: `${name || req.user.steam_id} moved their queue priority ${from.map(f => (SERVER_LABELS[f] || f)).join(', ') || '(nowhere)'} → ${SERVER_LABELS[to] || to}`,
+    fields: [{ name: 'In-game id', value: guid, inline: true }, { name: 'Order', value: `#${order.id} ${order.title}`, inline: true }],
+    footer: 'Self-service from the account page; takes effect at each server\'s next restart'
+  }).catch(() => {});
+  res.json({ ok: true, from, to, nextRestart: describeNextRestart().text, nextMoveAt: now + PQ_MOVE_COOLDOWN_DAYS * 86400 });
 });
 
 // Set own BI UID. Steam-OpenID users are trusted to enter their own UID
@@ -949,7 +1056,7 @@ router.get('/api/shop/orders', requireAuth, (req, res) => {
 // would otherwise redirect their entitlements (priority queue etc.) onto
 // the attacker's own GUID. Console-account UID changes go through admin
 // support via /api/shop/admin/users/:steamId/bi-uid.
-router.post('/api/shop/set-bi-uid', requireAuth, (req, res) => {
+router.post('/api/shop/set-bi-uid', requireAuth, async (req, res) => {
   if (req.user.platform === 'psn' || req.user.platform === 'xbox') {
     return res.status(403).json({
       error: 'Console accounts have their UID set automatically from BattleMetrics. To change it, open a ticket in our Discord.'
@@ -959,15 +1066,29 @@ router.post('/api/shop/set-bi-uid', requireAuth, (req, res) => {
   const { biUid } = req.body;
   if (!biUid || typeof biUid !== 'string') return res.status(400).json({ error: 'Missing BI UID' });
 
-  const cleaned = biUid.trim().toLowerCase();
+  // Pasted from the game's profile screen; braces, spaces and capitals are
+  // the usual noise around a correct id.
+  const cleaned = biUid.replace(/[{}\s]/g, '').toLowerCase();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(cleaned)) {
-    return res.status(400).json({ error: 'Invalid BI UID format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' });
+    return res.status(400).json({ error: 'That does not look like an Identity ID. It is 36 characters with dashes, like 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac.' });
   }
+  if (/^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(cleaned)) {
+    return res.status(400).json({ error: 'That is the placeholder id, not yours. Copy the real one from your profile in the game.' });
+  }
+
+  // A typo here sends every perk to nobody, so the id is checked against
+  // BattleMetrics before it is saved. If BattleMetrics cannot be asked, the
+  // save goes through; a player must not be blocked by someone else's outage.
+  const match = await require('../battlemetrics').matchReforgerUuid(cleaned).catch(() => ({ found: null }));
+  if (match.found === false) {
+    return res.status(400).json({ error: 'BattleMetrics has never seen that id on any server. Check it against your profile in the game; if it is right and you have played recently, try again in a few minutes or open a ticket.' });
+  }
+  if (match.found === null) console.warn('[bi-uid] BattleMetrics check unavailable (%s); saving %s unverified for %s', match.error, cleaned, req.user.steam_id);
 
   db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(cleaned, req.user.steam_id);
   req.user.bi_uid = cleaned;
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  res.json({ ok: true, bi_uid: cleaned });
+  res.json({ ok: true, bi_uid: cleaned, verified: match.found === true, lastSeen: match.lastSeen || null });
 });
 
 // Verify/capture a PayPal order (fallback when the return redirect or webhook
@@ -3467,7 +3588,7 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
     SELECT o.id, o.product_id, o.status, o.amount_cents, o.created_at, o.completed_at,
            o.paypal_subscription_id, o.subscription_cancelled_at, o.subscription_ended_reason,
            o.effective_until, o.server_id, o.test_mode,
-           p.title, p.type, p.currency, p.server_specific, p.discord_role_id
+           p.title, p.type, p.currency, p.server_specific, p.discord_role_id, p.grants_priority_queue
     FROM orders o JOIN products p ON o.product_id = p.id
     WHERE o.steam_id = ?
     ORDER BY o.created_at DESC
@@ -3508,6 +3629,10 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
     subs.push({
       subscriptionId: o.paypal_subscription_id,
       orderId: o.id,
+      productId: o.product_id,
+      grantsPriorityQueue: !!o.grants_priority_queue,
+      // Where the queue priority sits and whether the holder may move it.
+      pq: (o.grants_priority_queue && o.server_specific && active) ? pqSelfServiceInfo(me, o) : null,
       title: o.title,
       currency: o.currency,
       amountCents: o.amount_cents,
@@ -4248,4 +4373,8 @@ async function dispatchPayPalEvent(event, resource, orderId) {
   }
 }
 
-module.exports = { router, webhookHandler, registerPayPalWebhooks, requireAdmin, healMissingDiscordRoles };
+module.exports = {
+  router, webhookHandler, registerPayPalWebhooks, requireAdmin, healMissingDiscordRoles,
+  // Exposed for tools/ and tests; not routes.
+  pqSelfServiceInfo, purchaseNextSteps, getOrderWithContext
+};

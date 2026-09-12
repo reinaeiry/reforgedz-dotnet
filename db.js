@@ -473,6 +473,16 @@ db.exec(`
 // it -- container logs rotate within days, and the reconcile endpoint keeps only
 // its last run in memory. Rows are small, so they are kept.
 db.exec(`
+  CREATE TABLE IF NOT EXISTS priority_queue_moves (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    steam_id    TEXT NOT NULL,
+    guid        TEXT NOT NULL,
+    from_server TEXT,
+    to_server   TEXT NOT NULL,
+    moved_at    INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_pq_moves_steam ON priority_queue_moves(steam_id, moved_at);
+
   CREATE TABLE IF NOT EXISTS discord_role_events (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     ts       INTEGER NOT NULL DEFAULT (unixepoch()),

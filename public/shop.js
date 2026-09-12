@@ -877,14 +877,15 @@ document.getElementById('biuidSubmit').addEventListener('click', async () => {
   const error = document.getElementById('biuidError');
   const submitBtn = document.getElementById('biuidSubmit');
 
-  const raw = input.value.trim().toLowerCase();
+  // Braces, spaces and capitals are the usual noise around a correct id.
+  const raw = input.value.replace(/[{}\s]/g, '').toLowerCase();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)) {
-    error.textContent = 'Invalid format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
+    error.textContent = 'That does not look like an Identity ID. It is 36 characters with dashes, like 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac.';
     return;
   }
 
   submitBtn.disabled = true;
-  submitBtn.textContent = 'Saving...';
+  submitBtn.textContent = 'Checking...';
   error.textContent = '';
 
   try {
@@ -1548,14 +1549,71 @@ document.getElementById('cancelModalConfirm').addEventListener('click', async ()
 });
 
 // ---- URL alerts + session verification ----
+// The moment queue priority actually begins. Mirrors restartSchedule.js on
+// the server: every 4 hours on UTC boundaries, read by the game at start.
+function nextRestartText(now = Date.now()) {
+  const step = 4 * 3600 * 1000;
+  const next = new Date(Math.floor(now / step) * step + step);
+  const mins = Math.max(1, Math.round((next - now) / 60000));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const local = next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `${next.toISOString().slice(11, 16)} UTC (${local} your time, in ${h ? h + ' h ' : ''}${m} min)`;
+}
+
+// What just happened and what happens next, so nobody has to guess whether
+// the purchase "worked". Entitlement was decided server-side already.
+function nextStepsHtml(order) {
+  const items = [];
+  const label = order.server_id ? (SERVER_LABELS[order.server_id] || String(order.server_id).toUpperCase()) : 'your server';
+  if (order.grants_priority_queue) {
+    items.push(`Queue priority on <strong>${escHtml(label)}</strong> starts at the next scheduled restart, <strong>${escHtml(nextRestartText())}</strong>. Servers restart every 4 hours.`);
+    if (currentUser && !currentUser.bi_uid) items.push('Set your in-game id on your <a href="/account">account page</a> first, or the priority has nowhere to go.');
+  }
+  if (order.discord_role_id) {
+    items.push(currentUser && currentUser.discord_id
+      ? 'Your Discord role is applied automatically, usually within a minute.'
+      : 'Link your Discord on your <a href="/account">account page</a> to receive your role.');
+  }
+  items.push('See or change any of this on your <a href="/account">account page</a>.');
+  return `<strong>Payment successful. Thanks for supporting ReforgedZ.</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>`;
+}
+
+async function findOwnOrder(orderId) {
+  try {
+    const orders = await api('/api/shop/orders');
+    return orders.find(o => String(o.id) === String(orderId)) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function checkAlerts() {
   const params = new URLSearchParams(window.location.search);
+  const orderId = params.get('order');
+  if (params.get('processing') === '1') {
+    // The agreement is approved at PayPal but the activation webhook has not
+    // landed yet. Usually seconds; poll the order before giving up on it.
+    alertSuccess.style.display = 'block';
+    alertSuccess.textContent = 'PayPal is confirming your subscription. This usually takes a few seconds.';
+    window.history.replaceState({}, '', '/shop');
+    for (let i = 0; i < 10 && orderId; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const order = await findOwnOrder(orderId);
+      if (order && order.status === 'completed') {
+        alertSuccess.innerHTML = nextStepsHtml(order);
+        loadOrders();
+        return;
+      }
+    }
+    alertSuccess.innerHTML = 'PayPal is still confirming your subscription. It appears on your <a href="/account">account page</a> as soon as the first payment clears; if it is not there within an hour, open a ticket in Discord.';
+    return;
+  }
   if (params.get('success') === '1') {
     alertSuccess.style.display = 'block';
     // PayPal captures + fulfills server-side on the return redirect; this is
     // just a safety re-verify in case the buyer landed here via the webhook
     // path before the capture completed.
-    const orderId = params.get('order');
     if (orderId) {
       try {
         await api('/api/shop/verify-session', {
@@ -1566,9 +1624,10 @@ async function checkAlerts() {
       // Custom Flag orders get richer instructions in place of the generic
       // "thanks" line — look up the order's product type to tell.
       try {
-        const orders = await api('/api/shop/orders');
-        const order = orders.find(o => String(o.id) === String(orderId));
-        if (order && order.type === 'custom_flag') {
+        const order = await findOwnOrder(orderId);
+        if (order && order.type !== 'custom_flag') {
+          alertSuccess.innerHTML = nextStepsHtml(order);
+        } else if (order && order.type === 'custom_flag') {
           const cfg = await api('/api/shop/config').catch(() => ({}));
           const tutorial = cfg.customFlagTutorialUrl
             ? `<a href="${escHtml(cfg.customFlagTutorialUrl)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;font-weight:600">Watch the tutorial</a>`
@@ -1607,9 +1666,25 @@ async function init() {
   bindCurrencyPills();
   bindSigninDropdown();
   await loadFx();
-  checkAlerts();
   await loadUser();
   await loadProducts();
+  // After the user, so the confirmation can say whether Discord is linked.
+  checkAlerts();
+  // /shop?buy=<product>&server=<id>: the account page's "Start again" and any
+  // link that should land straight in checkout. Signed out, go through sign-in
+  // and come back here with the same parameters.
+  const params = new URLSearchParams(location.search);
+  const buyId = parseInt(params.get('buy'), 10);
+  if (buyId) {
+    const server = SERVER_IDS.includes(params.get('server')) ? params.get('server') : null;
+    if (currentUser) {
+      window.history.replaceState({}, '', '/shop');
+      buyProduct(buyId, server);
+    } else {
+      location.href = '/shop?next=' + encodeURIComponent(`/shop?buy=${buyId}${server ? '&server=' + server : ''}`);
+    }
+    return;
+  }
   // Arrived here to sign in and still signed out: open the sign-in menu so
   // the next step is obvious. Already signed in: they only wanted the page
   // they came from.

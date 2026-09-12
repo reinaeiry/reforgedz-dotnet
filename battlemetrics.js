@@ -95,4 +95,34 @@ async function lookupPlayerByGamertag(gamertag, platform) {
   return { bmPlayerId, biUid, displayName, platform };
 }
 
-module.exports = { lookupPlayerByGamertag };
+// Has BattleMetrics ever seen this Reforger identity? The text search cannot
+// answer that (it is a fuzzy name search and returns strangers for any
+// string), but the identifier-match endpoint is exact. Used to check an id a
+// Steam player typed before the shop starts sending their perks to it.
+//   found: true | false | null (null = could not ask; do not block on it)
+async function matchReforgerUuid(uuid) {
+  const tk = token();
+  if (!tk) return { found: null, error: 'BATTLEMETRICS_TOKEN not set' };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch(`${BM_BASE}/players/match`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tk}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: [{ type: 'identifier', attributes: { type: 'reforgerUUID', identifier: String(uuid).toLowerCase() } }] }),
+      signal: ctrl.signal
+    });
+    if (!res.ok) return { found: null, error: `HTTP ${res.status}` };
+    const j = await res.json();
+    const hit = (j.data || [])[0];
+    if (!hit) return { found: false, lastSeen: null, bmPlayerId: null };
+    const playerId = hit.relationships && hit.relationships.player && hit.relationships.player.data ? String(hit.relationships.player.data.id) : null;
+    return { found: true, lastSeen: (hit.attributes && hit.attributes.lastSeen) || null, bmPlayerId: playerId };
+  } catch (e) {
+    return { found: null, error: e.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+module.exports = { lookupPlayerByGamertag, matchReforgerUuid };

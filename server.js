@@ -95,7 +95,9 @@ app.disable('x-powered-by');
 // markercluster from it; the Google Fonts hosts serve the site-wide fonts.
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://unpkg.com",
+  // static.cloudflareinsights.com is Cloudflare's Web Analytics beacon, injected
+  // at the edge; without it every page logged a blocked-script error.
+  "script-src 'self' 'unsafe-inline' https://unpkg.com https://static.cloudflareinsights.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
   "img-src 'self' data: https:",
   "font-src 'self' https://fonts.gstatic.com",

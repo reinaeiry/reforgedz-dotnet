@@ -40,7 +40,7 @@ function esc(s) {
 }
 
 // Build + send the invoice. Returns { ok, skipped?, error? }. Never throws.
-async function sendInvoice({ to, orderId, captureId, productTitle, amountCents, currency, feeCents, serverLabel, buyerName, dateMs }) {
+async function sendInvoice({ to, orderId, captureId, productTitle, amountCents, currency, feeCents, serverLabel, buyerName, dateMs, nextSteps }) {
   const tx = getTransport();
   if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
   if (!to) return { ok: false, skipped: 'no_recipient' };
@@ -125,10 +125,12 @@ async function sendInvoice({ to, orderId, captureId, productTitle, amountCents, 
           <div style="font-size:11px;color:#9ca3af">PayPal transaction ID: <span style="color:#6b7280">${esc(captureId)}</span></div>
         </td></tr>` : ''}
 
-        <!-- Note -->
+        <!-- What happens next -->
         <tr><td style="padding:8px 24px 24px">
-          <div style="font-size:13px;color:#4b5563;line-height:1.5;border-top:1px solid #ecedf0;padding-top:16px">
-            Your purchase is applied to the server automatically. If you set your in-game UID after buying, it syncs within a few minutes.
+          <div style="font-size:13px;color:#4b5563;line-height:1.55;border-top:1px solid #ecedf0;padding-top:16px">
+            ${Array.isArray(nextSteps) && nextSteps.length
+              ? `<div style="font-weight:600;color:#1a1a1a;margin-bottom:6px">What happens next</div><ul style="margin:0;padding-left:18px">${nextSteps.map((s) => `<li style="margin:4px 0">${esc(s)}</li>`).join('')}</ul>`
+              : 'Your purchase is applied to the server automatically. If you set your in-game id after buying, it syncs within a few minutes.'}
           </div>
         </td></tr>
 
@@ -159,8 +161,9 @@ async function sendInvoice({ to, orderId, captureId, productTitle, amountCents, 
     `Total paid: ${amount}`,
     captureId ? `PayPal transaction ID: ${captureId}` : null,
     '',
-    'Your purchase is applied to the server automatically. If you set your',
-    'in-game UID after buying, it syncs within a few minutes.',
+    ...(Array.isArray(nextSteps) && nextSteps.length
+      ? ['What happens next:', ...nextSteps.map((s) => `- ${s}`)]
+      : ['Your purchase is applied to the server automatically. If you set your', 'in-game id after buying, it syncs within a few minutes.']),
     '',
     'Questions about this receipt? Email contact@reforgedz.net or open a',
     'ticket in our Discord.',

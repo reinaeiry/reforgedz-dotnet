@@ -209,7 +209,32 @@
     .sub-alert a.sub-fix-btn:hover,
     .sub-fix-btn:hover { background: var(--accent-hover); color: #fff; }
 
-    .sub-actions { margin-top: 12px; }
+    .sub-actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .sub-actions .link-action, .sub-actions .sub-fix-btn { margin-top: 0; }
+
+    /* ---- self-service queue move ---- */
+    .sub-move {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: var(--surface-2, rgba(255,255,255,0.03));
+      border: 1px solid var(--border);
+      font-size: 0.82rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      align-items: center;
+    }
+    .sub-move select {
+      padding: 6px 10px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.8rem;
+      font-family: var(--body);
+    }
+    .sub-move .hint { flex-basis: 100%; font-size: 0.74rem; color: var(--text-ghost); line-height: 1.5; }
 
     /* ---- history ---- */
     .history-table { width: 100%; overflow-x: auto; }
@@ -584,6 +609,34 @@
         }
 
         const canCancel = s.state === 'active' || s.state === 'payment_failing';
+        const ended = ['suspended', 'cancelled', 'expired', 'lapsed'].includes(s.state) && !stillPaidUp;
+        const startAgain = ended && s.productId
+          ? `<a class="sub-fix-btn" href="/shop?buy=${encodeURIComponent(s.productId)}${s.serverId ? '&server=' + encodeURIComponent(s.serverId) : ''}">Start again</a>`
+          : '';
+
+        // Queue priority lives on one server; moving it used to take a ticket.
+        let move = '';
+        if (s.pq && s.state === 'active') {
+          const cur = s.pq.current.map(id => String(id).toUpperCase()).join(', ');
+          if (s.pq.canMove) {
+            const opts = s.pq.options.filter(o => !o.current).map(o =>
+              `<option value="${esc(o.id)}"${o.available === 0 ? ' disabled' : ''}>${esc(o.label)}${o.available === 0 ? ' (full)' : ''}</option>`).join('');
+            move = `
+              <div class="sub-move">
+                <span>Queue priority is on <strong>${esc(cur || 'no server yet')}</strong>.</span>
+                <label for="moveTo-${s.orderId}" style="font-size:0.78rem;color:var(--text-ghost)">Move to</label>
+                <select id="moveTo-${s.orderId}">${opts}</select>
+                <button class="link-action" style="margin-top:0" onclick="moveQueue(${s.orderId}, this)">Move</button>
+                <span class="hint">Takes effect at each server's next scheduled restart (every 4 hours; next ${esc(s.pq.nextRestart)}). You can move once every ${s.pq.cooldownDays} days.</span>
+              </div>`;
+          } else {
+            move = `
+              <div class="sub-move">
+                <span>Queue priority is on <strong>${esc(cur || 'no server yet')}</strong>.</span>
+                <span class="hint">${s.pq.nextMoveAt ? `You moved recently; you can move it again on ${dateStr(s.pq.nextMoveAt)}.` : 'Set your in-game id above to be able to move it.'}</span>
+              </div>`;
+          }
+        }
 
         return `
           <div class="sub-card state-${esc(s.state)}">
@@ -598,9 +651,39 @@
               ${pill}
             </div>
             ${alert}
-            ${canCancel ? `<div class="sub-actions"><button class="link-action" onclick="cancelSub(${s.orderId}, this)">Cancel subscription</button></div>` : ''}
+            ${move}
+            ${canCancel || startAgain ? `<div class="sub-actions">${startAgain}${canCancel ? `<button class="link-action" onclick="cancelSub(${s.orderId}, this)">Cancel subscription</button>` : ''}</div>` : ''}
           </div>`;
       }).join('');
+    }
+
+    async function moveQueue(orderId, btn) {
+      const sel = document.getElementById('moveTo-' + orderId);
+      const to = sel && sel.value;
+      if (!to) return;
+      const label = sel.options[sel.selectedIndex].text;
+      if (!confirm(`Move your queue priority to ${label}? It leaves your current server at its next restart and starts on ${label} at its next restart. You can move again in 14 days.`)) return;
+      btn.disabled = true;
+      btn.textContent = 'Moving…';
+      try {
+        const res = await fetch('/api/shop/priority-queue/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId, to })
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(j.error || 'Could not move. Please open a ticket in Discord.');
+          btn.disabled = false;
+          btn.textContent = 'Move';
+          return;
+        }
+        await load();
+      } catch (e) {
+        alert('Could not move: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = 'Move';
+      }
     }
 
     async function cancelSub(orderId, btn) {

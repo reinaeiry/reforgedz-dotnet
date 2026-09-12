@@ -398,6 +398,9 @@
       border: 1px solid rgba(74, 222, 128, 0.2);
       color: #4ade80;
     }
+    .shop-alert ul { margin: 8px 0 0; padding-left: 18px; font-weight: 400; line-height: 1.6; color: var(--text); }
+    .shop-alert li { margin: 3px 0; }
+    .shop-alert a { color: inherit; text-decoration: underline; }
 
     .shop-alert.cancelled {
       background: rgba(251, 146, 60, 0.08);
@@ -678,7 +681,8 @@
       .shop-page { padding-top: 110px; }
       .admin-form { grid-template-columns: 1fr; }
       .shop-grid { grid-template-columns: 1fr; }
-      .account-toggle .persona { display: none; }
+      /* A bare platform mark told a console player nothing; a short name does. */
+      .account-toggle .persona { max-width: 60px; font-size: 0.78rem; }
       .account-dropdown { width: 280px; right: -8px; }
     }
   </style>
@@ -905,13 +909,14 @@
   <!-- BI UID Modal -->
   <div class="biuid-overlay" id="biuidOverlay">
     <div class="biuid-modal">
-      <h3>Bohemia Identity ID Required</h3>
-      <p>We need your Bohemia Identity ID to deliver your purchase. You can find it in Arma Reforger:</p>
+      <h3>Your in-game Identity ID</h3>
+      <p>Your perks follow this id in the game, so it has to be exactly right. Find it in Arma Reforger:</p>
       <ol>
         <li>Open the <strong>Main Menu</strong></li>
         <li>Click your <strong>account name</strong> in the top right corner</li>
-        <li>Copy the ID that looks like: <code>41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac</code></li>
+        <li>Copy the ID that looks like <code>41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac</code> (36 characters with dashes)</li>
       </ol>
+      <p style="font-size:0.78rem;color:var(--text-ghost);margin-top:-4px">Paste it as it is; we tidy spaces and braces, and check it against BattleMetrics before saving so a typo cannot send your perks to nobody.</p>
       <input type="text" class="biuid-input" id="biuidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellcheck="false" autocomplete="off">
       <div class="biuid-error" id="biuidError"></div>
       <div class="biuid-actions">
