@@ -977,6 +977,22 @@ router.get('/api/shop/orders', requireAuth, (req, res) => {
 // holder do it, once per cooldown, only onto a server with room.
 const PQ_MOVE_COOLDOWN_DAYS = 14;
 
+// ⛔ OFF until the defects an adversarial review found on 2026-09-12 are fixed.
+// The move derives its GUID from users.bi_uid, which any signed-in player can
+// set to ANY value (the BattleMetrics check proves the id belongs to a real
+// player, not that it belongs to THIS player, and there is no uniqueness on the
+// column). It then writes deny rows for every server that GUID is present on,
+// so a throwaway account plus one subscription could strip another player's
+// queue priority everywhere, with the 14-day cooldown blocking the undo. Four
+// further defects ride on the same handler: it denies every server rather than
+// the order's, offers dev1 as a destination, mints a permanent grant inside the
+// window where effective_until is still NULL, and charges the cooldown per
+// steam_id so a second subscription is collateral. Nobody had used it (0 rows in
+// priority_queue_moves) so switching it off costs nothing. Staff can still move
+// anyone via /api/shop/admin/priority-queue/switch, which takes an explicit
+// source server and is admin-gated.
+const PQ_SELF_MOVE_ENABLED = false;
+
 function pqMoveState(steamId) {
   const now = Math.floor(Date.now() / 1000);
   const last = db.prepare('SELECT moved_at FROM priority_queue_moves WHERE steam_id = ? ORDER BY moved_at DESC LIMIT 1').get(steamId);
@@ -1003,6 +1019,9 @@ function pqSelfServiceInfo(user, order) {
 }
 
 router.post('/api/shop/priority-queue/move', requireAuth, (req, res) => {
+  if (!PQ_SELF_MOVE_ENABLED) {
+    return res.status(503).json({ error: 'Moving your queue priority yourself is temporarily unavailable. Open a Shop Support ticket in Discord and staff will move it for you.' });
+  }
   const orderId = parseInt(req.body && req.body.orderId, 10);
   const to = req.body && req.body.to;
   const now = Math.floor(Date.now() / 1000);
@@ -3031,7 +3050,9 @@ router.get('/auth/discord/link', discordOAuthLimiter, (req, res) => {
   }
   if (!discordOAuthConfigured()) return res.redirect(next + (next.includes('?') ? '&' : '?') + 'discord=unavailable');
   const state = crypto.randomBytes(24).toString('hex');
-  req.session.discordLink = { state, next, at: Date.now() };
+  // steamId is what the callback checks the returning session against, so a
+  // different account finishing this flow fails closed instead of stealing it.
+  req.session.discordLink = { state, next, at: Date.now(), steamId: req.user.steam_id };
   // No `prompt` parameter on purpose, so Discord uses its default and always
   // shows the approval screen. `prompt=none` only skips that screen for a user
   // who has ALREADY approved this application; a first-time linker -- which is
@@ -3050,13 +3071,24 @@ router.get('/auth/discord/link', discordOAuthLimiter, (req, res) => {
 
 router.get('/auth/discord/callback', discordOAuthLimiter, async (req, res) => {
   const pending = req.session.discordLink || null;
-  delete req.session.discordLink;
   const next = (pending && pending.next) || '/account';
   const back = (code) => res.redirect(next + (next.includes('?') ? '&' : '?') + 'discord=' + code);
   if (!req.isAuthenticated || !req.isAuthenticated()) return res.redirect('/shop?next=/account');
-  if (!pending || !req.query.state || req.query.state !== pending.state || Date.now() - pending.at > DISCORD_OAUTH_STATE_TTL_MS) {
+  // The pending record must also belong to the account that is signed in NOW.
+  // The session survives a Steam re-login (keepSessionInfo, needed for
+  // returnTo), so without this a second person signing in on the same browser
+  // mid-flow would have the first person's Discord linked onto THEIR account,
+  // taking the roles with it and locking the real owner out permanently.
+  if (!pending || !req.query.state || req.query.state !== pending.state
+      || pending.steamId !== req.user.steam_id
+      || Date.now() - pending.at > DISCORD_OAUTH_STATE_TTL_MS) {
     return back('expired');
   }
+  // Consume only a record that passed validation. Deleting it first let any
+  // third-party page bounce the victim through this route with no state and
+  // silently destroy a genuine in-flight link (the cookie is SameSite=Lax, so
+  // it rides top-level cross-site GETs), holding their linking broken.
+  delete req.session.discordLink;
   if (req.query.error || !req.query.code) return back('denied');
   if (!discordOAuthConfigured()) return back('unavailable');
   try {
@@ -3740,7 +3772,7 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
       productId: o.product_id,
       grantsPriorityQueue: !!o.grants_priority_queue,
       // Where the queue priority sits and whether the holder may move it.
-      pq: (o.grants_priority_queue && o.server_specific && active) ? pqSelfServiceInfo(me, o) : null,
+      pq: (PQ_SELF_MOVE_ENABLED && o.grants_priority_queue && o.server_specific && active) ? pqSelfServiceInfo(me, o) : null,
       title: o.title,
       currency: o.currency,
       amountCents: o.amount_cents,

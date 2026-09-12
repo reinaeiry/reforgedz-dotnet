@@ -287,19 +287,38 @@ async function protectedStaffGuids(guids) {
   const adminSteamIds = new Set((process.env.ADMIN_STEAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
   const staff = staffRoleIds();
   const rows = db.prepare(`SELECT bi_uid, steam_id, role, discord_id, persona FROM users WHERE bi_uid IN (${guids.map(() => '?').join(',')})`).all(...guids);
+  const seen = new Set(rows.map(r => r.bi_uid));
   let discord = null;
   for (const r of rows) {
-    if (r.role === 'admin' || adminSteamIds.has(r.steam_id)) { out.set(r.bi_uid, `shop admin ${r.persona}`); continue; }
-    if (!r.discord_id) continue;
+    if (r.role === 'admin' || adminSteamIds.has(r.steam_id)) { out.set(r.bi_uid, { kind: 'staff', why: `shop admin ${r.persona}` }); continue; }
+    if (!r.discord_id) {
+      // Staff status is only checkable through Discord, so an unlinked account
+      // cannot be protected. Say so loudly rather than letting the strip look
+      // like an ordinary lapse.
+      console.warn(`[admins-sync] ${r.bi_uid} (${r.persona}) is about to be stripped and has no Discord linked, so staff status could not be checked`);
+      continue;
+    }
     try {
       discord = discord || require('./discord');
       const held = await discord.getMemberRoleIds(r.discord_id);
-      const hit = (held || []).find(id => staff.has(String(id)));
-      if (hit) out.set(r.bi_uid, `${r.persona} holds staff role ${hit}`);
+      if (held === null) {
+        // null means BOTH "not in the guild" and "could not ask" -- discord.js
+        // returns it for any non-ok response, and only 429 is retried, so a
+        // 500 or an expired token arrives here looking like an empty role
+        // list. Flattening it with `|| []` stripped a GM on every Discord
+        // hiccup, which is the exact harm this function exists to prevent.
+        out.set(r.bi_uid, { kind: 'unknown', why: `${r.persona}: Discord returned no member record, kept for this sync` });
+        continue;
+      }
+      const hit = held.find(id => staff.has(String(id)));
+      if (hit) out.set(r.bi_uid, { kind: 'staff', why: `${r.persona} holds staff role ${hit}` });
     } catch (e) {
       // Cannot tell: keep them. A lookup hiccup must not cost a GM their access.
-      out.set(r.bi_uid, `${r.persona}: Discord lookup failed (${e.message}), kept`);
+      out.set(r.bi_uid, { kind: 'unknown', why: `${r.persona}: Discord lookup failed (${e.message}), kept` });
     }
+  }
+  for (const g of guids) {
+    if (!seen.has(g)) console.warn(`[admins-sync] ${g} is about to be stripped and matches no users row, so staff status could not be checked`);
   }
   return out;
 }
@@ -315,6 +334,9 @@ async function protectedStaffGuids(guids) {
 // on them is released.
 function planAdmins({ currentAdmins, previouslyOwned, desiredGuids, protectedGuids }) {
   const current = new Set(currentAdmins);
+  // 'staff' = confirmed staff, release our claim for good. 'unknown' = we could
+  // not reach Discord to find out, so keep the claim and decide next sync.
+  const kindOf = (g) => { const p = protectedGuids.get(g); return p ? (p.kind || 'staff') : null; };
   const strip = [...previouslyOwned].filter(g => !desiredGuids.has(g) && current.has(g) && !protectedGuids.has(g));
   const stripSet = new Set(strip);
   const newAdmins = currentAdmins.filter(g => !stripSet.has(g));
@@ -324,8 +346,15 @@ function planAdmins({ currentAdmins, previouslyOwned, desiredGuids, protectedGui
   }
   const newOwned = new Set();
   for (const g of desiredGuids) {
-    if (!g || protectedGuids.has(g)) continue;
+    if (!g || kindOf(g) === 'staff') continue;
     if (!current.has(g) || previouslyOwned.has(g)) newOwned.add(g);
+  }
+  // Releasing a claim is permanent: nothing ever re-claims a GUID that is
+  // already sitting in game.admins. So only release when we actually confirmed
+  // staff status -- releasing on an unreachable Discord would hand a lapsed
+  // buyer a permanent amnesty and count them as a GM against the PQ ceiling.
+  for (const g of previouslyOwned) {
+    if (kindOf(g) === 'unknown') newOwned.add(g);
   }
   const released = [...previouslyOwned].filter(g => !newOwned.has(g) && !stripSet.has(g));
   return { newAdmins, add, strip, released, newOwned };
@@ -386,7 +415,7 @@ async function patchServerAdmins(conn, server, desiredGuids) {
     const stripCandidates = [...previouslyOwned].filter(g => !desiredGuids.has(g) && currentAdmins.includes(g));
     const protectedGuids = await protectedStaffGuids(stripCandidates);
     const plan = planAdmins({ currentAdmins, previouslyOwned, desiredGuids, protectedGuids });
-    for (const [g, why] of protectedGuids) console.log(`[admins-sync] ${server.id} kept ${g}: ${why}`);
+    for (const [g, p] of protectedGuids) console.log(`[admins-sync] ${server.id} kept ${g} (${p.kind}): ${p.why}`);
 
     // No-op if nothing actually changed.
     const sameSet = plan.newAdmins.length === currentAdmins.length
@@ -462,8 +491,11 @@ async function previewAdminsSync() {
         wouldAdd: plan.add,
         wouldStrip: plan.strip,
         wouldRelease: plan.released,
-        protected: [...protectedGuids].map(([guid, why]) => ({ guid, why })),
-        changes: plan.add.length + plan.strip.length > 0
+        protected: [...protectedGuids].map(([guid, p]) => ({ guid, kind: p.kind, why: p.why })),
+        // Releases change previously_owned_json and therefore DO write, so a
+        // release-only plan must not preview as "no changes" -- this endpoint is
+        // the safety check people read before trusting a rules change.
+        changes: plan.add.length + plan.strip.length + plan.released.length > 0
       });
     }
   } finally {
