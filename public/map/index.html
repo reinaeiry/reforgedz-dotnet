@@ -595,7 +595,7 @@ searchBox.addEventListener('input', function() {
         div.className = 'search-result';
         div.innerHTML = `${esc(m.name)} <span class="type-badge" style="background:${s.color};color:#000;">${esc(s.label || m.type)}</span>`;
         div.addEventListener('click', () => {
-            map.setView([m.z, m.x], 1); searchResults.innerHTML = ''; searchBox.value = m.name;
+            map.setView([m.z, m.x], -1); searchResults.innerHTML = ''; searchBox.value = m.name;
             const g = layerGroups[m.type];
             if (g) {
                 if (!map.hasLayer(g)) { map.addLayer(g); const cb = document.querySelector(`#layer-toggles input[data-layer="${m.type}"]`); if (cb) cb.checked = true; }
@@ -670,7 +670,7 @@ function renderCustomMarkersList() {
         div.className = 'custom-marker-item';
         div.innerHTML = `<span class="marker-info" data-id="${m.id}"><span class="layer-icon" style="background:${s.color};"></span>${esc(m.name)} <span style="color:var(--text-ghost);font-size:9px;">(${m.x},${m.z})</span></span><button class="marker-delete" data-id="${m.id}">x</button>`;
         list.appendChild(div);
-        div.querySelector('.marker-info').addEventListener('click', () => { map.setView([m.z, m.x], 1); if (customLeafletMarkers[m.id]) customLeafletMarkers[m.id].openPopup(); });
+        div.querySelector('.marker-info').addEventListener('click', () => { map.setView([m.z, m.x], -1); if (customLeafletMarkers[m.id]) customLeafletMarkers[m.id].openPopup(); });
         div.querySelector('.marker-delete').addEventListener('click', () => deleteCustomMarker(m.id));
     });
 }
