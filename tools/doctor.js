@@ -237,6 +237,20 @@ check('discord.bot', 'discord', {}, async () => {
   return ok(`bot top role position ${r.botPosition}; ${products.length} product roles assignable: ${products.map(p => assignable.get(String(p.discord_role_id)).name).join(', ')}`);
 });
 
+check('discord.oauth', 'discord', {}, async () => {
+  const id = process.env.DISCORD_CLIENT_ID;
+  const secret = process.env.DISCORD_CLIENT_SECRET;
+  if (!id || !secret) return REHEARSAL ? skip('OAuth blanked for rehearsal') : warn('DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET unset: Connect Discord button hidden, players must paste a user id');
+  // client_credentials is the cheapest way to prove the pair is valid.
+  const r = await fetchJson('https://discord.com/api/v10/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64') },
+    body: 'grant_type=client_credentials&scope=identify'
+  });
+  if (!r.ok) return fail(`Discord rejected the OAuth credentials (${r.status}); check DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET`);
+  return ok(`application ${id} accepted; redirect must be ${(process.env.BASE_URL || '').replace(/\/+$/, '')}/auth/discord/callback`);
+});
+
 check('discord.webhook', 'discord', {}, async () => {
   const url = process.env.DISCORD_WEBHOOK_URL;
   if (!url) return REHEARSAL ? skip('webhook blanked for rehearsal') : fail('DISCORD_WEBHOOK_URL not set: no purchase cards');

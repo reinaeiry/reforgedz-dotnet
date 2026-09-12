@@ -435,7 +435,9 @@ router.get('/api/shop/config', (req, res) => {
     customFlagTicketUrl: CUSTOM_FLAG_TICKET_URL,
     // The game reads its admin list only at start, so queue priority begins at
     // the next of these (UTC hours). The confirmation page says when.
-    restartUtcHours: RESTART_UTC_HOURS
+    restartUtcHours: RESTART_UTC_HOURS,
+    // Whether the Connect Discord button can be shown (OAuth credentials set).
+    discordOAuth: discordOAuthConfigured()
   });
 });
 
@@ -2948,14 +2950,31 @@ router.post('/api/shop/set-discord-id', requireAuth, async (req, res) => {
   if (!/^\d{15,25}$/.test(cleaned)) {
     return res.status(400).json({ error: 'Invalid Discord ID. Use Discord Developer Mode → right-click your name → Copy User ID.' });
   }
+  const result = await linkDiscordAccount(req.user, cleaned, { source: 'paste' });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  res.json({ ok: true, discord_id: cleaned, displayName: result.displayName, rolesAssigned: result.rolesAssigned });
+});
+
+// One way to link a Discord account, shared by the paste box and the OAuth
+// callback, so both refuse the same things and grant the same roles.
+//
+// A Discord account already on another ReforgedZ account is refused, never
+// moved: shared consoles and resold accounts produce that pattern
+// legitimately, so staff sort it out in a ticket (owner's call, 2026-08-25).
+async function linkDiscordAccount(user, discordId, { source = 'paste', displayName = null } = {}) {
+  const other = db.prepare('SELECT steam_id, persona FROM users WHERE discord_id = ? AND steam_id != ?').get(discordId, user.steam_id);
+  if (other) {
+    console.warn('[discord-link] refused: %s already linked to %s (%s), asked by %s via %s', discordId, other.steam_id, other.persona, user.steam_id, source);
+    return { ok: false, status: 409, code: 'taken', error: 'That Discord account is already linked to another ReforgedZ account. Open a Shop Support ticket in Discord and we will sort it out.' };
+  }
 
   let member;
-  try { member = await discord.verifyMember(cleaned); }
-  catch (e) { return res.status(502).json({ error: 'Discord lookup failed: ' + e.message }); }
-  if (!member) return res.status(404).json({ error: "You're not a member of the ReforgedZ Discord. Join first, then come back." });
+  try { member = await discord.verifyMember(discordId); }
+  catch (e) { return { ok: false, status: 502, code: 'lookup', error: 'Discord lookup failed: ' + e.message }; }
+  if (!member) return { ok: false, status: 404, code: 'notmember', error: "You're not a member of the ReforgedZ Discord. Join first, then come back." };
 
-  db.prepare('UPDATE users SET discord_id = ? WHERE steam_id = ?').run(cleaned, req.user.steam_id);
-  req.user.discord_id = cleaned;
+  db.prepare('UPDATE users SET discord_id = ? WHERE steam_id = ?').run(discordId, user.steam_id);
+  user.discord_id = discordId;
 
   // Back-fill any role grants this user is owed.
   //
@@ -2971,14 +2990,98 @@ router.post('/api/shop/set-discord-id', requireAuth, async (req, res) => {
     WHERE o.steam_id = ? AND o.status = 'completed'
       AND p.discord_role_id IS NOT NULL
       AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-  `).all(req.user.steam_id);
+  `).all(user.steam_id);
   let assigned = 0;
   for (const r of owed) {
-    try { await discord.assignRole(cleaned, r.role_id, `discord-link-backfill:${req.user.steam_id}`); assigned++; }
+    try { await discord.assignRole(discordId, r.role_id, `discord-link-backfill:${user.steam_id}`); assigned++; }
     catch (e) { console.error('[discord] back-fill assign failed:', e.message); }
   }
+  console.log('[discord-link] %s linked %s via %s (%d roles)', user.steam_id, discordId, source, assigned);
+  return { ok: true, status: 200, displayName: displayName || member.globalName || member.username, rolesAssigned: assigned };
+}
 
-  res.json({ ok: true, discord_id: cleaned, displayName: member.globalName || member.username, rolesAssigned: assigned });
+// ---- Connect Discord (OAuth2) ----------------------------------------------
+// Linking used to mean turning on Developer Mode, copying a user id and
+// pasting it; the single biggest source of "where is my role" tickets. With
+// DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET set (the bot application, with
+// BASE_URL/auth/discord/callback added to its redirects), a button signs the
+// player in with Discord instead. The paste box stays as the fallback.
+const DISCORD_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const discordOAuthLimiter = require('express-rate-limit')({ windowMs: 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false });
+
+function discordOAuthConfigured() {
+  return !!(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET);
+}
+
+function discordRedirectUri() {
+  return `${BASE_URL.replace(/\/+$/, '')}/auth/discord/callback`;
+}
+
+// Same rules as server.js's safeReturnTo: a path on this site, nothing else.
+function safeNextPath(raw) {
+  const s = String(raw || '');
+  if (!s.startsWith('/') || s.startsWith('//') || s.includes('\\') || s.length > 200 || /[\r\n]/.test(s)) return null;
+  return s;
+}
+
+router.get('/auth/discord/link', discordOAuthLimiter, (req, res) => {
+  const next = safeNextPath(req.query.next) || '/account';
+  if (!req.isAuthenticated || !req.isAuthenticated()) {
+    return res.redirect('/shop?next=' + encodeURIComponent('/auth/discord/link?next=' + next));
+  }
+  if (!discordOAuthConfigured()) return res.redirect(next + (next.includes('?') ? '&' : '?') + 'discord=unavailable');
+  const state = crypto.randomBytes(24).toString('hex');
+  req.session.discordLink = { state, next, at: Date.now() };
+  const params = new URLSearchParams({
+    client_id: process.env.DISCORD_CLIENT_ID,
+    response_type: 'code',
+    redirect_uri: discordRedirectUri(),
+    scope: 'identify',
+    state,
+    prompt: 'none'
+  });
+  res.redirect('https://discord.com/oauth2/authorize?' + params.toString());
+});
+
+router.get('/auth/discord/callback', discordOAuthLimiter, async (req, res) => {
+  const pending = req.session.discordLink || null;
+  delete req.session.discordLink;
+  const next = (pending && pending.next) || '/account';
+  const back = (code) => res.redirect(next + (next.includes('?') ? '&' : '?') + 'discord=' + code);
+  if (!req.isAuthenticated || !req.isAuthenticated()) return res.redirect('/shop?next=/account');
+  if (!pending || !req.query.state || req.query.state !== pending.state || Date.now() - pending.at > DISCORD_OAUTH_STATE_TTL_MS) {
+    return back('expired');
+  }
+  if (req.query.error || !req.query.code) return back('denied');
+  if (!discordOAuthConfigured()) return back('unavailable');
+  try {
+    const tokenRes = await fetch('https://discord.com/api/v10/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.DISCORD_CLIENT_ID,
+        client_secret: process.env.DISCORD_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: String(req.query.code),
+        redirect_uri: discordRedirectUri()
+      })
+    });
+    if (!tokenRes.ok) {
+      console.error('[discord-oauth] token exchange %s', tokenRes.status);
+      return back('failed');
+    }
+    const token = await tokenRes.json();
+    const meRes = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${token.access_token}` } });
+    if (!meRes.ok) return back('failed');
+    const me = await meRes.json();
+    if (!me || !/^\d{15,25}$/.test(String(me.id || ''))) return back('failed');
+    const result = await linkDiscordAccount(req.user, String(me.id), { source: 'oauth', displayName: me.global_name || me.username });
+    if (!result.ok) return back(result.code || 'failed');
+    return back('linked');
+  } catch (e) {
+    console.error('[discord-oauth] callback failed:', e.message);
+    return back('failed');
+  }
 });
 
 // Fire-and-forget helper used by the order lifecycle. Looks up the role
@@ -4376,5 +4479,5 @@ async function dispatchPayPalEvent(event, resource, orderId) {
 module.exports = {
   router, webhookHandler, registerPayPalWebhooks, requireAdmin, healMissingDiscordRoles,
   // Exposed for tools/ and tests; not routes.
-  pqSelfServiceInfo, purchaseNextSteps, getOrderWithContext
+  pqSelfServiceInfo, purchaseNextSteps, getOrderWithContext, linkDiscordAccount, discordOAuthConfigured
 };

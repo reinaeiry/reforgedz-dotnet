@@ -38,6 +38,8 @@ const VARS = [
   { name: 'DISCORD_GUILD_ID', group: 'Discord', doc: 'The ReforgedZ guild. Defaults to the live guild in code.', example: '1352364195211120660' },
   { name: 'DISCORD_WEBHOOK_URL', group: 'Discord', required: true, secret: true, outbound: true, doc: 'The "ReforgedZ Payments" webhook into #Payment-Processor. Purchase, refund and subscription cards go through it.', example: '' },
   { name: 'DISCORD_PAYMENT_CHANNEL_ID', group: 'Discord', doc: 'Channel for billing alerts posted as the bot. Defaults to #Payment-Processor in code; point it at a test channel on a non-production copy.', example: '' },
+  { name: 'DISCORD_CLIENT_ID', group: 'Discord', doc: 'Application id of the bot application (Discord developer portal, OAuth2). With the secret below, players link Discord with a Connect button instead of pasting a user id. Add BASE_URL/auth/discord/callback to the application\'s OAuth2 redirects.', example: '' },
+  { name: 'DISCORD_CLIENT_SECRET', group: 'Discord', secret: true, doc: 'OAuth2 client secret of the same application. Unset = the Connect Discord button is hidden and the paste box remains.', example: '' },
   { name: 'STAFF_DISCORD_ROLE_IDS', group: 'Discord', doc: 'Comma-separated role ids of staff (Founder, admins, Gamemasters). A player holding one is never removed from a server\'s game.admins by the shop, even after their priority queue lapses. Defaults to the ticket bot\'s staff roles in code.', example: '' },
 
   // ---- Game servers ---------------------------------------------------------

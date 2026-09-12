@@ -394,6 +394,7 @@
 
   <script>
     let account = null;
+    let siteConfig = null;
 
     function esc(s) {
       const d = document.createElement('div');
@@ -417,7 +418,10 @@
     async function load() {
       let res;
       try {
-        res = await fetch('/api/shop/account/summary');
+        [res, siteConfig] = await Promise.all([
+          fetch('/api/shop/account/summary'),
+          fetch('/api/shop/config').then(r => (r.ok ? r.json() : null)).catch(() => null)
+        ]);
       } catch (e) {
         document.getElementById('loading').textContent = 'Could not reach the server. Try again in a moment.';
         return;
@@ -437,6 +441,25 @@
       renderLinks();
       renderSubs();
       renderHistory();
+      showDiscordResult();
+    }
+
+    // Back from the Connect Discord round trip: /account?discord=<code>.
+    function showDiscordResult() {
+      const code = new URLSearchParams(location.search).get('discord');
+      if (!code) return;
+      const msgs = {
+        linked: ['Discord linked. Any roles you are owed are on their way.', 'ok'],
+        taken: ['That Discord account is already linked to another ReforgedZ account. Open a Shop Support ticket in Discord and we will sort it out.', 'error'],
+        notmember: ['That Discord account is not in the ReforgedZ Discord yet. Join first, then connect again.', 'error'],
+        denied: ['Discord sign-in was cancelled. Nothing changed.', 'error'],
+        expired: ['That sign-in took too long. Try Connect Discord again.', 'error'],
+        failed: ['Discord sign-in did not complete. Try again, or paste your user ID below.', 'error'],
+        unavailable: ['Connect Discord is not available right now. Paste your user ID below instead.', 'error']
+      };
+      const m = msgs[code];
+      if (m) setHint('discordHint', m[0], m[1]);
+      history.replaceState({}, '', '/account');
     }
 
     function renderLinks() {
@@ -467,14 +490,19 @@
         </div>
       `);
 
+      // One click when the server has OAuth credentials; the paste box stays
+      // underneath either way.
+      const oauth = !!(siteConfig && siteConfig.discordOAuth);
       items.push(`
         <div class="link-item">
           <div class="link-label">Discord</div>
-          <div class="link-value ${p.discordId ? '' : 'missing'}">${p.discordId ? esc(p.discordId) : 'Not linked — you won’t get your role'}</div>
+          <div class="link-value ${p.discordId ? '' : 'missing'}">${p.discordId ? esc(p.discordId) : 'Not linked. You will not get your role until it is.'}</div>
+          ${oauth ? `<a class="sub-fix-btn" style="margin-top:10px" href="/auth/discord/link?next=/account">${p.discordId ? 'Connect a different Discord' : 'Connect Discord'}</a>
+          <div class="link-hint">Or paste your Discord user ID:</div>` : ''}
           <input class="link-input" id="discordInput" placeholder="Your Discord user ID" value="${esc(p.discordId || '')}">
           <button class="link-action" onclick="saveDiscord()">${p.discordId ? 'Update' : 'Link'} Discord</button>
           ${p.discordId ? '<button class="link-action" onclick="unlinkDiscord()">Unlink</button>' : ''}
-          <div class="link-hint" id="discordHint">Discord → Settings → Advanced → Developer Mode, then right-click your name → Copy User ID.</div>
+          <div class="link-hint" id="discordHint">${oauth ? 'Connect Discord signs you in with Discord and links it in one step. The ID route: ' : ''}Discord → Settings → Advanced → Developer Mode, then right-click your name → Copy User ID.</div>
         </div>
       `);
 

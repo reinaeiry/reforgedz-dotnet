@@ -913,10 +913,33 @@ let pendingDiscordPid = null;
 let pendingDiscordSid = null;
 let pendingDiscordAmt = null;
 
+// Whether the server can run the Connect Discord flow; fetched once, lazily.
+let discordOAuthAvailable = null;
+async function loadDiscordOAuthFlag() {
+  if (discordOAuthAvailable !== null) return discordOAuthAvailable;
+  try { discordOAuthAvailable = !!(await api('/api/shop/config')).discordOAuth; } catch (e) { discordOAuthAvailable = false; }
+  return discordOAuthAvailable;
+}
+
 function showDiscordIdModal(productId, serverId, customAmountCents) {
   pendingDiscordPid = productId;
   pendingDiscordSid = serverId || null;
   pendingDiscordAmt = customAmountCents != null ? customAmountCents : null;
+  // The one-click route: sign in with Discord, come straight back into this
+  // checkout. Shown only when the server has the OAuth credentials.
+  const connect = document.getElementById('discordConnectBtn');
+  const lead = document.getElementById('discordPasteLead');
+  if (connect) {
+    connect.style.display = 'none';
+    if (lead) lead.style.display = 'none';
+    loadDiscordOAuthFlag().then((on) => {
+      if (!on) return;
+      const back = `/shop?buy=${productId}${serverId ? '&server=' + encodeURIComponent(serverId) : ''}`;
+      connect.href = '/auth/discord/link?next=' + encodeURIComponent(back);
+      connect.style.display = 'block';
+      if (lead) lead.style.display = 'block';
+    });
+  }
   const overlay = document.getElementById('discordIdOverlay');
   const input = document.getElementById('discordIdInput');
   const error = document.getElementById('discordIdError');
