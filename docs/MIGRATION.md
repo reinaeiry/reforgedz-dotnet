@@ -5,6 +5,15 @@ the shop: the Node app, its database, its secrets and every outside thing it tal
 The other systems on the same box (panel, game servers, mail, bots) get a line each at
 the end so nothing is forgotten, not their own runbooks.
 
+**September 2026:** the whole-estate move to the new OVH boxes is planned separately in
+`Desktop\_ReforgedZ\Server-Ops\migration-2026-09\` (`00-DECISIONS.md`, `PLAN.md`,
+`findings/`). Under that plan the shop moves by **Pterodactyl server Transfer** (same UUID,
+same volume path, section 3b's layout), the Arma instances get **new UUIDs** that
+`GAME_SERVER_*_PATHS` must be re-pointed to, and mail goes to the **new NA box**. This
+document is the shop's piece of that plan: take a pack before the transfer, run the doctor
+after it, and use `npm run doctor -- --deep` as the proof that the re-pointed paths are right.
+The Docker path (3a) is the rehearsal and the fallback, not the chosen route.
+
 The tools it relies on live in `tools/` and run with `npm run <name>`:
 
 | Command | Does |
