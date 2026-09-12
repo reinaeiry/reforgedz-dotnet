@@ -114,7 +114,7 @@ const MAP_DATA = {
         short: "Faircroft",
         size: 12800,
         image: "faircroft-map.jpg",
-        credit: "Faircroft Islands by Lakes Dan, used with permission",
+        credit: "Faircroft Islands by Lakes Dan",
         markers: [
             {"name": "Arlo Tower", "type": "poi", "x": 3169, "z": 7208},
             {"name": "Banks Hill", "type": "terrain", "x": 4663, "z": 3642},
