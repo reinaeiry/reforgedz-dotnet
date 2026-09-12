@@ -1,3 +1,23 @@
+// ---- Scroll reveal ----
+// Defined before the tab router: switchTab() hands a freshly shown tab's .reveal elements to
+// this observer, and the router runs at load when the page opens on /#about, /#radio or
+// /#contact. With the observer declared further down, that first switchTab() hit the const
+// before its initialisation, threw, and took the rest of this file with it (no reveals, no
+// server status, no deep links) whenever another page linked to a tab.
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      const siblings = entry.target.parentElement.querySelectorAll('.reveal');
+      const idx = Array.from(siblings).indexOf(entry.target);
+      entry.target.style.transitionDelay = (idx * 0.08) + 's';
+      entry.target.classList.add('visible');
+      revealObserver.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.08 });
+
+document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
 // ---- Tab switching ----
 const navLinks = document.querySelectorAll('.nav-link[data-tab]');
 const sections = document.querySelectorAll('.tab-content');
@@ -66,21 +86,6 @@ window.addEventListener('scroll', () => {
 window.addEventListener('load', () => {
   document.querySelector('.hero-bg')?.classList.add('loaded');
 });
-
-// ---- Scroll reveal ----
-const revealObserver = new IntersectionObserver((entries) => {
-  entries.forEach(entry => {
-    if (entry.isIntersecting) {
-      const siblings = entry.target.parentElement.querySelectorAll('.reveal');
-      const idx = Array.from(siblings).indexOf(entry.target);
-      entry.target.style.transitionDelay = (idx * 0.08) + 's';
-      entry.target.classList.add('visible');
-      revealObserver.unobserve(entry.target);
-    }
-  });
-}, { threshold: 0.08 });
-
-document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
 
 // ---- Counter animation ----
 const counterObserver = new IntersectionObserver((entries) => {
