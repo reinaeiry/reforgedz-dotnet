@@ -101,6 +101,24 @@
         #map-switch button.active { background: var(--accent); color: #fff; }
         #map-switch button:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 1px; }
 
+        /* ---- Map credit badge: who made the terrain, always in view for the map that's showing ---- */
+        #map-credit-badge {
+            position: fixed; left: 272px; bottom: 14px; z-index: 1000;
+            display: flex; flex-direction: column; gap: 3px; max-width: min(380px, calc(100vw - 32px));
+            padding: 10px 14px 11px; background: rgba(8,8,8,0.9); border: 1px solid var(--border);
+            border-left: 3px solid var(--accent); border-radius: 6px; backdrop-filter: blur(8px);
+            box-shadow: 0 6px 24px rgba(0,0,0,0.4); transition: left 0.25s ease;
+        }
+        #sidebar.collapsed ~ #map-credit-badge { left: 12px; }
+        #map-credit-badge .badge-title { font-family: var(--display); font-size: 14px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #fff; }
+        #map-credit-badge .badge-thanks { font-size: 11.5px; color: var(--text-dim); line-height: 1.45; }
+
+        /* ---- Special thanks block in the sidebar ---- */
+        .thanks-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+        .thanks-block h3 { font-family: var(--display); font-size: 10px; text-transform: uppercase; color: var(--accent); letter-spacing: 2px; margin-bottom: 6px; font-weight: 500; }
+        .thanks-line { font-size: 12px; color: var(--text-dim); padding: 2px 0; line-height: 1.4; }
+        .thanks-line strong { color: var(--text); font-weight: 600; }
+
         /* ---- Sidebar ---- */
         #sidebar {
             position: fixed; top: 68px; left: 0; width: 260px; bottom: 0;
@@ -269,6 +287,9 @@
                 #sidebar:not(.collapsed) ~ #sidebar-toggle { left: 310px; }
             }
             #coords-display { bottom: 12px; font-size: 10px; padding: 4px 10px; }
+            #map-credit-badge { left: 12px; right: 12px; bottom: 46px; max-width: none; padding: 8px 12px 9px; }
+            #map-credit-badge .badge-title { font-size: 13px; }
+            #sidebar:not(.collapsed) ~ #map-credit-badge { display: none; }
             .sidebar-header { padding: 12px 14px 10px; }
             .sidebar-header h1 { font-size: 13px; }
             .layer-section { padding: 8px 14px; }
@@ -400,11 +421,16 @@
         <div style="font-size:11px;color:var(--text-dim);line-height:1.5;">
             The in-game maps for the ReforgedZ servers, with every place the game names on them. Coordinates match the ones you see in game, so you can copy a spot here and find it there. Custom markers stay in your browser, per map.
         </div>
-        <div id="map-credit" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:10px;color:var(--text-ghost);"></div>
+        <div class="thanks-block">
+            <h3>Special thanks</h3>
+            <div class="thanks-line"><strong>Faircroft Islands</strong> by Lakes Dan</div>
+            <div class="thanks-line"><strong>Chernarus</strong> by Bonzi &amp; Soap</div>
+        </div>
     </div>
 </div>
 
 <button id="sidebar-toggle" aria-label="Toggle sidebar">&#9776;</button>
+<div id="map-credit-badge" role="note" aria-label="Map credit"><span class="badge-title"></span><span class="badge-thanks"></span></div>
 <button id="sidebar-close" style="display:none;position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text-ghost);font-size:20px;cursor:pointer;z-index:1002;padding:4px 8px;line-height:1;" onclick="document.getElementById('sidebar').classList.add('collapsed');">&times;</button>
 <div id="coords-display">X: 0 | Z: 0</div>
 <div id="place-marker-hint">Click on the map to place your marker</div>
@@ -514,7 +540,9 @@ function switchMap(id) {
 
     document.getElementById('map-title').innerHTML = `${esc(current.short.toUpperCase())} <span>MAP</span>`;
     document.getElementById('map-sub').textContent = `${(S / 1000).toFixed(2).replace(/\.?0+$/, '')} km × ${(S / 1000).toFixed(2).replace(/\.?0+$/, '')} km · ${current.markers.length} places`;
-    document.getElementById('map-credit').textContent = current.credit || '';
+    document.querySelector('#map-credit-badge .badge-title').textContent = current.credit || '';
+    document.querySelector('#map-credit-badge .badge-thanks').textContent = current.thanks || '';
+    document.getElementById('map-credit-badge').hidden = !current.credit;
     document.title = `${current.name} Map | ReforgedZ`;
     document.querySelectorAll('#map-switch button').forEach(b => {
         const on = b.dataset.map === id;

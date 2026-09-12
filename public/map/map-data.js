@@ -16,7 +16,8 @@ const MAP_DATA = {
         size: 15360,
         image: "chernarus-map.jpg",
         satellite: {"image": "map-image-hires.jpg", "bounds": [[72, 178], [15432, 15538]]},
-        credit: "Chernarus map by Bonzi & Soap",
+        credit: "Chernarus by Bonzi & Soap",
+        thanks: "Special thanks to Bonzi & Soap for reimagining Chernarus for ReforgedZ.",
         markers: [
             {"name": "Arsenov", "type": "village", "x": 8511, "z": 13936},
             {"name": "Baldy Mountain", "type": "terrain", "x": 6694, "z": 13933},
@@ -115,6 +116,7 @@ const MAP_DATA = {
         size: 12800,
         image: "faircroft-map.jpg",
         credit: "Faircroft Islands by Lakes Dan",
+        thanks: "Special thanks to Lakes Dan for letting ReforgedZ make its home on the islands. We love this map.",
         markers: [
             {"name": "Arlo Tower", "type": "poi", "x": 3169, "z": 7208},
             {"name": "Banks Hill", "type": "terrain", "x": 4663, "z": 3642},
