@@ -1,262 +1,211 @@
 // ============================================================
-// CHERNARUS MAP DATA
-// Auto-extracted from Enfusion Workbench terrain entities
-// Terrain bounds: 0,0 to 15360,15360 (15.36km x 15.36km)
+// REFORGEDZ MAP DATA
+// Generated 2026-09-11 from the place labels drawn on each in-game map.
+// Coordinates are world metres: x runs east, z runs north, origin bottom-left.
 //
-// To add new markers, just add entries to the MAP_MARKERS array:
-// { name: "Name", type: "town", x: 1234, z: 5678, y: 100, description: "Optional" }
-//
-// Types: city, town, village, military, quest, landmark, road
+// Types: city, town, village, settlement, military, poi (named local places),
+//        terrain (hills, ridges, valleys), water (lakes, bays, islands).
+// To add a marker, append to the map's markers array:
+//   { name: "Name", type: "town", x: 1234, z: 5678, description: "Optional" }
 // ============================================================
 
-const MAP_MARKERS = [
-    // === CITIES (large settlements) ===
-    {
-        name: "Chernogorsk",
-        type: "city",
-        x: 6717.95,
-        z: 2568,
-        y: 10.8,
-        description: "Major coastal city on the southern shore. Dense urban area with industrial zones."
+const MAP_DATA = {
+    chernarus: {
+        name: "Chernarus",
+        short: "Chernarus",
+        size: 15360,
+        image: "chernarus-map.jpg",
+        satellite: {"image": "map-image-hires.jpg", "bounds": [[72, 178], [15432, 15538]]},
+        credit: "Chernarus map by Bonzi & Soap",
+        markers: [
+            {"name": "Arsenov", "type": "village", "x": 8511, "z": 13936},
+            {"name": "Baldy Mountain", "type": "terrain", "x": 6694, "z": 13933},
+            {"name": "Balota", "type": "town", "x": 4578, "z": 2469, "description": "Southern coastal village with a small airstrip nearby."},
+            {"name": "Belopolye", "type": "village", "x": 14148, "z": 14889},
+            {"name": "Berega", "type": "settlement", "x": 15155, "z": 13820},
+            {"name": "Berezino", "type": "city", "x": 12546, "z": 9592, "description": "Major port city on the northeast coast."},
+            {"name": "Bonzievka Petrovka", "type": "city", "x": 3629, "z": 12783},
+            {"name": "Bonzievka Railyard", "type": "settlement", "x": 3519, "z": 12480},
+            {"name": "Bor", "type": "village", "x": 3334, "z": 3956},
+            {"name": "Chernaya Pushcha", "type": "town", "x": 12097, "z": 13729},
+            {"name": "Chernogorsk", "type": "city", "x": 6718, "z": 2568, "description": "Major coastal city on the southern shore. Dense urban area with industrial zones."},
+            {"name": "Devil's Castle", "type": "settlement", "x": 6889, "z": 11430},
+            {"name": "Dobrik", "type": "village", "x": 13044, "z": 14987},
+            {"name": "Dolina", "type": "town", "x": 11244, "z": 6633},
+            {"name": "Drozhino", "type": "village", "x": 3361, "z": 4890},
+            {"name": "Dubrovka", "type": "town", "x": 10413, "z": 9817, "description": "Northeastern village."},
+            {"name": "Elektrozavodsk", "type": "city", "x": 10367, "z": 2063, "description": "Eastern coastal city. Power plant and industrial district."},
+            {"name": "Flikonya MB", "type": "military", "x": 4011, "z": 11734},
+            {"name": "Gorka", "type": "town", "x": 9596, "z": 8857, "description": "Eastern highland town."},
+            {"name": "GreenMountain", "type": "village", "x": 3721, "z": 5995},
+            {"name": "Grishino", "type": "town", "x": 5995, "z": 10285},
+            {"name": "Guglovo", "type": "town", "x": 8427, "z": 6685, "description": "Small settlement in the central highlands."},
+            {"name": "Gvozdno", "type": "town", "x": 8685, "z": 11852},
+            {"name": "Kabanino", "type": "town", "x": 5325, "z": 8554, "description": "Highland village west of Stary Sobor."},
+            {"name": "Kamenka", "type": "town", "x": 1790, "z": 2154, "description": "Small southwestern coastal village. Common spawn area."},
+            {"name": "Kamenoe", "type": "town", "x": 6705, "z": 14342},
+            {"name": "Kamenoe MB", "type": "military", "x": 7920, "z": 14691},
+            {"name": "Kamyshovo", "type": "town", "x": 12065, "z": 3488, "description": "Southeastern coastal village."},
+            {"name": "Khelm", "type": "town", "x": 12252, "z": 10850},
+            {"name": "Klen", "type": "terrain", "x": 11476, "z": 11340},
+            {"name": "Komarovo", "type": "town", "x": 3612, "z": 2413, "description": "Small southern coastal settlement."},
+            {"name": "Korona", "type": "settlement", "x": 1375, "z": 9285},
+            {"name": "Kozlovka", "type": "town", "x": 4409, "z": 4605, "description": "Inland village between Zelenogorsk and Chernogorsk."},
+            {"name": "Krasnostav", "type": "town", "x": 11054, "z": 12303},
+            {"name": "Krasnoy", "type": "village", "x": 6653, "z": 15085},
+            {"name": "Lopatino", "type": "town", "x": 2658, "z": 10134, "description": "Remote northwest settlement."},
+            {"name": "Lumberyard", "type": "settlement", "x": 934, "z": 7661},
+            {"name": "Metalursk", "type": "settlement", "x": 1091, "z": 6626},
+            {"name": "Modestnoye", "type": "town", "x": 13979, "z": 13071},
+            {"name": "Mogilevka", "type": "town", "x": 7590, "z": 5156, "description": "Central southern village."},
+            {"name": "Msta", "type": "village", "x": 11272, "z": 5454, "description": "Small eastern settlement."},
+            {"name": "Myshkino", "type": "village", "x": 1961, "z": 7382, "description": "Remote western village."},
+            {"name": "Nadezhdino", "type": "town", "x": 5813, "z": 4644},
+            {"name": "Nattignoe", "type": "village", "x": 9398, "z": 14641},
+            {"name": "Nizhnoye", "type": "village", "x": 12893, "z": 8226},
+            {"name": "Northeast Airfield", "type": "military", "x": 12043, "z": 12684},
+            {"name": "Northwest Airfield", "type": "military", "x": 4674, "z": 10083, "description": "Major military airfield. High-tier loot. Heavily contested."},
+            {"name": "Novomitravsk", "type": "city", "x": 11484, "z": 14353},
+            {"name": "Novy Sobor", "type": "town", "x": 7161, "z": 7684, "description": "Central town east of Stary Sobor."},
+            {"name": "Olsha", "type": "village", "x": 13348, "z": 12915},
+            {"name": "Orlovets", "type": "town", "x": 12158, "z": 7302},
+            {"name": "Pavlovo", "type": "village", "x": 1719, "z": 3704, "description": "Southwestern inland village. Military base nearby."},
+            {"name": "Pavlovo MB", "type": "military", "x": 2162, "z": 3331},
+            {"name": "Pisy", "type": "town", "x": 3434, "z": 14791},
+            {"name": "Pisy MB", "type": "military", "x": 1630, "z": 14092},
+            {"name": "Pogorevka", "type": "town", "x": 4481, "z": 6416},
+            {"name": "Polana", "type": "town", "x": 10688, "z": 8025, "description": "Eastern village on the road to Berezino."},
+            {"name": "Prigorodki", "type": "village", "x": 7781, "z": 3483},
+            {"name": "Pulkovo", "type": "village", "x": 4991, "z": 5577},
+            {"name": "Pusta", "type": "village", "x": 9148, "z": 3891, "description": "Small village in the southeastern hills."},
+            {"name": "Pustoshka", "type": "town", "x": 3023, "z": 7862},
+            {"name": "Ratnik", "type": "village", "x": 6354, "z": 12699},
+            {"name": "Rify", "type": "water", "x": 13855, "z": 11168},
+            {"name": "Rog", "type": "settlement", "x": 11252, "z": 4274},
+            {"name": "Sangheilistok", "type": "town", "x": 1374, "z": 12001},
+            {"name": "Sawmill", "type": "settlement", "x": 5761, "z": 15203},
+            {"name": "Shakhovka", "type": "town", "x": 9642, "z": 6553},
+            {"name": "Skulka", "type": "village", "x": 5667, "z": 14533},
+            {"name": "Soapograd", "type": "city", "x": 7955, "z": 12658},
+            {"name": "Soapy Yar", "type": "town", "x": 4998, "z": 15088},
+            {"name": "Solnichniy", "type": "town", "x": 13398, "z": 6355, "description": "Coastal town on the eastern shore. Quarry nearby."},
+            {"name": "Sosnovka", "type": "town", "x": 2540, "z": 6360},
+            {"name": "Staroye", "type": "town", "x": 10147, "z": 5522, "description": "Eastern hillside village."},
+            {"name": "Stary Sobor", "type": "town", "x": 6174, "z": 7754, "description": "Central highland town near the old church."},
+            {"name": "Svergovka", "type": "town", "x": 9552, "z": 13766},
+            {"name": "Three Valleys", "type": "terrain", "x": 12785, "z": 5461},
+            {"name": "Tonikanovka", "type": "village", "x": 12667, "z": 14685},
+            {"name": "Topolinovo", "type": "village", "x": 2914, "z": 12297},
+            {"name": "Tulga", "type": "village", "x": 12880, "z": 4461, "description": "Hillside village on the eastern coast."},
+            {"name": "Tvisted Pass", "type": "settlement", "x": 14602, "z": 14057},
+            {"name": "Tvistovsk", "type": "village", "x": 13607, "z": 14125},
+            {"name": "Valvolino", "type": "town", "x": 2285, "z": 11059},
+            {"name": "Vybor", "type": "town", "x": 3800, "z": 8860, "description": "Northwestern town near the airfield."},
+            {"name": "Vyshnoye", "type": "town", "x": 6549, "z": 6068, "description": "Central village on the highland road."},
+            {"name": "Zabolotnik", "type": "village", "x": 1160, "z": 10031},
+            {"name": "Zaprudny", "type": "village", "x": 4992, "z": 12898},
+            {"name": "Zara Quarry", "type": "settlement", "x": 8595, "z": 13333},
+            {"name": "Zelenogorsk", "type": "town", "x": 2722, "z": 5310, "description": "Western inland town. Key crossroads."},
+            {"name": "Zub", "type": "settlement", "x": 6542, "z": 5590},
+        ]
     },
-    {
-        name: "Elektrozavodsk",
-        type: "city",
-        x: 10366.9,
-        z: 2062.97,
-        y: 5.8,
-        description: "Eastern coastal city. Power plant and industrial district."
+    faircroft: {
+        name: "Faircroft Islands",
+        short: "Faircroft",
+        size: 12800,
+        image: "faircroft-map.jpg",
+        credit: "Faircroft Islands by Lakes Dan, used with permission",
+        markers: [
+            {"name": "Arlo Tower", "type": "poi", "x": 3169, "z": 7208},
+            {"name": "Banks Hill", "type": "terrain", "x": 4663, "z": 3642},
+            {"name": "Battery Hill", "type": "poi", "x": 11641, "z": 11069},
+            {"name": "Bay View Farm", "type": "poi", "x": 3316, "z": 6428},
+            {"name": "Boot Lagoon", "type": "water", "x": 3951, "z": 6872},
+            {"name": "bothy", "type": "poi", "x": 7176, "z": 4979},
+            {"name": "Brentmere", "type": "water", "x": 5744, "z": 5154},
+            {"name": "Brickworks", "type": "poi", "x": 5578, "z": 2358},
+            {"name": "Brockway", "type": "settlement", "x": 5492, "z": 4264},
+            {"name": "Broughton", "type": "village", "x": 3781, "z": 3375},
+            {"name": "Building Site", "type": "poi", "x": 3150, "z": 3947},
+            {"name": "Cairnrigg", "type": "settlement", "x": 10017, "z": 7198},
+            {"name": "Cairnrigg Farm", "type": "poi", "x": 9974, "z": 6677},
+            {"name": "Cairnrigg Pike", "type": "terrain", "x": 10334, "z": 7206},
+            {"name": "Calaig", "type": "settlement", "x": 4635, "z": 11159},
+            {"name": "Calaig Cove", "type": "water", "x": 4427, "z": 11444},
+            {"name": "Calverston", "type": "city", "x": 3484, "z": 4483},
+            {"name": "Calverston Bay", "type": "water", "x": 3970, "z": 5212},
+            {"name": "Calverston FC", "type": "poi", "x": 3366, "z": 4351},
+            {"name": "Calverston Marina", "type": "water", "x": 3868, "z": 4869},
+            {"name": "Calverston Park", "type": "poi", "x": 3014, "z": 4175},
+            {"name": "Channel", "type": "water", "x": 4008, "z": 7934},
+            {"name": "Chipping Stratton", "type": "town", "x": 4534, "z": 5727},
+            {"name": "Crennan", "type": "village", "x": 4192, "z": 10142},
+            {"name": "Crescent Tarn", "type": "water", "x": 6027, "z": 2748},
+            {"name": "Deluxe Petrol", "type": "poi", "x": 6057, "z": 3653},
+            {"name": "Distillery", "type": "poi", "x": 5900, "z": 3708},
+            {"name": "Factory", "type": "poi", "x": 3579, "z": 4313},
+            {"name": "Faircroft Aerodrome", "type": "village", "x": 4918, "z": 7755},
+            {"name": "Fellside", "type": "settlement", "x": 8987, "z": 5207},
+            {"name": "Fenby", "type": "settlement", "x": 4718, "z": 8734},
+            {"name": "Fire Station", "type": "poi", "x": 3862, "z": 8627},
+            {"name": "Fire Station", "type": "poi", "x": 3906, "z": 4412},
+            {"name": "Goose Tarn", "type": "water", "x": 6284, "z": 5385},
+            {"name": "Hidden Tarn", "type": "water", "x": 11729, "z": 11524},
+            {"name": "Hill Foot Farm", "type": "poi", "x": 5114, "z": 5818},
+            {"name": "Hill Top Farm", "type": "poi", "x": 3009, "z": 7705},
+            {"name": "Holiday Park", "type": "poi", "x": 9700, "z": 6651},
+            {"name": "Hospital", "type": "poi", "x": 3584, "z": 4215},
+            {"name": "JAGGED EDGE", "type": "terrain", "x": 5627, "z": 3831},
+            {"name": "La'l Venice", "type": "village", "x": 7312, "z": 3690},
+            {"name": "Leisure Centre", "type": "poi", "x": 3550, "z": 4411},
+            {"name": "Low Skerry", "type": "water", "x": 1613, "z": 11436},
+            {"name": "Mertun", "type": "village", "x": 6371, "z": 5414},
+            {"name": "Mertun Castle", "type": "poi", "x": 6654, "z": 5590},
+            {"name": "Mertun Reservoir", "type": "water", "x": 6622, "z": 5855},
+            {"name": "Mertun Small Hydro", "type": "poi", "x": 6941, "z": 6006},
+            {"name": "military site", "type": "military", "x": 11689, "z": 10930},
+            {"name": "Mill Beck Farm", "type": "poi", "x": 6231, "z": 3336},
+            {"name": "Miner's Cottages", "type": "poi", "x": 5787, "z": 4135},
+            {"name": "Monument View", "type": "poi", "x": 4094, "z": 4584},
+            {"name": "Mull Head Cottage", "type": "poi", "x": 7266, "z": 7031},
+            {"name": "Mull Head Farm", "type": "poi", "x": 7044, "z": 7248},
+            {"name": "Mulligan's Farm", "type": "poi", "x": 4208, "z": 9045},
+            {"name": "North Island Port", "type": "village", "x": 3999, "z": 8190},
+            {"name": "NORTH RIDGE", "type": "terrain", "x": 11794, "z": 11630},
+            {"name": "Ogden", "type": "village", "x": 6176, "z": 3119},
+            {"name": "Ogden Water", "type": "water", "x": 7318, "z": 3235},
+            {"name": "Parkside", "type": "village", "x": 2856, "z": 3849},
+            {"name": "Pendleworth", "type": "town", "x": 3723, "z": 8970},
+            {"name": "Pine Tarn", "type": "water", "x": 8879, "z": 6148},
+            {"name": "Pit Stop Café", "type": "poi", "x": 8449, "z": 5902},
+            {"name": "Playing Fields", "type": "poi", "x": 3589, "z": 8683},
+            {"name": "Police Station", "type": "poi", "x": 3608, "z": 4685},
+            {"name": "Powerplant", "type": "poi", "x": 1676, "z": 4489},
+            {"name": "Processing Plant", "type": "poi", "x": 3784, "z": 8482},
+            {"name": "Quarry", "type": "poi", "x": 6466, "z": 3946},
+            {"name": "RAF Haverbrook", "type": "military", "x": 7653, "z": 1617},
+            {"name": "Recycling Centre", "type": "poi", "x": 3678, "z": 2521},
+            {"name": "Refinery", "type": "poi", "x": 1997, "z": 3068},
+            {"name": "Round Island", "type": "water", "x": 3757, "z": 5906},
+            {"name": "Sandwick", "type": "settlement", "x": 4947, "z": 9752},
+            {"name": "Sawmill", "type": "poi", "x": 2217, "z": 4406},
+            {"name": "Sawmill", "type": "poi", "x": 7483, "z": 5890},
+            {"name": "Scrap Yard", "type": "poi", "x": 4064, "z": 8664},
+            {"name": "Seahaven", "type": "town", "x": 9263, "z": 6702},
+            {"name": "Seahaven Bay", "type": "water", "x": 9390, "z": 7239},
+            {"name": "Shaak Island", "type": "water", "x": 6128, "z": 7629},
+            {"name": "Shopping Centre", "type": "poi", "x": 3718, "z": 4302},
+            {"name": "South Huts", "type": "poi", "x": 5670, "z": 977},
+            {"name": "St Margaret's Rock", "type": "village", "x": 3982, "z": 1045},
+            {"name": "Tanmuth", "type": "village", "x": 4802, "z": 4339},
+            {"name": "Tarren-on-Sea", "type": "town", "x": 4469, "z": 1474},
+            {"name": "Town Hall", "type": "poi", "x": 3631, "z": 4770},
+            {"name": "Tungol Lagoon", "type": "water", "x": 8307, "z": 4204},
+            {"name": "Umbra", "type": "water", "x": 11689, "z": 11276},
+            {"name": "Union Bridge", "type": "poi", "x": 3626, "z": 8129},
+            {"name": "Water Mill Cafe", "type": "poi", "x": 9167, "z": 6613},
+            {"name": "Water Treatment Plant", "type": "poi", "x": 3425, "z": 4860},
+            {"name": "Woodside Farm", "type": "poi", "x": 5194, "z": 8587},
+        ]
     },
-    {
-        name: "Berezino",
-        type: "city",
-        x: 12545.6,
-        z: 9591.6,
-        y: 5.7,
-        description: "Major port city on the northeast coast."
-    },
-
-    // === TOWNS (medium settlements) ===
-    {
-        name: "Zelenogorsk",
-        type: "town",
-        x: 2721.69,
-        z: 5310.02,
-        y: 197.8,
-        description: "Western inland town. Key crossroads."
-    },
-    {
-        name: "Stary Sobor",
-        type: "town",
-        x: 6174.46,
-        z: 7753.75,
-        y: 292.4,
-        description: "Central highland town near the old church."
-    },
-    {
-        name: "Novy Sobor",
-        type: "town",
-        x: 7160.78,
-        z: 7684.32,
-        y: 285.5,
-        description: "Central town east of Stary Sobor."
-    },
-    {
-        name: "Gorka",
-        type: "town",
-        x: 9596.45,
-        z: 8857.44,
-        y: 292.2,
-        description: "Eastern highland town."
-    },
-    {
-        name: "Solnichniy",
-        type: "town",
-        x: 13397.6,
-        z: 6355.46,
-        y: 5.7,
-        description: "Coastal town on the eastern shore. Quarry nearby."
-    },
-    {
-        name: "Vybor",
-        type: "town",
-        x: 3799.81,
-        z: 8860.27,
-        y: 309.6,
-        description: "Northwestern town near the airfield."
-    },
-    {
-        name: "Lopatino",
-        type: "town",
-        x: 2657.95,
-        z: 10133.6,
-        y: 268.1,
-        description: "Remote northwest settlement."
-    },
-
-    // === VILLAGES (small settlements) ===
-    {
-        name: "Kamenka",
-        type: "village",
-        x: 1789.96,
-        z: 2153.75,
-        y: 5.8,
-        description: "Small southwestern coastal village. Common spawn area."
-    },
-    {
-        name: "Balota",
-        type: "village",
-        x: 4577.74,
-        z: 2468.68,
-        y: 7.5,
-        description: "Southern coastal village with a small airstrip nearby."
-    },
-    {
-        name: "Komarovo",
-        type: "village",
-        x: 3612.25,
-        z: 2412.94,
-        y: 6.3,
-        description: "Small southern coastal settlement."
-    },
-    {
-        name: "Pavlovo",
-        type: "village",
-        x: 1718.65,
-        z: 3704.17,
-        y: 158.3,
-        description: "Southwestern inland village. Military base nearby."
-    },
-    {
-        name: "Kozlovka",
-        type: "village",
-        x: 4408.71,
-        z: 4604.85,
-        y: 225.8,
-        description: "Inland village between Zelenogorsk and Chernogorsk."
-    },
-    {
-        name: "Mogilevka",
-        type: "village",
-        x: 7589.71,
-        z: 5155.73,
-        y: 208.5,
-        description: "Central southern village."
-    },
-    {
-        name: "Vyshnoye",
-        type: "village",
-        x: 6549.5,
-        z: 6067.84,
-        y: 309.7,
-        description: "Central village on the highland road."
-    },
-    {
-        name: "Guglovo",
-        type: "village",
-        x: 8426.94,
-        z: 6684.55,
-        y: 348.4,
-        description: "Small settlement in the central highlands."
-    },
-    {
-        name: "Pusta",
-        type: "village",
-        x: 9147.76,
-        z: 3891.07,
-        y: 215.6,
-        description: "Small village in the southeastern hills."
-    },
-    {
-        name: "Polana",
-        type: "village",
-        x: 10687.8,
-        z: 8024.75,
-        y: 205.1,
-        description: "Eastern village on the road to Berezino."
-    },
-    {
-        name: "Dubrovka",
-        type: "village",
-        x: 10412.9,
-        z: 9817.3,
-        y: 118.7,
-        description: "Northeastern village."
-    },
-    {
-        name: "Staroye",
-        type: "village",
-        x: 10147.1,
-        z: 5522.45,
-        y: 236.5,
-        description: "Eastern hillside village."
-    },
-    {
-        name: "Msta",
-        type: "village",
-        x: 11272.5,
-        z: 5453.6,
-        y: 244.0,
-        description: "Small eastern settlement."
-    },
-    {
-        name: "Kamyshovo",
-        type: "village",
-        x: 12065.1,
-        z: 3487.53,
-        y: 5.8,
-        description: "Southeastern coastal village."
-    },
-    {
-        name: "Tulga",
-        type: "village",
-        x: 12880.3,
-        z: 4461.48,
-        y: 169.7,
-        description: "Hillside village on the eastern coast."
-    },
-    {
-        name: "Myshkino",
-        type: "village",
-        x: 1961.17,
-        z: 7381.87,
-        y: 247.0,
-        description: "Remote western village."
-    },
-    {
-        name: "Kabanino",
-        type: "village",
-        x: 5325.47,
-        z: 8554.31,
-        y: 324.4,
-        description: "Highland village west of Stary Sobor."
-    },
-
-    // === MILITARY ===
-    {
-        name: "NWAF (Northwest Airfield)",
-        type: "military",
-        x: 4673.56,
-        z: 10083.1,
-        y: 327.4,
-        description: "Major military airfield. High-tier loot. Heavily contested."
-    },
-    {
-        name: "NWAF Bunker",
-        type: "military",
-        x: 3792.32,
-        z: 11082.4,
-        y: 323.3,
-        description: "Underground bunker complex at the northwest airfield."
-    },
-
-    // === LANDMARK ===
-    {
-        name: "Elektro Lighthouse",
-        type: "landmark",
-        x: 11166.2,
-        z: 2499.32,
-        y: 39.6,
-        description: "Lighthouse east of Elektrozavodsk."
-    }
-];
+};

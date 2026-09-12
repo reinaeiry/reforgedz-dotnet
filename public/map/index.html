@@ -3,16 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chernarus Map | ReforgedZ</title>
-    <meta property="og:title" content="ReforgedZ - Chernarus Interactive Map">
-    <meta property="og:description" content="Interactive terrain map of Chernarus for ReforgedZ. 15.36km x 15.36km.">
+    <title>Maps | ReforgedZ</title>
+    <meta property="og:title" content="ReforgedZ - Interactive Maps">
+    <meta property="og:description" content="Interactive in-game maps of Chernarus and Faircroft Islands for the ReforgedZ servers, with every named place.">
     <meta name="theme-color" content="#cc1f1f">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <style>
         :root {
             --bg: #0c0c0c;
@@ -83,7 +81,25 @@
         .nav-hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
         /* ---- Map ---- */
-        #map { position: fixed; top: 68px; left: 0; right: 0; bottom: 0; background: #1a2e42; }
+        #map { position: fixed; top: 68px; left: 0; right: 0; bottom: 0; background: #b9dde6; }
+        .leaflet-image-layer { image-rendering: auto; }
+
+        /* ---- Map switcher (floats over the map so it works with the sidebar closed) ---- */
+        #map-switch {
+            position: fixed; top: 80px; left: 50%; transform: translateX(-50%); z-index: 1001;
+            display: inline-flex; padding: 3px; gap: 2px;
+            background: rgba(8,8,8,0.92); border: 1px solid var(--border); border-radius: 8px;
+            backdrop-filter: blur(8px); box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+        }
+        #map-switch button {
+            appearance: none; background: none; border: none; cursor: pointer;
+            font-family: var(--display); font-size: 13px; font-weight: 600; letter-spacing: 2px;
+            text-transform: uppercase; color: var(--text-dim); padding: 7px 16px; border-radius: 6px;
+            transition: color 0.15s, background 0.15s;
+        }
+        #map-switch button:hover { color: var(--text); }
+        #map-switch button.active { background: var(--accent); color: #fff; }
+        #map-switch button:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 1px; }
 
         /* ---- Sidebar ---- */
         #sidebar {
@@ -114,7 +130,7 @@
             letter-spacing: 3px; color: #fff; margin-bottom: 1px;
         }
         .sidebar-header h1 span { color: var(--accent); }
-        .sidebar-header p { font-size: 10px; color: var(--text-ghost); letter-spacing: 0.5px; }
+        .sidebar-header p { font-size: 10px; color: var(--text-ghost); letter-spacing: 0.5px; font-variant-numeric: tabular-nums; }
 
         #search-box {
             width: 100%; padding: 7px 10px; background: var(--surface); border: 1px solid var(--border);
@@ -123,9 +139,9 @@
         #search-box:focus { outline: none; border-color: rgba(204,31,31,0.4); box-shadow: 0 0 0 2px rgba(204,31,31,0.08); }
         #search-box::placeholder { color: var(--text-ghost); }
         #search-results { max-height: 180px; overflow-y: auto; margin-top: 2px; }
-        .search-result { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 12px; transition: background 0.1s; }
+        .search-result { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 12px; transition: background 0.1s; display: flex; align-items: center; }
         .search-result:hover { background: var(--accent-dim); }
-        .search-result .type-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 5px; font-weight: 600; }
+        .search-result .type-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: auto; font-weight: 600; }
 
         .layer-section { padding: 10px 16px; border-bottom: 1px solid var(--border); }
         .layer-section h3 {
@@ -137,6 +153,7 @@
         .layer-toggle input { margin-right: 8px; accent-color: var(--accent); width: 13px; height: 13px; }
         .layer-icon { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; flex-shrink: 0; }
         .layer-count { margin-left: auto; font-size: 10px; color: var(--text-ghost); font-variant-numeric: tabular-nums; }
+        .layer-toggle[hidden] { display: none; }
 
         /* Coords */
         #coords-display {
@@ -146,8 +163,7 @@
             z-index: 1000; border: 1px solid var(--border); backdrop-filter: blur(8px);
         }
 
-
-        .grid-label { color: rgba(255,255,255,0.25); font-size: 10px; font-family: monospace; white-space: nowrap; }
+        .grid-label { color: rgba(0,0,0,0.35); font-size: 10px; font-family: monospace; white-space: nowrap; }
 
         /* Markers */
         .custom-marker {
@@ -210,11 +226,18 @@
             box-shadow: 0 12px 40px rgba(0,0,0,0.5);
         }
 
+        .stat-row, .control-row { display: flex; justify-content: space-between; gap: 8px; }
+        .stat-row span:last-child, .control-row span:last-child { color: var(--text-ghost); font-variant-numeric: tabular-nums; text-align: right; }
+
         /* Scrollbar */
         #sidebar::-webkit-scrollbar { width: 3px; }
         #sidebar::-webkit-scrollbar-track { background: transparent; }
         #sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
         #sidebar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+        @media (prefers-reduced-motion: reduce) {
+            #sidebar, #sidebar-toggle, .nav-cta, .nav-hamburger span { transition: none; }
+        }
 
         /* Mobile */
         @media (max-width: 768px) {
@@ -231,6 +254,9 @@
             .nav-links .nav-link:hover, .nav-links .nav-link.active { background: rgba(255,255,255,0.06); }
             .nav-cta { display: none; }
             #map { top: 52px; }
+            #map-switch { top: 62px; left: auto; right: 10px; transform: none; }
+            #map-switch button { font-size: 12px; letter-spacing: 1.5px; padding: 8px 12px; }
+            .leaflet-top.leaflet-right { top: 46px; }
             #sidebar { top: 52px; width: 80vw; max-width: 300px; }
             #sidebar.collapsed { transform: translateX(-100%); }
             #sidebar-toggle {
@@ -291,10 +317,16 @@
     </div>
 </nav>
 
+<div id="map-switch" role="tablist" aria-label="Choose a map">
+    <button type="button" role="tab" data-map="chernarus">Chernarus</button>
+    <button type="button" role="tab" data-map="faircroft">Faircroft</button>
+</div>
+
 <div id="sidebar">
     <div class="sidebar-header">
-        <h1>CHERNARUS <span>MAP</span></h1>
-        <input type="text" id="search-box" placeholder="Search locations..." />
+        <h1 id="map-title">CHERNARUS <span>MAP</span></h1>
+        <p id="map-sub"></p>
+        <input type="text" id="search-box" placeholder="Search places..." />
         <div id="search-results"></div>
     </div>
 
@@ -305,10 +337,15 @@
 
     <div class="layer-section">
         <h3>Overlays</h3>
+        <label class="layer-toggle" id="toggle-sat-row" hidden>
+            <input type="checkbox" id="toggle-sat" />
+            <span class="layer-icon" style="background: #4f7f5a;"></span>
+            Satellite imagery
+        </label>
         <label class="layer-toggle">
             <input type="checkbox" id="toggle-grid" />
             <span class="layer-icon" style="background: rgba(255,255,255,0.25);"></span>
-            Grid (1km)
+            Grid (1 km)
         </label>
         <label class="layer-toggle">
             <input type="checkbox" id="toggle-coords" checked />
@@ -350,25 +387,24 @@
     <div class="layer-section">
         <h3>Controls</h3>
         <div style="font-size:11px;color:var(--text-dim);display:flex;flex-direction:column;gap:5px;">
-            <div style="display:flex;justify-content:space-between;"><span>Pan</span><span style="color:var(--text-ghost);">Click + Drag</span></div>
-            <div style="display:flex;justify-content:space-between;"><span>Zoom</span><span style="color:var(--text-ghost);">Scroll / +&minus;</span></div>
-            <div style="display:flex;justify-content:space-between;"><span>Copy Coords</span><span style="color:var(--text-ghost);" class="controls-hint-coords">Right-click</span></div>
-            <div style="display:flex;justify-content:space-between;"><span>Location Info</span><span style="color:var(--text-ghost);">Click marker</span></div>
+            <div class="control-row"><span>Pan</span><span>Click + Drag</span></div>
+            <div class="control-row"><span>Zoom</span><span>Scroll / +&minus;</span></div>
+            <div class="control-row"><span>Copy Coords</span><span class="controls-hint-coords">Right-click</span></div>
+            <div class="control-row"><span>Location Info</span><span>Click marker</span></div>
+            <div class="control-row"><span>Switch Map</span><span>Buttons at the top</span></div>
         </div>
     </div>
 
     <div class="layer-section" style="border-bottom:none;">
         <h3>About</h3>
         <div style="font-size:11px;color:var(--text-dim);line-height:1.5;">
-            Interactive map for the ReforgedZ Chernarus servers. Made using map data with permission from original creators. Markers show cities, towns, villages, military zones and quest locations.
+            The in-game maps for the ReforgedZ servers, with every place the game names on them. Coordinates match the ones you see in game, so you can copy a spot here and find it there. Custom markers stay in your browser, per map.
         </div>
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:10px;color:var(--text-ghost);">
-            Map by <span style="color:var(--text-dim);">Bonzi & Soap</span>
-        </div>
+        <div id="map-credit" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:10px;color:var(--text-ghost);"></div>
     </div>
 </div>
 
-<button id="sidebar-toggle">&#9776;</button>
+<button id="sidebar-toggle" aria-label="Toggle sidebar">&#9776;</button>
 <button id="sidebar-close" style="display:none;position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text-ghost);font-size:20px;cursor:pointer;z-index:1002;padding:4px 8px;line-height:1;" onclick="document.getElementById('sidebar').classList.add('collapsed');">&times;</button>
 <div id="coords-display">X: 0 | Z: 0</div>
 <div id="place-marker-hint">Click on the map to place your marker</div>
@@ -376,57 +412,54 @@
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="map-data.js"></script>
 <script>
-const MAP_SIZE = 15360;
-const USE_TILES = false;
-const MAX_ZOOM = 7;
+// The map art is 4096 px across, so zoom 3 (8 px per metre) is as close as it stays sharp.
+const MAX_ZOOM = 3;
 const MIN_ZOOM = -4;
-const DEFAULT_ZOOM = 0;
+const DEFAULT_MAP = 'chernarus';
 
-const IMG_OFFSET_X = 178;
-const IMG_OFFSET_Z = 72;
-const imageBounds = [[IMG_OFFSET_Z, IMG_OFFSET_X], [MAP_SIZE + IMG_OFFSET_Z, MAP_SIZE + IMG_OFFSET_X]];
-const borderBounds = [[IMG_OFFSET_Z, IMG_OFFSET_X], [MAP_SIZE + IMG_OFFSET_Z, 15538]];
+const MARKER_STYLES = {
+    city:       { label: 'Cities',      color: '#FFD700', icon: '🏙️', size: 28 },
+    town:       { label: 'Towns',       color: '#4a9eff', icon: '🏘️', size: 24 },
+    village:    { label: 'Villages',    color: '#6bc46b', icon: '🏠', size: 20 },
+    settlement: { label: 'Settlements', color: '#9ad39a', icon: '🏡', size: 18 },
+    military:   { label: 'Military',    color: '#cc1f1f', icon: '⚔️', size: 26 },
+    poi:        { label: 'Places',      color: '#e0a030', icon: '📍', size: 18 },
+    terrain:    { label: 'Terrain',     color: '#a08060', icon: '⛰️', size: 18 },
+    water:      { label: 'Water',       color: '#3fb8d8', icon: '🌊', size: 18 },
+    custom:     { label: 'Custom',      color: '#fff',    icon: '📌', size: 22 },
+    base:       { label: 'Base',        color: '#00cc66', icon: '🏕️', size: 24 },
+    danger:     { label: 'Danger',      color: '#cc1f1f', icon: '☠️', size: 24 },
+    loot:       { label: 'Loot',        color: '#ffcc00', icon: '💰', size: 22 },
+    objective:  { label: 'Objective',   color: '#ff66cc', icon: '🎯', size: 24 }
+};
+const BASE_TYPES = ['city', 'town', 'village', 'settlement', 'military', 'poi', 'terrain', 'water'];
+const OFF_BY_DEFAULT = new Set(['terrain', 'water']);
+
+// Everything the browser remembers is keyed per map, so Chernarus pins never show on Faircroft.
+const store = {
+    get(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v === null || v === undefined ? d : v; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+    del(k) { try { localStorage.removeItem(k); } catch (e) {} }
+};
 
 const map = L.map('map', {
     crs: L.CRS.Simple,
     minZoom: MIN_ZOOM,
     maxZoom: MAX_ZOOM,
-    maxBounds: [[-5000, -5000], [MAP_SIZE + 5000, MAP_SIZE + 5000]],
     maxBoundsViscosity: 0.5,
     zoomControl: false,
     attributionControl: false
 });
-
 L.control.zoom({ position: 'topright' }).addTo(map);
-map.setView([MAP_SIZE / 2, MAP_SIZE / 2], DEFAULT_ZOOM);
 
-if (USE_TILES) {
-    L.tileLayer('tiles/{z}/{x}/{y}.png', {
-        minZoom: 0, maxZoom: 5, maxNativeZoom: 5, noWrap: true,
-        bounds: imageBounds, tileSize: 256, tms: true
-    }).addTo(map);
-} else {
-    try { L.imageOverlay('map-image-hires.jpg', imageBounds).addTo(map); } catch(e) {}
-}
-
-L.rectangle(borderBounds, { color: '#000', weight: 2, fill: false, interactive: false }).addTo(map);
-
-const MARKER_STYLES = {
-    city:       { color: '#FFD700', icon: '🏙️', size: 28 },
-    town:       { color: '#4a9eff', icon: '🏘️', size: 24 },
-    village:    { color: '#6bc46b', icon: '🏠', size: 20 },
-    military:   { color: '#cc1f1f', icon: '⚔️', size: 26 },
-    quest:      { color: '#cc66ff', icon: '❗', size: 22 },
-    road:       { color: '#666',    icon: '🛣️', size: 18 },
-    custom:     { color: '#fff',    icon: '📌', size: 22 },
-    base:       { color: '#00cc66', icon: '🏕️', size: 24 },
-    danger:     { color: '#cc1f1f', icon: '☠️', size: 24 },
-    loot:       { color: '#ffcc00', icon: '💰', size: 22 },
-    objective:  { color: '#ff66cc', icon: '🎯', size: 24 }
-};
+let currentId = null, current = null;
+let baseLayer = null, satLayer = null, borderLayer = null;
+let gridLayer = L.layerGroup();
+let layerGroups = {}, layerCounts = {};
+let customMarkers = [], customLeafletMarkers = {};
+let placingMarker = false;
 
 function createMarkerIcon(type) {
     const s = MARKER_STYLES[type] || MARKER_STYLES.custom;
@@ -436,38 +469,100 @@ function createMarkerIcon(type) {
     });
 }
 
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
 function createPopup(m) {
     const s = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
-    return `<div class="popup-title">${m.name}</div>
-        <div class="popup-type" style="color:${s.color}">${m.type}</div>
-        <div class="popup-coords">X: ${Math.round(m.x)} | Z: ${Math.round(m.z)}${m.y ? ' | Y: '+Math.round(m.y) : ''}</div>
-        ${m.description ? `<div class="popup-desc">${m.description}</div>` : ''}`;
+    return `<div class="popup-title">${esc(m.name)}</div>
+        <div class="popup-type" style="color:${s.color}">${esc(s.label || m.type)}</div>
+        <div class="popup-coords">X: ${Math.round(m.x)} | Z: ${Math.round(m.z)}</div>
+        ${m.description ? `<div class="popup-desc">${esc(m.description)}</div>` : ''}`;
 }
 
-const layerGroups = {}, layerCounts = {};
-
-function initLayers() {
-    [...new Set(MAP_MARKERS.map(m => m.type))].forEach(t => { layerGroups[t] = L.layerGroup().addTo(map); layerCounts[t] = 0; });
-    if (!layerGroups.custom) layerGroups.custom = L.layerGroup().addTo(map);
+// ---- Switching between maps ----
+function clearMap() {
+    map.closePopup();
+    if (baseLayer) { map.removeLayer(baseLayer); baseLayer = null; }
+    if (satLayer) { map.removeLayer(satLayer); satLayer = null; }
+    if (borderLayer) { map.removeLayer(borderLayer); borderLayer = null; }
+    Object.values(layerGroups).forEach(g => map.removeLayer(g));
+    layerGroups = {}; layerCounts = {};
+    customMarkers = []; customLeafletMarkers = {};
+    gridLayer.clearLayers();
+    document.getElementById('toggle-sat').checked = false;
 }
 
-function loadMarkers() {
-    initLayers();
-    MAP_MARKERS.filter(m => m.type !== 'landmark').forEach(m => {
-        L.marker([m.z, m.x], { icon: createMarkerIcon(m.type), title: m.name }).bindPopup(createPopup(m)).addTo(layerGroups[m.type]);
-        layerCounts[m.type] = (layerCounts[m.type] || 0) + 1;
+function switchMap(id) {
+    if (!MAP_DATA[id] || id === currentId) return;
+    clearMap();
+    currentId = id; current = MAP_DATA[id];
+    const S = current.size;
+
+    map.setMaxBounds([[-S * 0.35, -S * 0.35], [S * 1.35, S * 1.35]]);
+    baseLayer = L.imageOverlay(current.image, [[0, 0], [S, S]]).addTo(map);
+    borderLayer = L.rectangle([[0, 0], [S, S]], { color: '#000', weight: 2, fill: false, interactive: false }).addTo(map);
+    buildGrid(S);
+    document.getElementById('toggle-sat-row').hidden = !current.satellite;
+
+    loadMarkers();
+    loadCustomMarkers();
+    loadLayerPrefs();
+
+    const sv = store.get(`mapView:${id}`, null);
+    if (sv && isFinite(sv.lat) && isFinite(sv.lng) && isFinite(sv.zoom)) map.setView([sv.lat, sv.lng], sv.zoom);
+    else map.fitBounds([[0, 0], [S, S]]);
+
+    document.getElementById('map-title').innerHTML = `${esc(current.short.toUpperCase())} <span>MAP</span>`;
+    document.getElementById('map-sub').textContent = `${(S / 1000).toFixed(2).replace(/\.?0+$/, '')} km × ${(S / 1000).toFixed(2).replace(/\.?0+$/, '')} km · ${current.markers.length} places`;
+    document.getElementById('map-credit').textContent = current.credit || '';
+    document.title = `${current.name} Map | ReforgedZ`;
+    document.querySelectorAll('#map-switch button').forEach(b => {
+        const on = b.dataset.map === id;
+        b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
+    if (location.hash !== `#${id}`) history.replaceState(null, '', `#${id}`);
+    store.set('activeMap', id);
+    document.getElementById('search-box').value = '';
+    document.getElementById('search-results').innerHTML = '';
+    updateStats();
+}
+
+document.querySelectorAll('#map-switch button').forEach(b => b.addEventListener('click', () => switchMap(b.dataset.map)));
+window.addEventListener('hashchange', () => { const id = location.hash.slice(1); if (MAP_DATA[id]) switchMap(id); });
+
+// ---- Base layers ----
+document.getElementById('toggle-sat').addEventListener('change', function() {
+    if (!current || !current.satellite) return;
+    if (this.checked) {
+        if (!satLayer) satLayer = L.imageOverlay(current.satellite.image, current.satellite.bounds);
+        satLayer.addTo(map);
+        if (borderLayer) borderLayer.bringToFront();
+    } else if (satLayer) {
+        map.removeLayer(satLayer);
+    }
+});
+
+// ---- Place markers ----
+function loadMarkers() {
+    BASE_TYPES.forEach(t => { layerGroups[t] = L.layerGroup(); layerCounts[t] = 0; });
+    current.markers.forEach(m => {
+        if (!layerGroups[m.type]) { layerGroups[m.type] = L.layerGroup(); layerCounts[m.type] = 0; }
+        L.marker([m.z, m.x], { icon: createMarkerIcon(m.type), title: m.name }).bindPopup(createPopup(m)).addTo(layerGroups[m.type]);
+        layerCounts[m.type]++;
+    });
+    if (!layerGroups.custom) layerGroups.custom = L.layerGroup();
+    Object.entries(layerGroups).forEach(([t, g]) => { if (!OFF_BY_DEFAULT.has(t)) g.addTo(map); });
     buildLayerToggles();
 }
 
 function buildLayerToggles() {
     const c = document.getElementById('layer-toggles');
     c.innerHTML = '';
-    Object.keys(layerGroups).forEach(type => {
+    Object.keys(layerGroups).filter(t => layerCounts[t] > 0).forEach(type => {
         const s = MARKER_STYLES[type] || MARKER_STYLES.custom;
         const label = document.createElement('label');
         label.className = 'layer-toggle';
-        label.innerHTML = `<input type="checkbox" checked data-layer="${type}" /><span class="layer-icon" style="background:${s.color};"></span>${type.charAt(0).toUpperCase()+type.slice(1)}<span class="layer-count">${layerCounts[type]||0}</span>`;
+        label.innerHTML = `<input type="checkbox" ${map.hasLayer(layerGroups[type]) ? 'checked' : ''} data-layer="${type}" /><span class="layer-icon" style="background:${s.color};"></span>${esc(s.label || type)}<span class="layer-count">${layerCounts[type] || 0}</span>`;
         c.appendChild(label);
         label.querySelector('input').addEventListener('change', function() {
             this.checked ? map.addLayer(layerGroups[type]) : map.removeLayer(layerGroups[type]);
@@ -476,56 +571,80 @@ function buildLayerToggles() {
     });
 }
 
-// Search
+const saveLayerPrefs = () => { const p = {}; document.querySelectorAll('#layer-toggles input[data-layer]').forEach(cb => p[cb.dataset.layer] = cb.checked); store.set(`layerPrefs:${currentId}`, p); };
+const loadLayerPrefs = () => {
+    const p = store.get(`layerPrefs:${currentId}`, {});
+    Object.entries(p).forEach(([t, v]) => {
+        const cb = document.querySelector(`#layer-toggles input[data-layer="${t}"]`);
+        if (!cb || !layerGroups[t]) return;
+        cb.checked = !!v;
+        v ? map.addLayer(layerGroups[t]) : map.removeLayer(layerGroups[t]);
+    });
+};
+
+// ---- Search ----
 const searchBox = document.getElementById('search-box'), searchResults = document.getElementById('search-results');
 searchBox.addEventListener('input', function() {
     const q = this.value.toLowerCase().trim();
     searchResults.innerHTML = '';
-    if (q.length < 2) return;
-    MAP_MARKERS.filter(m => m.name.toLowerCase().includes(q)).slice(0, 10).forEach(m => {
+    if (q.length < 2 || !current) return;
+    const all = current.markers.concat(customMarkers);
+    all.filter(m => m.name.toLowerCase().includes(q)).slice(0, 12).forEach(m => {
         const s = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
         const div = document.createElement('div');
         div.className = 'search-result';
-        div.innerHTML = `${m.name} <span class="type-badge" style="background:${s.color};color:#000;">${m.type}</span>`;
+        div.innerHTML = `${esc(m.name)} <span class="type-badge" style="background:${s.color};color:#000;">${esc(s.label || m.type)}</span>`;
         div.addEventListener('click', () => {
-            map.setView([m.z, m.x], 5); searchResults.innerHTML = ''; searchBox.value = m.name;
-            layerGroups[m.type].eachLayer(l => { if (l.options.title === m.name) l.openPopup(); });
+            map.setView([m.z, m.x], 1); searchResults.innerHTML = ''; searchBox.value = m.name;
+            const g = layerGroups[m.type];
+            if (g) {
+                if (!map.hasLayer(g)) { map.addLayer(g); const cb = document.querySelector(`#layer-toggles input[data-layer="${m.type}"]`); if (cb) cb.checked = true; }
+                g.eachLayer(l => { const ll = l.getLatLng(); if (ll.lat === m.z && ll.lng === m.x) l.openPopup(); });
+            }
         });
         searchResults.appendChild(div);
     });
 });
 
-// Grid
-const gridLayer = L.layerGroup();
-(function createGrid() {
-    for (let x = 0; x <= MAP_SIZE; x += 1000) {
-        L.polyline([[0, x], [MAP_SIZE, x]], { color: 'rgba(255,255,255,0.1)', weight: 1 }).addTo(gridLayer);
-        if (x < MAP_SIZE) L.marker([200, x+500], { icon: L.divIcon({ className: 'grid-label', html: `${x/1000}`, iconSize: [30, 15] }) }).addTo(gridLayer);
+// ---- Grid ----
+function buildGrid(S) {
+    gridLayer.clearLayers();
+    for (let x = 0; x <= S; x += 1000) {
+        L.polyline([[0, x], [S, x]], { color: 'rgba(0,0,0,0.18)', weight: 1, interactive: false }).addTo(gridLayer);
+        if (x < S) L.marker([200, x + 500], { icon: L.divIcon({ className: 'grid-label', html: `${x / 1000}`, iconSize: [30, 15] }), interactive: false }).addTo(gridLayer);
     }
-    for (let z = 0; z <= MAP_SIZE; z += 1000) {
-        L.polyline([[z, 0], [z, MAP_SIZE]], { color: 'rgba(255,255,255,0.1)', weight: 1 }).addTo(gridLayer);
-        if (z < MAP_SIZE) L.marker([z+500, 200], { icon: L.divIcon({ className: 'grid-label', html: `${z/1000}`, iconSize: [30, 15] }) }).addTo(gridLayer);
+    for (let z = 0; z <= S; z += 1000) {
+        L.polyline([[z, 0], [z, S]], { color: 'rgba(0,0,0,0.18)', weight: 1, interactive: false }).addTo(gridLayer);
+        if (z < S) L.marker([z + 500, 200], { icon: L.divIcon({ className: 'grid-label', html: `${z / 1000}`, iconSize: [30, 15] }), interactive: false }).addTo(gridLayer);
     }
-})();
+}
 document.getElementById('toggle-grid').addEventListener('change', function() { this.checked ? map.addLayer(gridLayer) : map.removeLayer(gridLayer); });
 
-// Coords
+// ---- Coords ----
 const coordsDisplay = document.getElementById('coords-display');
 map.on('mousemove', e => { coordsDisplay.textContent = `X: ${Math.round(e.latlng.lng)} | Z: ${Math.round(e.latlng.lat)}`; });
 document.getElementById('toggle-coords').addEventListener('change', function() { coordsDisplay.style.display = this.checked ? 'block' : 'none'; });
 
-// Custom markers
-let placingMarker = false;
-let customMarkers = JSON.parse(localStorage.getItem('customMarkers') || '[]');
-const customLeafletMarkers = {};
+// ---- Custom markers (per map, in this browser) ----
 const hint = document.getElementById('place-marker-hint');
-const genId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-const saveCustomMarkers = () => { localStorage.setItem('customMarkers', JSON.stringify(customMarkers)); renderCustomMarkersList(); updateStats(); };
-const saveLayerPrefs = () => { const p = {}; document.querySelectorAll('#layer-toggles input[data-layer]').forEach(cb => p[cb.dataset.layer] = cb.checked); localStorage.setItem('layerPrefs', JSON.stringify(p)); };
-const loadLayerPrefs = () => { const p = JSON.parse(localStorage.getItem('layerPrefs') || '{}'); Object.entries(p).forEach(([t, v]) => { const cb = document.querySelector(`#layer-toggles input[data-layer="${t}"]`); if (cb && !v) { cb.checked = false; if (layerGroups[t]) map.removeLayer(layerGroups[t]); } }); };
+const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const saveCustomMarkers = () => { store.set(`customMarkers:${currentId}`, customMarkers); renderCustomMarkersList(); updateStats(); };
+
+function loadCustomMarkers() {
+    let list = store.get(`customMarkers:${currentId}`, null);
+    if (list === null && currentId === 'chernarus') {
+        // Pins placed before the site had two maps were all on Chernarus.
+        list = store.get('customMarkers', []);
+        if (list.length) { store.set('customMarkers:chernarus', list); store.del('customMarkers'); }
+    }
+    customMarkers = Array.isArray(list) ? list : [];
+    customMarkers.forEach(m => { if (!m.id) m.id = genId(); addCustomMarkerToMap(m); });
+    renderCustomMarkersList();
+}
 
 function addCustomMarkerToMap(d) {
-    if (!layerGroups[d.type]) layerGroups[d.type] = L.layerGroup().addTo(map);
+    if (!layerGroups[d.type]) layerGroups[d.type] = L.layerGroup();
+    if (!map.hasLayer(layerGroups[d.type])) layerGroups[d.type].addTo(map);
     const popup = `${createPopup(d)}<button onclick="deleteCustomMarker('${d.id}')" style="margin-top:8px;padding:4px 10px;background:none;color:#cc1f1f;border:1px solid rgba(204,31,31,0.3);border-radius:4px;cursor:pointer;font-size:10px;width:100%;font-family:var(--body);">Delete Marker</button>`;
     const lm = L.marker([d.z, d.x], { icon: createMarkerIcon(d.type), title: d.name }).bindPopup(popup);
     lm.addTo(layerGroups[d.type]);
@@ -549,9 +668,9 @@ function renderCustomMarkersList() {
         const s = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
         const div = document.createElement('div');
         div.className = 'custom-marker-item';
-        div.innerHTML = `<span class="marker-info" data-id="${m.id}"><span class="layer-icon" style="background:${s.color};"></span>${m.name} <span style="color:var(--text-ghost);font-size:9px;">(${m.x},${m.z})</span></span><button class="marker-delete" data-id="${m.id}">x</button>`;
+        div.innerHTML = `<span class="marker-info" data-id="${m.id}"><span class="layer-icon" style="background:${s.color};"></span>${esc(m.name)} <span style="color:var(--text-ghost);font-size:9px;">(${m.x},${m.z})</span></span><button class="marker-delete" data-id="${m.id}">x</button>`;
         list.appendChild(div);
-        div.querySelector('.marker-info').addEventListener('click', () => { map.setView([m.z, m.x], 5); if (customLeafletMarkers[m.id]) customLeafletMarkers[m.id].openPopup(); });
+        div.querySelector('.marker-info').addEventListener('click', () => { map.setView([m.z, m.x], 1); if (customLeafletMarkers[m.id]) customLeafletMarkers[m.id].openPopup(); });
         div.querySelector('.marker-delete').addEventListener('click', () => deleteCustomMarker(m.id));
     });
 }
@@ -560,53 +679,64 @@ document.getElementById('btn-place-marker').addEventListener('click', () => { pl
 map.on('click', e => {
     if (!placingMarker) return;
     placingMarker = false; hint.style.display = 'none'; map.getContainer().style.cursor = '';
-    const d = { id: genId(), name: document.getElementById('custom-name').value || 'Custom Marker', type: document.getElementById('custom-type').value, x: Math.round(e.latlng.lng), z: Math.round(e.latlng.lat), y: 0, description: document.getElementById('custom-desc').value || '', created: new Date().toISOString() };
+    const d = { id: genId(), name: document.getElementById('custom-name').value.trim() || 'Custom Marker', type: document.getElementById('custom-type').value, x: Math.round(e.latlng.lng), z: Math.round(e.latlng.lat), description: document.getElementById('custom-desc').value.trim(), created: new Date().toISOString() };
     customMarkers.push(d); addCustomMarkerToMap(d); saveCustomMarkers();
     document.getElementById('custom-name').value = ''; document.getElementById('custom-desc').value = '';
 });
 
-customMarkers.forEach(m => { if (!m.id) m.id = genId(); addCustomMarkerToMap(m); });
-renderCustomMarkersList();
-
 document.getElementById('btn-export-markers').addEventListener('click', () => {
     if (!customMarkers.length) return;
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(customMarkers, null, 2)], { type: 'application/json' }));
-    a.download = `chernarus-markers-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(a.href);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ map: currentId, markers: customMarkers }, null, 2)], { type: 'application/json' }));
+    a.download = `${currentId}-markers-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(a.href);
 });
 document.getElementById('btn-import-markers').addEventListener('click', () => document.getElementById('import-file').click());
 document.getElementById('import-file').addEventListener('change', function(e) {
     const f = e.target.files[0]; if (!f) return;
     const r = new FileReader();
-    r.onload = ev => { try { const arr = JSON.parse(ev.target.result); if (!Array.isArray(arr)) throw new Error('Not an array'); let c = 0; arr.forEach(m => { m.id = genId(); if (!m.name||!m.type||m.x===undefined||m.z===undefined) return; customMarkers.push(m); addCustomMarkerToMap(m); c++; }); saveCustomMarkers(); alert(`Imported ${c} markers.`); } catch(err) { alert('Invalid file: '+err.message); } };
+    r.onload = ev => {
+        try {
+            let arr = JSON.parse(ev.target.result);
+            if (arr && !Array.isArray(arr) && Array.isArray(arr.markers)) {
+                if (arr.map && arr.map !== currentId && MAP_DATA[arr.map] && !confirm(`These markers were saved on ${MAP_DATA[arr.map].name}. Import them onto ${current.name} anyway?`)) return;
+                arr = arr.markers;
+            }
+            if (!Array.isArray(arr)) throw new Error('Not a marker list');
+            let c = 0;
+            arr.forEach(m => { if (!m || !m.name || !m.type || !isFinite(m.x) || !isFinite(m.z)) return; const d = { id: genId(), name: String(m.name), type: MARKER_STYLES[m.type] ? m.type : 'custom', x: Math.round(m.x), z: Math.round(m.z), description: m.description ? String(m.description) : '' }; customMarkers.push(d); addCustomMarkerToMap(d); c++; });
+            saveCustomMarkers(); alert(`Imported ${c} markers.`);
+        } catch (err) { alert('Invalid file: ' + err.message); }
+    };
     r.readAsText(f); this.value = '';
 });
 document.getElementById('btn-clear-custom').addEventListener('click', () => {
-    if (!customMarkers.length || !confirm(`Delete all ${customMarkers.length} custom markers?`)) return;
+    if (!customMarkers.length || !confirm(`Delete all ${customMarkers.length} custom markers on ${current.name}?`)) return;
     customMarkers.forEach(m => { if (customLeafletMarkers[m.id] && layerGroups[m.type]) layerGroups[m.type].removeLayer(customLeafletMarkers[m.id]); });
     customMarkers.length = 0; Object.keys(customLeafletMarkers).forEach(k => delete customLeafletMarkers[k]); saveCustomMarkers();
 });
 
-// Sidebar
+// ---- Sidebar ----
 document.getElementById('sidebar-toggle').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('collapsed'));
 
-// Map stats
+// ---- Stats ----
 function updateStats() {
-    const total = MAP_MARKERS.filter(m => m.type !== 'landmark').length;
-    const custom = customMarkers.length;
-    const stats = document.getElementById('map-stats');
+    if (!current) return;
+    const km = (current.size / 1000).toFixed(2).replace(/\.?0+$/, '');
     const rows = [
-        ['Terrain Size', '15.36 x 15.36 km'],
-        ['Total Locations', total],
-        ['Custom Markers', custom],
+        ['Terrain Size', `${km} × ${km} km`],
+        ['Named Places', current.markers.length],
+        ['Custom Markers', customMarkers.length],
         ['Zoom Level', map.getZoom()],
     ];
-    stats.innerHTML = rows.map(([k, v]) => `<div style="display:flex;justify-content:space-between;"><span>${k}</span><span style="color:var(--text-ghost);font-variant-numeric:tabular-nums;">${v}</span></div>`).join('');
+    document.getElementById('map-stats').innerHTML = rows.map(([k, v]) => `<div class="stat-row"><span>${k}</span><span>${v}</span></div>`).join('');
 }
 
-// Init
-loadMarkers(); loadLayerPrefs(); updateStats();
-map.on('moveend', () => { const c = map.getCenter(); localStorage.setItem('mapView', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() })); updateStats(); });
-const sv = JSON.parse(localStorage.getItem('mapView') || 'null'); if (sv) map.setView([sv.lat, sv.lng], sv.zoom);
+// ---- Init ----
+(function init() {
+    const fromHash = location.hash.slice(1);
+    const id = MAP_DATA[fromHash] ? fromHash : (MAP_DATA[store.get('activeMap', '')] ? store.get('activeMap', '') : DEFAULT_MAP);
+    switchMap(id);
+})();
+map.on('moveend', () => { if (!currentId) return; const c = map.getCenter(); store.set(`mapView:${currentId}`, { lat: c.lat, lng: c.lng, zoom: map.getZoom() }); updateStats(); });
 map.on('contextmenu', e => { const x = Math.round(e.latlng.lng), z = Math.round(e.latlng.lat); navigator.clipboard.writeText(`${x}, ${z}`).then(() => { const p = L.popup().setLatLng(e.latlng).setContent(`<div style="font-size:11px;font-family:var(--body);">Copied <b>${x}, ${z}</b></div>`).openOn(map); setTimeout(() => map.closePopup(p), 1200); }); });
 document.getElementById('navHamburger').addEventListener('click', function() { this.classList.toggle('open'); document.getElementById('navLinks').classList.toggle('open'); });
 
@@ -629,8 +759,8 @@ document.getElementById('navHamburger').addEventListener('click', function() { t
 
     // Update controls hint for mobile
     if (isMobile.matches) {
-        const hint = document.querySelector('.controls-hint-coords');
-        if (hint) hint.textContent = 'Long-press';
+        const h = document.querySelector('.controls-hint-coords');
+        if (h) h.textContent = 'Long-press';
     }
 
     // Long-press to copy coords on mobile (since no right-click)
@@ -639,7 +769,8 @@ document.getElementById('navHamburger').addEventListener('click', function() { t
         if (e.touches.length !== 1) return;
         longPressTimer = setTimeout(() => {
             const touch = e.touches[0];
-            const pt = map.containerPointToLatLng([touch.clientX - map.getContainer().getBoundingClientRect().left, touch.clientY - map.getContainer().getBoundingClientRect().top]);
+            const rect = map.getContainer().getBoundingClientRect();
+            const pt = map.containerPointToLatLng([touch.clientX - rect.left, touch.clientY - rect.top]);
             const x = Math.round(pt.lng), z = Math.round(pt.lat);
             navigator.clipboard.writeText(`${x}, ${z}`).then(() => {
                 const p = L.popup().setLatLng(pt).setContent(`<div style="font-size:11px;font-family:var(--body);">Copied <b>${x}, ${z}</b></div>`).openOn(map);
