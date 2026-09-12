@@ -264,6 +264,82 @@ async function casWriteConfig(conn, server, configObj, expectedHash) {
   return 'err';
 }
 
+// Staff whose game.admins entry the shop must never remove, whatever it once
+// claimed. Discord staff roles (Founder, Head/Senior/Global Admin, Systems Dev,
+// the six Gamemaster roles) as the ticket bot's panels name them; overridable
+// with STAFF_DISCORD_ROLE_IDS. Shop admins (ADMIN_STEAM_IDS) are staff too.
+const DEFAULT_STAFF_ROLE_IDS = [
+  '1360329397415972926', '1538968143131578408', '1538972242942107738', '1538973632288530483', '1518411617187135518',
+  '1497062984848248983', '1497064031259984033', '1499237354324492378',
+  '1497061513175765003', '1497062741125627935', '1499237259109601363'
+];
+function staffRoleIds() {
+  const env = (process.env.STAFF_DISCORD_ROLE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  return new Set(env.length ? env : DEFAULT_STAFF_ROLE_IDS);
+}
+
+// Which of these GUIDs belong to staff. Only ever called for the handful the
+// sync is about to strip, so the Discord lookups stay cheap. Returns a Map of
+// guid -> reason; a guid missing from it may be stripped.
+async function protectedStaffGuids(guids) {
+  const out = new Map();
+  if (!guids.length) return out;
+  const adminSteamIds = new Set((process.env.ADMIN_STEAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
+  const staff = staffRoleIds();
+  const rows = db.prepare(`SELECT bi_uid, steam_id, role, discord_id, persona FROM users WHERE bi_uid IN (${guids.map(() => '?').join(',')})`).all(...guids);
+  let discord = null;
+  for (const r of rows) {
+    if (r.role === 'admin' || adminSteamIds.has(r.steam_id)) { out.set(r.bi_uid, `shop admin ${r.persona}`); continue; }
+    if (!r.discord_id) continue;
+    try {
+      discord = discord || require('./discord');
+      const held = await discord.getMemberRoleIds(r.discord_id);
+      const hit = (held || []).find(id => staff.has(String(id)));
+      if (hit) out.set(r.bi_uid, `${r.persona} holds staff role ${hit}`);
+    } catch (e) {
+      // Cannot tell: keep them. A lookup hiccup must not cost a GM their access.
+      out.set(r.bi_uid, `${r.persona}: Discord lookup failed (${e.message}), kept`);
+    }
+  }
+  return out;
+}
+
+// Work out the next game.admins for one server. Pure, so the preview endpoint
+// and the real sync cannot disagree.
+//
+// Ownership means "the shop put this GUID there". A GUID that was already in
+// the list when the shop first wanted it belongs to whoever added it (the GM
+// tab), and stays when the priority queue behind it lapses. The old rule
+// claimed every desired GUID, so a real GM who also bought queue priority was
+// stripped when it ran out. Staff are never stripped regardless, and any claim
+// on them is released.
+function planAdmins({ currentAdmins, previouslyOwned, desiredGuids, protectedGuids }) {
+  const current = new Set(currentAdmins);
+  const strip = [...previouslyOwned].filter(g => !desiredGuids.has(g) && current.has(g) && !protectedGuids.has(g));
+  const stripSet = new Set(strip);
+  const newAdmins = currentAdmins.filter(g => !stripSet.has(g));
+  const add = [];
+  for (const g of desiredGuids) {
+    if (g && !current.has(g)) { newAdmins.push(g); add.push(g); }
+  }
+  const newOwned = new Set();
+  for (const g of desiredGuids) {
+    if (!g || protectedGuids.has(g)) continue;
+    if (!current.has(g) || previouslyOwned.has(g)) newOwned.add(g);
+  }
+  const released = [...previouslyOwned].filter(g => !newOwned.has(g) && !stripSet.has(g));
+  return { newAdmins, add, strip, released, newOwned };
+}
+
+function readPreviouslyOwned(serverId) {
+  const prevRow = db.prepare('SELECT previously_owned_json FROM config_admin_sync_state WHERE server_id = ?').get(serverId);
+  try {
+    return new Set(prevRow ? JSON.parse(prevRow.previously_owned_json) : []);
+  } catch {
+    return new Set();
+  }
+}
+
 async function patchServerAdmins(conn, server, desiredGuids) {
   if (!server.configPath) {
     console.log(`[admins-sync] ${server.id} no configPath, skipping`);
@@ -271,13 +347,7 @@ async function patchServerAdmins(conn, server, desiredGuids) {
   }
 
   // GUIDs WE put there last time (so we strip only our own lapsed entries).
-  const prevRow = db.prepare('SELECT previously_owned_json FROM config_admin_sync_state WHERE server_id = ?').get(server.id);
-  let previouslyOwned;
-  try {
-    previouslyOwned = new Set(prevRow ? JSON.parse(prevRow.previously_owned_json) : []);
-  } catch {
-    previouslyOwned = new Set();
-  }
+  const previouslyOwned = readPreviouslyOwned(server.id);
 
   // Atomic read-modify-write loop: read config + hash, recompute, then CAS-write
   // under flock. If the admin page (or anything) changed the file in between, the
@@ -312,23 +382,22 @@ async function patchServerAdmins(conn, server, desiredGuids) {
         updated_at = excluded.updated_at
     `).run(server.id, nonShopAdminCount);
 
-    // Strip OUR previously-owned entries no longer desired, then add OUR desired
-    // entries. Entries from the GM tab (or anything else) live untouched.
-    const newAdmins = currentAdmins.filter(g => !previouslyOwned.has(g));
-    for (const g of desiredGuids) {
-      if (g && !newAdmins.includes(g)) newAdmins.push(g);
-    }
+    // Only the GUIDs about to be stripped need the staff check.
+    const stripCandidates = [...previouslyOwned].filter(g => !desiredGuids.has(g) && currentAdmins.includes(g));
+    const protectedGuids = await protectedStaffGuids(stripCandidates);
+    const plan = planAdmins({ currentAdmins, previouslyOwned, desiredGuids, protectedGuids });
+    for (const [g, why] of protectedGuids) console.log(`[admins-sync] ${server.id} kept ${g}: ${why}`);
 
     // No-op if nothing actually changed.
-    const sameSet = newAdmins.length === currentAdmins.length
-      && newAdmins.every(g => currentAdmins.includes(g));
-    const prevMatches = previouslyOwned.size === desiredGuids.size
-      && [...desiredGuids].every(g => previouslyOwned.has(g));
-    if (sameSet && prevMatches) {
+    const sameSet = plan.newAdmins.length === currentAdmins.length
+      && plan.newAdmins.every(g => currentAdmins.includes(g));
+    const ownedMatches = plan.newOwned.size === previouslyOwned.size
+      && [...plan.newOwned].every(g => previouslyOwned.has(g));
+    if (sameSet && ownedMatches) {
       return;
     }
 
-    config.game.admins = newAdmins;
+    config.game.admins = plan.newAdmins;
     let res;
     try {
       res = await casWriteConfig(conn, server, config, hash);
@@ -352,12 +421,55 @@ async function patchServerAdmins(conn, server, desiredGuids) {
       ON CONFLICT(server_id) DO UPDATE SET
         previously_owned_json = excluded.previously_owned_json,
         updated_at = excluded.updated_at
-    `).run(server.id, JSON.stringify([...desiredGuids]));
+    `).run(server.id, JSON.stringify([...plan.newOwned]));
 
-    console.log(`[admins-sync] ${server.id} game.admins ${currentAdmins.length} -> ${newAdmins.length} (shop-owned: ${desiredGuids.size})`);
+    for (const g of plan.strip) console.log(`[admins-sync] ${server.id} stripped ${g} (priority queue lapsed)`);
+    for (const g of plan.released) console.log(`[admins-sync] ${server.id} released claim on ${g}`);
+    console.log(`[admins-sync] ${server.id} game.admins ${currentAdmins.length} -> ${plan.newAdmins.length} (+${plan.add.length} -${plan.strip.length}, shop-owned: ${plan.newOwned.size})`);
     return;
   }
   console.error(`[admins-sync] ${server.id} game.admins CAS conflict — retries exhausted, will retry next sync`);
+}
+
+// What the next admins sync would do to each server, without writing anything.
+// The admin endpoint behind it is how a change to the rules above is checked
+// against the real lists before it is trusted.
+async function previewAdminsSync() {
+  const servers = listServers();
+  const privateKey = getPrivateKey();
+  if (!privateKey) throw new Error('SSH_PRIVATE_KEY_B64 not set');
+  const entryHost = servers.find(s => s.region === 'eu') || servers[0];
+  if (!entryHost) throw new Error('No game servers configured');
+  const pqGuids = buildPriorityQueueGuidsPerServer();
+  const conn = await sshOpen(privateKey, entryHost.host, entryHost.port, entryHost.user);
+  const out = [];
+  try {
+    for (const server of servers) {
+      const desiredGuids = pqGuids[server.id] || new Set();
+      const previouslyOwned = readPreviouslyOwned(server.id);
+      let read = null;
+      try { read = await readConfigWithHash(conn, server); } catch (e) { out.push({ server: server.id, error: e.message }); continue; }
+      const currentAdmins = read && Array.isArray(read.config.game && read.config.game.admins) ? read.config.game.admins : [];
+      const stripCandidates = [...previouslyOwned].filter(g => !desiredGuids.has(g) && currentAdmins.includes(g));
+      const protectedGuids = await protectedStaffGuids(stripCandidates);
+      const plan = planAdmins({ currentAdmins, previouslyOwned, desiredGuids, protectedGuids });
+      out.push({
+        server: server.id,
+        currentAdmins: currentAdmins.length,
+        desired: desiredGuids.size,
+        ownedBefore: previouslyOwned.size,
+        ownedAfter: plan.newOwned.size,
+        wouldAdd: plan.add,
+        wouldStrip: plan.strip,
+        wouldRelease: plan.released,
+        protected: [...protectedGuids].map(([guid, why]) => ({ guid, why })),
+        changes: plan.add.length + plan.strip.length > 0
+      });
+    }
+  } finally {
+    conn.end();
+  }
+  return out;
 }
 
 // Coalescing guard. Every caller is fire-and-forget, and a purchase can easily
@@ -1227,5 +1339,5 @@ module.exports = {
   // doctor's parity checks and the nightly backup's copy to the NA box) so
   // there is exactly one way the shop talks to a game host.
   sshOpen, sshRun, getPrivateKey, wrapForRegion, hostKeyFingerprint, PINNED_FINGERPRINTS, SSH_STRICT,
-  buildPerServerPurchaseBuckets,
+  buildPerServerPurchaseBuckets, planAdmins, previewAdminsSync, protectedStaffGuids,
   syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };

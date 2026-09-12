@@ -3644,6 +3644,90 @@ async function reconcileLapsedDiscordRoles(opts) {
   return summary;
 }
 
+// The grant side. Reconcile above only ever removes, so a role deleted by hand,
+// or lost when the guild's roles were recreated (2026-08-19), stayed missing
+// until a player opened a ticket. This gives it back to anyone who is entitled,
+// linked and still in the guild. Unlinked players and those who left are the
+// owner's reactive policy and are not chased. Capped per run so a bad day
+// cannot become a role storm; every grant lands in discord_role_events.
+async function healMissingDiscordRoles(opts) {
+  const { dryRun = false, max = 25 } = opts || {};
+  const rows = db.prepare(`
+    SELECT DISTINCT u.discord_id AS user_id, p.discord_role_id AS role_id,
+           u.persona, p.title AS product_title
+    FROM orders o
+    JOIN products p ON p.id = o.product_id
+    JOIN users u    ON u.steam_id = o.steam_id
+    WHERE o.status = 'completed'
+      AND p.discord_role_id IS NOT NULL
+      AND u.discord_id IS NOT NULL AND u.discord_id != ''
+      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
+  `).all();
+  const summary = { entitled: rows.length, held: 0, missing: 0, granted: 0, notInGuild: 0, skipped: 0, errors: 0, dryRun, details: [] };
+  const byUser = new Map();
+  for (const r of rows) {
+    if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
+    byUser.get(r.user_id).push(r);
+  }
+  for (const [userId, pairs] of byUser) {
+    let held;
+    try {
+      held = await discord.getMemberRoleIds(userId);
+    } catch (e) {
+      summary.errors++;
+      console.error('[roles-heal] lookup failed for %s: %s', userId, e.message);
+      continue;
+    }
+    if (held === null) { summary.notInGuild += pairs.length; continue; }
+    for (const r of pairs) {
+      if (held.includes(String(r.role_id))) { summary.held++; continue; }
+      summary.missing++;
+      summary.details.push({ userId, roleId: r.role_id, persona: r.persona, product: r.product_title });
+      if (dryRun) continue;
+      if (summary.granted >= max) { summary.skipped++; continue; }
+      try {
+        await discord.assignRole(userId, r.role_id, `daily-heal:${r.product_title || r.role_id}`);
+        summary.granted++;
+        console.log('[roles-heal] granted %s to %s (%s)', r.product_title, r.persona || userId, userId);
+      } catch (e) {
+        summary.errors++;
+        console.error('[roles-heal] grant failed for %s/%s: %s', userId, r.role_id, e.message);
+      }
+      await new Promise(res => setTimeout(res, 1100));
+    }
+    await new Promise(res => setTimeout(res, 120));
+  }
+  return summary;
+}
+
+router.get('/api/shop/admin/role-heal', requireAdmin, async (req, res) => {
+  try {
+    res.json({ preview: await healMissingDiscordRoles({ dryRun: true }) });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+router.post('/api/shop/admin/role-heal', requireAdmin, async (req, res) => {
+  const max = Math.min(100, Math.max(1, parseInt(req.body && req.body.max, 10) || 25));
+  try {
+    res.json({ result: await healMissingDiscordRoles({ dryRun: false, max }) });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// What the next game.admins sync would add, strip, keep for staff and release,
+// per server, without writing. Read this before trusting a change to the
+// ownership rules in sync.js.
+router.get('/api/shop/admin/admins-sync/preview', requireAdmin, async (req, res) => {
+  try {
+    res.json({ servers: await require('../sync').previewAdminsSync() });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 let roleReconcileState = { running: false, startedAt: null, finishedAt: null, summary: null, error: null };
 
 function startRoleReconcile(opts) {
@@ -4164,4 +4248,4 @@ async function dispatchPayPalEvent(event, resource, orderId) {
   }
 }
 
-module.exports = { router, webhookHandler, registerPayPalWebhooks, requireAdmin };
+module.exports = { router, webhookHandler, registerPayPalWebhooks, requireAdmin, healMissingDiscordRoles };

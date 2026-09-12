@@ -120,6 +120,20 @@ async function runBackup({ reason = 'manual' } = {}) {
   }
   const off = Object.entries(status.offsite).map(([k, v]) => `${k}=${v.ok ? 'ok' : 'FAILED'}`).join(' ');
   console.log(`[backup] ${status.ok ? 'done' : 'FAILED'} (${reason}) ${status.file ? path.basename(status.file) : ''} ${status.bytes} bytes ${off}${status.errors.length ? ' errors: ' + status.errors.join('; ') : ''}`);
+  // A backup that did not land everywhere is worth a red card the same night,
+  // not a line in a log nobody reads until the day it matters.
+  if (!status.ok || status.errors.length) {
+    try {
+      const { postCard, COLORS } = require('./lib/discordCard');
+      await postCard({
+        title: status.ok ? 'Shop backup: offsite copy failed' : 'Shop backup FAILED',
+        color: COLORS.red,
+        description: status.errors.join('\n').slice(0, 1500) || 'no detail',
+        fields: [{ name: 'Local snapshot', value: status.file ? `${path.basename(status.file)} (${status.bytes} bytes)` : 'not written', inline: true }, { name: 'Run', value: reason, inline: true }],
+        footer: 'npm run backup to retry · npm run doctor for the full picture'
+      });
+    } catch { /* best effort */ }
+  }
   return status;
 }
 

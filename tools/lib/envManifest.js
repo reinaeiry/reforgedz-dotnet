@@ -38,6 +38,7 @@ const VARS = [
   { name: 'DISCORD_GUILD_ID', group: 'Discord', doc: 'The ReforgedZ guild. Defaults to the live guild in code.', example: '1352364195211120660' },
   { name: 'DISCORD_WEBHOOK_URL', group: 'Discord', required: true, secret: true, outbound: true, doc: 'The "ReforgedZ Payments" webhook into #Payment-Processor. Purchase, refund and subscription cards go through it.', example: '' },
   { name: 'DISCORD_PAYMENT_CHANNEL_ID', group: 'Discord', doc: 'Channel for billing alerts posted as the bot. Defaults to #Payment-Processor in code; point it at a test channel on a non-production copy.', example: '' },
+  { name: 'STAFF_DISCORD_ROLE_IDS', group: 'Discord', doc: 'Comma-separated role ids of staff (Founder, admins, Gamemasters). A player holding one is never removed from a server\'s game.admins by the shop, even after their priority queue lapses. Defaults to the ticket bot\'s staff roles in code.', example: '' },
 
   // ---- Game servers ---------------------------------------------------------
   { name: 'SSH_PRIVATE_KEY_B64', group: 'Game servers', required: true, secret: true, outbound: true, doc: 'base64 of the private key that logs in as GAME_SERVER_EU_USER on GAME_SERVER_EU_HOST. Its public half must be in that user\'s authorized_keys. NA is reached from the EU host with the EU host\'s own key.', example: '' },

@@ -1201,3 +1201,10 @@ try {
 } catch (e) {
   console.error('[backup] could not schedule:', e.message);
 }
+// The morning health card in #Payment-Processor (tools/healthReport.js): heals
+// missing entitlement roles, runs the deep doctor, posts one embed.
+try {
+  require('./tools/healthReport').scheduleDailyHealth();
+} catch (e) {
+  console.error('[health] could not schedule:', e.message);
+}

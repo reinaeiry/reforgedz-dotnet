@@ -293,8 +293,10 @@ check('sync.recent', 'game servers', { offline: true }, async () => withDb((db) 
   const row = db.prepare('SELECT MAX(updated_at) AS t, COUNT(*) AS n FROM config_admin_sync_state').get();
   if (!row || !row.t) return warn('no sync has recorded state yet');
   const age = Date.now() - row.t * 1000;
+  // The periodic sync is every 10 minutes and a run takes up to a minute;
+  // a boot resets the timer, so allow two missed ticks before worrying.
   if (age > 60 * 60000) return fail(`last successful admins sync ${mins(age)} ago (${row.n} servers); the 10-minute timer is not running`);
-  if (age > 15 * 60000) return warn(`last successful admins sync ${mins(age)} ago`);
+  if (age > 25 * 60000) return warn(`last successful admins sync ${mins(age)} ago`);
   return ok(`last successful admins sync ${mins(age)} ago across ${row.n} servers`);
 }));
 
