@@ -4426,6 +4426,20 @@ async function dispatchPayPalEvent(event, resource, orderId) {
           mail.catch(e => console.error('[cancel-mail] send failed:', e.message));
         }
       }
+
+      // A suspended agreement is limbo. PayPal has stopped billing it, but the
+      // agreement still exists and only the merchant could ever revive it --
+      // which contradicts what the card, the email and the account page all
+      // tell the player: this one cannot be restarted, start a new one. Close
+      // it at PayPal so the state matches the promise, nothing can quietly
+      // resume billing months later, and "suspended" stops being a state
+      // anyone has to reason about. No money is given up: PayPal does not
+      // collect an outstanding balance on a suspended agreement either.
+      if (endedReason === 'suspended') {
+        paypal.cancelSubscription(!!(ctx && ctx.test_mode), subId, 'Closed automatically after PayPal stopped retrying failed payments')
+          .then(() => console.log(`[paypal] suspended agreement ${subId} closed`))
+          .catch(e => console.error(`[paypal] could not close suspended agreement ${subId}: ${e.message}`));
+      }
       break;
     }
 

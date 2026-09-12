@@ -68,7 +68,17 @@ async function getAccessToken(testMode) {
   return data.access_token;
 }
 
-async function ppFetch(testMode, path, { method = 'GET', body, headers } = {}) {
+// PayPal rate-limits hard, and gets slow while doing it, so the 12s client
+// timeout above starts cascading once a 429 lands. A 429 means the request was
+// REJECTED rather than processed, so retrying it is safe for any method.
+// Without this, anything that walks a few hundred subscriptions loses a chunk
+// of them to transient failures: it is how the first sweep of suspended
+// agreements silently under-reported, and the billing rescan and the doctor
+// make calls at the same volume.
+const RATE_LIMIT_ATTEMPTS = 4;
+const RATE_LIMIT_MAX_WAIT_MS = 30_000;
+
+async function ppFetch(testMode, path, { method = 'GET', body, headers } = {}, attempt = 0) {
   const token = await getAccessToken(testMode);
   const res = await fetchWithTimeout(`${apiBase(testMode)}${path}`, {
     method,
@@ -79,6 +89,14 @@ async function ppFetch(testMode, path, { method = 'GET', body, headers } = {}) {
     },
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
+  if (res.status === 429 && attempt < RATE_LIMIT_ATTEMPTS) {
+    const hdr = parseFloat(res.headers.get('retry-after') || '');
+    let waitMs = isFinite(hdr) ? hdr * 1000 : 2 ** attempt * 1000;
+    waitMs = Math.min(Math.max(waitMs, 500), RATE_LIMIT_MAX_WAIT_MS);
+    console.warn('[paypal] 429 on %s, waiting %dms (attempt %d/%d)', path, Math.round(waitMs), attempt + 1, RATE_LIMIT_ATTEMPTS);
+    await new Promise((r) => setTimeout(r, waitMs));
+    return ppFetch(testMode, path, { method, body, headers }, attempt + 1);
+  }
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* non-json */ }

@@ -9,6 +9,8 @@
     "backup": "node tools/backup.js",
     "pack": "node tools/pack.js",
     "restore": "node tools/restore.js",
+    "health": "node tools/healthReport.js",
+    "close-suspended": "node tools/closeSuspendedSubscriptions.js",
     "env:example": "node tools/envExample.js"
   },
   "dependencies": {
