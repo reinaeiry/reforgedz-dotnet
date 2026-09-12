@@ -3032,13 +3032,18 @@ router.get('/auth/discord/link', discordOAuthLimiter, (req, res) => {
   if (!discordOAuthConfigured()) return res.redirect(next + (next.includes('?') ? '&' : '?') + 'discord=unavailable');
   const state = crypto.randomBytes(24).toString('hex');
   req.session.discordLink = { state, next, at: Date.now() };
+  // No `prompt` parameter on purpose, so Discord uses its default and always
+  // shows the approval screen. `prompt=none` only skips that screen for a user
+  // who has ALREADY approved this application; a first-time linker -- which is
+  // every player, since this application is new -- comes straight back with an
+  // error instead of a code. A returning player seeing the screen again is a
+  // far smaller cost than nobody being able to link at all.
   const params = new URLSearchParams({
     client_id: process.env.DISCORD_CLIENT_ID,
     response_type: 'code',
     redirect_uri: discordRedirectUri(),
     scope: 'identify',
-    state,
-    prompt: 'none'
+    state
   });
   res.redirect('https://discord.com/oauth2/authorize?' + params.toString());
 });
