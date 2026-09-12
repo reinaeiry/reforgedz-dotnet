@@ -1177,6 +1177,11 @@ img { display: block; max-width: 100%; }
 .role-support::before   { background: #ca8a04; }
 .role-wiki::before      { background: #9ca3af; }
 .role-mod::before       { background: #9ca3af; }
+.role-admin::before          { background: #a855f7; }
+.role-senior-admin::before   { background: #d946ef; }
+.role-global-admin::before   { background: #06b6d4; }
+.role-regional-admin::before { background: #f59e0b; }
+.role-trial-admin::before    { background: #14b8a6; }
 
 /* Accent bar color = primary role color */
 .bar-founder   { border-left-color: #cc1f1f; }
@@ -1191,6 +1196,10 @@ img { display: block; max-width: 100%; }
 .bar-support   { border-left-color: #ca8a04; }
 .bar-wiki      { border-left-color: #9ca3af; }
 .bar-mod       { border-left-color: #9ca3af; }
+.bar-senior-admin   { border-left-color: #d946ef; }
+.bar-global-admin   { border-left-color: #06b6d4; }
+.bar-regional-admin { border-left-color: #f59e0b; }
+.bar-trial-admin    { border-left-color: #14b8a6; }
 .bar-hof       { border-left-color: #555; opacity: 0.7; }
 
 /* Mod list */
