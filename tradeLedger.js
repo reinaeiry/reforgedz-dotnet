@@ -60,6 +60,15 @@ const insertMany = db.transaction((rows) => {
 function num(v) { const n = Number(v); return Number.isFinite(n) ? Math.trunc(n) : 0; }
 function str(v) { return v == null ? '' : String(v); }
 
+// MOD_ETraderCategory.CURRENCY: the Money Exchange sells caps notes for caps. Those
+// trades move no value in or out of the economy, so they stay in the ledger but
+// count as neither income nor spend -- otherwise every exchanger looks like a whale.
+const CURRENCY_CATEGORY = 67108864;
+function isCurrency(ev) { return ev.cat != null && num(ev.cat) === CURRENCY_CATEGORY; }
+
+// Rows ingested before this rule existed get repaired once on boot (idempotent).
+db.prepare('UPDATE trade_events SET income = 0, spend = 0, tax = 0 WHERE category = ? AND (income <> 0 OR spend <> 0 OR tax <> 0)').run(CURRENCY_CATEGORY);
+
 // One ledger line -> one or two trade_events rows.
 function rowsFromLedgerEvent(serverId, ev) {
   if (!ev || typeof ev !== 'object') return [];
@@ -87,11 +96,13 @@ function rowsFromLedgerEvent(serverId, ev) {
         income: 0, spend: base.gross, tax: 0, cp_uid: uid, cp_name: name },
     ];
   }
+  const neutral = isCurrency(ev);
+  if (neutral) base.tax = 0;
   if (ev.op === 'SELL') {
-    return [{ ...base, dedupe_key: key, op: 'SELL', uid, player_name: name, player_key: playerKey(uid, name), income: base.net, spend: 0 }];
+    return [{ ...base, dedupe_key: key, op: 'SELL', uid, player_name: name, player_key: playerKey(uid, name), income: neutral ? 0 : base.net, spend: 0 }];
   }
   if (ev.op === 'BUY') {
-    return [{ ...base, dedupe_key: key, op: 'BUY', uid, player_name: name, player_key: playerKey(uid, name), income: 0, spend: base.net }];
+    return [{ ...base, dedupe_key: key, op: 'BUY', uid, player_name: name, player_key: playerKey(uid, name), income: 0, spend: neutral ? 0 : base.net }];
   }
   return [];
 }
