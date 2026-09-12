@@ -384,10 +384,11 @@ function setWikiHeaders(res) {
   for (const [name, value] of Object.entries(WIKI_HEADERS)) res.setHeader(name, value);
   res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
 }
+// _headers is build metadata, not a page: the general static handler further down would otherwise serve it.
+app.get('/wiki/_headers', (req, res) => { setWikiHeaders(res); res.status(404).sendFile(path.join(WIKI_DIR, '404.html')); });
 const wikiStatic = express.static(WIKI_DIR, { index: 'index.html', redirect: true, maxAge: 0, setHeaders: setWikiHeaders });
 app.use('/wiki', (req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-  if (/^\/_headers$/i.test(req.path)) return next();   // build metadata, not a page
   wikiStatic(req, res, () => {
     // Nothing on disk for this path: the wiki's own 404 page, with the wiki's headers.
     setWikiHeaders(res);
