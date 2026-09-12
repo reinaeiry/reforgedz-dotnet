@@ -8,7 +8,8 @@
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <!-- unpkg is the only script CDN the site's Content-Security-Policy allows (server.js) -->
+  <script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js"></script>
   <style>
     :root {
       --si-bg:#0b0b0e; --si-card:#15151b; --si-card2:#101015; --si-line:#26262e; --si-mut:#8e8e98; --si-red:#cc1f1f;
@@ -250,13 +251,20 @@
     }
 
     // ---- charts ----
-    Chart.defaults.color = COL.muted;
-    Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
-    Chart.defaults.font.size = 11;
+    // Tables must still render if the chart library is blocked or offline
+    const HAS_CHART = typeof Chart !== 'undefined';
+    if (HAS_CHART) {
+      Chart.defaults.color = COL.muted;
+      Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+      Chart.defaults.font.size = 11;
+    }
     const charts = {};
     function mk(id, cfg) {
+      const el = $(id);
+      if (!el) return;
+      if (!HAS_CHART) { el.parentNode.innerHTML = '<div class="si-note">Chart library did not load (blocked?). Data is in the tables.</div>'; return; }
       if (charts[id]) charts[id].destroy();
-      charts[id] = new Chart($(id).getContext('2d'), cfg);
+      charts[id] = new Chart(el.getContext('2d'), cfg);
     }
     const baseScales = (yFmt) => ({
       x: { grid: { display:false }, border: { color: COL.grid }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
