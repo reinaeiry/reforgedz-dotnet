@@ -7,6 +7,12 @@ node_modules/
 *.db-shm
 *.db-journal
 uploads/
+# Nightly snapshots and migration packs hold customer data — never commit.
+backups/
+packs/
+*.tar.gz
+data/
+.env.rehearsal
 
 # Infrastructure credentials — NEVER commit. Real secrets live here, local-only.
 secrets/

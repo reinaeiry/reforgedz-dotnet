@@ -1,0 +1,35 @@
+# The shop on a plain Docker host: the app plus a Cloudflare tunnel connector.
+#
+#   cp .env.example .env            (or restore a pack: docs/MIGRATION.md)
+#   mkdir -p data && sudo chown -R 1000:1000 data
+#   TUNNEL_TOKEN=... GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build
+#
+# In Zero Trust the tunnel's published route for reforgedz.net (and wifi.)
+# points at http://shop:3000, the service name on this compose network.
+# Nothing is published on the host; only the tunnel reaches the app.
+services:
+  shop:
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: reforgedz-shop:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      PORT: "3000"
+    volumes:
+      - ./data:/data
+    expose:
+      - "3000"
+    stop_grace_period: 20s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN to the tunnel's token from Zero Trust}
+    depends_on:
+      - shop

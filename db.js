@@ -1,7 +1,9 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const db = new Database(path.join(__dirname, 'shop.db'));
+const { dataPath } = require('./dataDir');
+
+const db = new Database(dataPath('shop.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 // Disable SQLite's auto-rewriting of foreign-key references in dependent

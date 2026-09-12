@@ -11,7 +11,8 @@ const session = require('express-session');
 // logins reset once on cutover, which is expected.
 const SqliteStore = require('better-sqlite3-session-store')(session);
 const Database = require('better-sqlite3');
-const sessionDb = new Database(path.join(__dirname, 'sessions-store.db'));
+const { dataPath } = require('./dataDir');
+const sessionDb = new Database(dataPath('sessions-store.db'));
 sessionDb.pragma('journal_mode = WAL');
 const passport = require('passport');
 const SteamStrategy = require('passport-steam').Strategy;
@@ -299,7 +300,7 @@ app.use((req, res, next) => {
 // Counts only -- no IPs, no user agents, nothing personal. Same file pattern as
 // radio-stats.json. Registered BEFORE express.static, which would otherwise serve
 // /downloads/* first and the count would never happen.
-const ngStatsFile = path.join(__dirname, 'nattiiguard-stats.json');
+const ngStatsFile = dataPath('nattiiguard-stats.json');
 let ngStats = { total: 0, byDay: {}, updates: 0 };
 try { ngStats = { updates: 0, ...JSON.parse(fs.readFileSync(ngStatsFile, 'utf8')) }; } catch {}
 
@@ -808,7 +809,7 @@ function loadAllTracks() {
 
 trackCache = loadAllTracks();
 
-const statsFile = path.join(__dirname, 'radio-stats.json');
+const statsFile = dataPath('radio-stats.json');
 let listenStats = { plays: {}, totalSeconds: 0 };
 
 try {
@@ -1192,3 +1193,11 @@ process.on('uncaughtException', (err) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`ReforgedZ.net running on port ${PORT}`);
 });
+
+// Nightly database snapshot, kept here and copied off the box (tools/backup.js).
+// Lives in the app so there is no cron entry to forget on a new host.
+try {
+  require('./tools/backup').scheduleNightlyBackups();
+} catch (e) {
+  console.error('[backup] could not schedule:', e.message);
+}

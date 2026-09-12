@@ -4,7 +4,12 @@
   "description": "ReforgedZ.net - Arma Reforger DayZ-inspired modded server",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "doctor": "node tools/doctor.js",
+    "backup": "node tools/backup.js",
+    "pack": "node tools/pack.js",
+    "restore": "node tools/restore.js",
+    "env:example": "node tools/envExample.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",

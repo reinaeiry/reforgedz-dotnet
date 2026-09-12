@@ -1,0 +1,19 @@
+# Never bake state or secrets into the image; they live on the /data volume
+# and in the env file.
+.git
+node_modules
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+uploads/
+backups/
+packs/
+data/
+*.tar.gz
+.cache
+.npm
+*.bak.*
+shop.db.*

@@ -1,0 +1,20 @@
+# A restored copy that can never charge, email, message or touch a game server.
+# Pair with the .env.rehearsal that `npm run restore -- --rehearsal` writes:
+#
+#   docker compose -f compose.yaml -f compose.rehearsal.yaml up -d --build shop
+#   docker compose -f compose.yaml -f compose.rehearsal.yaml exec shop npm run doctor
+#   open http://localhost:3010/shop
+#
+# No tunnel, bound to localhost only.
+services:
+  shop:
+    env_file: .env.rehearsal
+    environment:
+      PORT: "3010"
+      SHOP_REHEARSAL: "1"
+    ports:
+      - "127.0.0.1:3010:3010"
+    volumes:
+      - ./data-rehearsal:/data
+  cloudflared:
+    profiles: ["never"]

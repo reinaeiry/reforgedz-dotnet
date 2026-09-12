@@ -30,7 +30,7 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 // Uploads live outside public/ (not statically servable) since flag
 // submissions aren't meant to be publicly browsable by URL guessing —
 // staff view them via the admin endpoint below or the Discord post.
-const CUSTOM_FLAG_UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'custom-flags');
+const CUSTOM_FLAG_UPLOAD_DIR = require('../dataDir').dataPath('uploads', 'custom-flags');
 fs.mkdirSync(CUSTOM_FLAG_UPLOAD_DIR, { recursive: true });
 const CUSTOM_FLAG_MAX_BYTES = 16 * 1024 * 1024;
 const CUSTOM_FLAG_MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg' };
@@ -414,6 +414,13 @@ router.get('/api/shop/products', (req, res) => {
 // Payment provider config (PayPal). The redirect flow means the browser
 // doesn't need a client token — it just follows the approve URL we return
 // from /checkout. Kept for the frontend to know the provider + env.
+// Which commit is serving this domain. The doctor compares it with the
+// checkout it runs from, which is how a half-finished move shows itself.
+router.get('/api/shop/version', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ sha: require('../tools/lib/version').gitSha(), node: process.version });
+});
+
 router.get('/api/shop/config', (req, res) => {
   const testMode = req.query.test === '1';
   res.json({
@@ -3421,6 +3428,25 @@ router.post('/api/shop/admin/billing-issues/rescan', requireAdmin, (req, res) =>
     return res.status(409).json({ error: 'A rescan is already running', startedAt: state.startedAt });
   }
   res.json({ ok: true, started: true, emailPlayers });
+});
+
+// ---- Doctor -----------------------------------------------------------------
+
+// Every integration checked read-only (tools/doctor.js). ?deep=1 also compares
+// each server's purchases.json and game.admins with the database and walks the
+// owed Discord roles, which takes about a minute. Single-flight: a second call
+// while one runs gets the same report.
+let doctorInFlight = null;
+router.get('/api/shop/admin/doctor', requireAdmin, async (req, res) => {
+  const deep = String(req.query.deep || '') === '1';
+  try {
+    if (!doctorInFlight) {
+      doctorInFlight = require('../tools/doctor').runDoctor({ deep }).finally(() => { doctorInFlight = null; });
+    }
+    res.json(await doctorInFlight);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ---- Player account summary -------------------------------------------------

@@ -1222,4 +1222,10 @@ async function getSaveDbCopyStatus(jobId) {
   return { found: true, done: !!mark, ok, message: mark, logTail, from: job.from, to: job.to, startedAt: job.startedAt };
 }
 
-module.exports = { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };
+module.exports = {
+  // SSH plumbing and the entitlement builders are shared with tools/ (the
+  // doctor's parity checks and the nightly backup's copy to the NA box) so
+  // there is exactly one way the shop talks to a game host.
+  sshOpen, sshRun, getPrivateKey, wrapForRegion, hostKeyFingerprint, PINNED_FINGERPRINTS, SSH_STRICT,
+  buildPerServerPurchaseBuckets,
+  syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };

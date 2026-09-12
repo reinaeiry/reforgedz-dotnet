@@ -240,6 +240,16 @@ async function syncWebhookEvents(testMode, webhookId, desired) {
   }
 }
 
+// Read-only views for the doctor: what PayPal has registered, and for which events.
+async function listWebhooks(testMode) {
+  const list = await ppFetch(testMode, '/v1/notifications/webhooks');
+  return (list && list.webhooks) || [];
+}
+
+async function getWebhook(testMode, webhookId) {
+  return ppFetch(testMode, `/v1/notifications/webhooks/${webhookId}`);
+}
+
 async function ensureWebhook(testMode, url) {
   if (!isConfigured(testMode)) return null;
   const list = await ppFetch(testMode, '/v1/notifications/webhooks').catch(() => null);
@@ -517,6 +527,9 @@ module.exports = {
   refundCapture,
   verifyWebhook,
   ensureWebhook,
+  listWebhooks,
+  getWebhook,
+  WEBHOOK_EVENTS,
   getBalance,
   listTransactions,
   listActiveSubscriptions,
