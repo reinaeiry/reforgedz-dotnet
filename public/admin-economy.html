@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ReforgedZ Economy | Admin</title>
+  <meta name="theme-color" content="#cc1f1f">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    :root {
+      --si-bg:#0b0b0e; --si-card:#15151b; --si-card2:#101015; --si-line:#26262e; --si-mut:#8e8e98; --si-red:#cc1f1f;
+      /* chart ink + series (dark-surface steps, dataviz reference palette) */
+      --ink:#f2f2f4; --ink2:#c3c2b7; --muted:#898781; --grid:#2c2c2a;
+      --c-income:#199e70; --c-spend:#d95926; --c-net:#3987e5; --c-tax:#c98500;
+    }
+    .si-page { padding: 84px 30px 60px; min-height: 100vh; background: var(--si-bg); color: #e9e9ec; max-width: none; margin: 0; font-family: 'Inter', system-ui, sans-serif; }
+    .si-top { display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:6px; }
+    .si-page h1 { font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 2.2rem; margin: 0; }
+    .si-sub { color: var(--si-mut); font-size: .82rem; margin-bottom: 18px; }
+    a.back { color: var(--si-mut); text-decoration: none; font-size: .82rem; }
+    .si-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    select, input[type=text], input[type=date], input[type=number] { background:#16161c; border:1px solid var(--si-line); color:#fff; padding:9px 12px; border-radius:9px; font-size:.9rem; font-family:inherit; }
+    input[type=text]{ min-width:220px; }
+    .si-btn { background:var(--si-red); color:#fff; border:none; padding:10px 16px; border-radius:9px; font-weight:600; cursor:pointer; font-size:.88rem; font-family:inherit; }
+    .si-btn.ghost { background:#222229; } .si-btn:disabled { opacity:.4; cursor:not-allowed; }
+    .si-tabs { display:flex; gap:6px; margin:16px 0 16px; flex-wrap:wrap; }
+    .si-tab { background:#16161c; border:1px solid var(--si-line); color:#b9b9c2; padding:9px 18px; border-radius:9px; cursor:pointer; font-weight:600; font-size:.85rem; }
+    .si-tab.active { background:var(--si-red); color:#fff; border-color:var(--si-red); }
+    .si-note { color:var(--si-mut); font-size:.82rem; margin:10px 0; }
+    .si-err { color:#ff6b6b; font-size:.85rem; margin:8px 0; }
+    .si-denied { padding:120px 30px; text-align:center; color:var(--si-mut); }
+    .chip { display:inline-block; font-size:.68rem; font-weight:600; padding:2px 8px; border-radius:6px; background:#23232c; color:#9aa0c0; margin-left:6px; vertical-align:middle; }
+    .chip.disc { background:#2a2438; color:#c3a8f0; }
+    .range { display:flex; gap:4px; }
+    .range .si-tab { padding:8px 12px; font-size:.8rem; }
+
+    .si-statrow{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:0 0 16px; }
+    .si-statcard{ background:linear-gradient(180deg,#17171f,#111116); border:1px solid var(--si-line); border-radius:11px; padding:12px 16px; }
+    .si-statcard .l{ color:var(--si-mut); font-size:.66rem; text-transform:uppercase; letter-spacing:.06em; }
+    .si-statcard .n{ font-family:'Oswald',sans-serif; font-size:1.7rem; font-weight:600; line-height:1.1; margin-top:4px; font-variant-numeric: tabular-nums; }
+    .si-statcard .s{ color:var(--si-mut); font-size:.72rem; margin-top:3px; }
+    .si-statcard.income .n{ color:var(--c-income); } .si-statcard.spend .n{ color:var(--c-spend); } .si-statcard.net .n{ color:var(--c-net); } .si-statcard.tax .n{ color:var(--c-tax); }
+
+    .si-card { background:var(--si-card); border:1px solid var(--si-line); border-radius:12px; margin-bottom:14px; overflow:hidden; }
+    .si-card h3 { margin:0; padding:12px 16px; font-size:.82rem; text-transform:uppercase; letter-spacing:.06em; color:#cfd0d6; border-bottom:1px solid var(--si-line); display:flex; align-items:center; gap:10px; }
+    .si-card h3 .sp { margin-left:auto; font-weight:400; text-transform:none; letter-spacing:0; color:var(--si-mut); font-size:.78rem; }
+    .chart { position:relative; height:280px; padding:12px 12px 8px; }
+    .chart.sm { height:200px; }
+    .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:14px; }
+
+    table.t { width:100%; border-collapse:collapse; font-size:.82rem; }
+    table.t th, table.t td { padding:8px 12px; border-bottom:1px solid #1c1c22; text-align:right; white-space:nowrap; font-variant-numeric: tabular-nums; }
+    table.t th { color:var(--si-mut); font-weight:600; font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; cursor:pointer; user-select:none; position:sticky; top:0; background:var(--si-card); }
+    table.t th.sorted { color:#fff; }
+    table.t th:first-child, table.t td:first-child { text-align:left; }
+    table.t td.txt { text-align:left; white-space:normal; }
+    table.t tr.click { cursor:pointer; } table.t tr.click:hover td { background:#1a1a22; }
+    table.t td.inc { color:var(--c-income); } table.t td.spd { color:var(--c-spend); }
+    table.t td.pos { color:var(--c-income); } table.t td.neg { color:var(--c-spend); }
+    .tw { max-height:640px; overflow:auto; }
+    .bar { display:inline-block; height:8px; border-radius:4px; background:var(--c-net); vertical-align:middle; margin-right:6px; opacity:.85; }
+    .bar.inc { background:var(--c-income); } .bar.spd { background:var(--c-spend); }
+    .panel-head { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--si-line); flex-wrap:wrap; }
+    .panel-head .name { font-family:'Oswald',sans-serif; font-size:1.4rem; }
+    .panel-head .id { font-family:ui-monospace,monospace; font-size:.72rem; color:var(--si-mut); }
+    .panel-head .x { margin-left:auto; }
+    .mono { font-family:ui-monospace,monospace; font-size:.74rem; color:var(--si-mut); }
+    pre.st { background:#101014; border:1px solid var(--si-line); border-radius:9px; padding:12px; font-size:.76rem; white-space:pre-wrap; color:#b9b9c2; margin:0; }
+    .pager { display:flex; gap:8px; align-items:center; padding:10px 14px; color:var(--si-mut); font-size:.8rem; }
+  </style>
+</head>
+<body>
+  <div class="si-page">
+    <div id="denied" class="si-denied" style="display:none">Admins only. <a class="back" href="/shop">← back</a></div>
+    <div id="content" style="display:none">
+      <div class="si-top">
+        <div><a class="back" href="/admin/orders">← Admin</a> · <a class="back" href="/admin/saves">Database</a><h1>ReforgedZ Economy</h1></div>
+        <div class="si-row">
+          <select id="server"><option value="">All servers</option></select>
+          <div class="range" id="range">
+            <span class="si-tab" data-days="1">Today</span>
+            <span class="si-tab active" data-days="7">7 days</span>
+            <span class="si-tab" data-days="30">30 days</span>
+            <span class="si-tab" data-days="90">90 days</span>
+            <span class="si-tab" data-days="0">All time</span>
+          </div>
+          <input type="date" id="from" title="From (UTC)"> <input type="date" id="to" title="To (UTC, inclusive)">
+          <button class="si-btn ghost" id="apply">Apply</button>
+          <button class="si-btn ghost" id="pull" title="Read the game servers' ledger files now (runs every 5 min anyway)">⟳ Pull now</button>
+        </div>
+      </div>
+      <div class="si-sub" id="sub">Every caps transaction from the traders and the player marketplace. Income = caps that went INTO players' pockets, spend = caps that left them.</div>
+      <div id="err" class="si-err"></div>
+
+      <div class="si-tabs" id="tabs">
+        <span class="si-tab active" data-tab="overview">Overview</span>
+        <span class="si-tab" data-tab="players">Players</span>
+        <span class="si-tab" data-tab="items">Items</span>
+        <span class="si-tab" data-tab="traders">Traders</span>
+        <span class="si-tab" data-tab="ledger">Ledger</span>
+        <span class="si-tab" data-tab="data">Data</span>
+      </div>
+
+      <!-- ================= OVERVIEW ================= -->
+      <div id="tab-overview">
+        <div class="si-statrow" id="ovTiles"></div>
+        <div class="grid2">
+          <div class="si-card"><h3>Caps flow per day <span class="sp">income vs spend</span></h3><div class="chart"><canvas id="chFlow"></canvas></div></div>
+          <div class="si-card"><h3>Net caps injected per day <span class="sp">income − spend (positive = economy gained caps)</span></h3><div class="chart"><canvas id="chNet"></canvas></div></div>
+        </div>
+        <div class="grid2">
+          <div class="si-card"><h3>Trades &amp; active players per day</h3><div class="chart sm"><canvas id="chActivity"></canvas></div></div>
+          <div class="si-card"><h3>Trades by hour <span class="sp">UTC</span></h3><div class="chart sm"><canvas id="chHour"></canvas></div></div>
+        </div>
+        <div class="grid2">
+          <div class="si-card"><h3>By category</h3><div class="tw"><table class="t" id="tCat"></table></div></div>
+          <div class="si-card"><h3>By server</h3><div class="tw"><table class="t" id="tSrv"></table></div></div>
+        </div>
+      </div>
+
+      <!-- ================= PLAYERS ================= -->
+      <div id="tab-players" style="display:none">
+        <div class="si-row" style="margin-bottom:12px">
+          <input type="text" id="plQ" placeholder="Search player name…">
+          <select id="plSort">
+            <option value="income">Sort: income</option><option value="spend">Sort: spend</option><option value="net">Sort: net</option>
+            <option value="trades">Sort: trades</option><option value="income_1d">Sort: income today</option><option value="income_7d">Sort: income 7d</option>
+            <option value="income_30d">Sort: income 30d</option><option value="spend_7d">Sort: spend 7d</option><option value="last_ts">Sort: last seen</option>
+          </select>
+          <select id="plLimit"><option value="100">Top 100</option><option value="250">Top 250</option><option value="1000">Top 1000</option></select>
+          <button class="si-btn ghost" id="plGo">Search</button>
+        </div>
+        <div class="si-note">Totals respect the server + date filter above. The <b>Today / 7d / 30d</b> columns are always rolling windows from now, whatever the range, so you can compare at a glance. Click a row to drill in.</div>
+        <div id="plPanel"></div>
+        <div class="si-card"><div class="tw"><table class="t" id="tPlayers"></table></div></div>
+      </div>
+
+      <!-- ================= ITEMS ================= -->
+      <div id="tab-items" style="display:none">
+        <div class="si-row" style="margin-bottom:12px">
+          <input type="text" id="itQ" placeholder="Search item name / prefab…">
+          <select id="itCat"><option value="">All categories</option></select>
+          <select id="itSort">
+            <option value="total">Sort: total caps</option><option value="sell_caps">Sort: caps paid to players (sold)</option><option value="sell_qty">Sort: qty sold</option>
+            <option value="sell_avg">Sort: avg sell price</option><option value="buy_caps">Sort: caps spent (bought)</option><option value="buy_qty">Sort: qty bought</option>
+            <option value="buy_avg">Sort: avg buy price</option><option value="players">Sort: distinct players</option><option value="last_ts">Sort: last traded</option>
+          </select>
+          <select id="itLimit"><option value="100">Top 100</option><option value="300">Top 300</option><option value="2000">All</option></select>
+          <button class="si-btn ghost" id="itGo">Search</button>
+        </div>
+        <div class="si-note"><b>Sold</b> = players selling TO traders / marketplace (caps out of the trader into the economy). <b>Bought</b> = players buying (caps sunk). Avg = caps ÷ qty over the range, so it tracks the live stock-drift price. Click a row to drill in.</div>
+        <div id="itPanel"></div>
+        <div class="si-card"><div class="tw"><table class="t" id="tItems"></table></div></div>
+      </div>
+
+      <!-- ================= TRADERS ================= -->
+      <div id="tab-traders" style="display:none">
+        <div class="si-note">Paid out = caps the trader handed to players (their sells). Taken in = caps players paid it. The marketplace shows as its own row.</div>
+        <div class="si-card"><div class="tw"><table class="t" id="tTraders"></table></div></div>
+      </div>
+
+      <!-- ================= LEDGER ================= -->
+      <div id="tab-ledger" style="display:none">
+        <div class="si-row" style="margin-bottom:12px">
+          <input type="text" id="lgQ" placeholder="Player or item contains…">
+          <select id="lgOp"><option value="">All ops</option><option value="SELL">SELL (to trader)</option><option value="BUY">BUY (from trader)</option><option value="MARKET_SELL">MARKET sale (seller)</option><option value="MARKET_BUY">MARKET sale (buyer)</option></select>
+          <button class="si-btn ghost" id="lgGo">Search</button>
+          <a class="si-btn ghost" id="lgCsv" href="#" style="text-decoration:none">⬇ Export CSV</a>
+        </div>
+        <div class="si-card"><div class="tw" style="max-height:900px"><table class="t" id="tLedger"></table></div><div class="pager"><button class="si-btn ghost" id="lgPrev">‹ Prev</button><span id="lgInfo"></span><button class="si-btn ghost" id="lgNext">Next ›</button></div></div>
+      </div>
+
+      <!-- ================= DATA ================= -->
+      <div id="tab-data" style="display:none">
+        <div class="grid2">
+          <div class="si-card"><h3>Ledger pull <span class="sp">game servers → shop.db, every 5 min</span></h3>
+            <div style="padding:14px 16px">
+              <div class="si-note" style="margin-top:0">The game servers append every trade to <code>profile/trade_ledger/trades-&lt;date&gt;.ndjson</code>. The shop tails those files over the save-inspector SSH channel and keeps a byte cursor per file, so nothing is ever double-counted.</div>
+              <div class="si-row"><button class="si-btn" id="pull2">⟳ Pull now</button><span id="pullMsg" class="si-note" style="margin:0"></span></div>
+              <pre class="st" id="stStatus" style="margin-top:12px">Loading…</pre>
+            </div>
+          </div>
+          <div class="si-card"><h3>Backfill from Discord <span class="sp">history before the ledger existed</span></h3>
+            <div style="padding:14px 16px">
+              <div class="si-note" style="margin-top:0">Reads the trade channel with the shop's Discord bot (it needs <b>View Channel</b> + <b>Read Message History</b> there) and parses every webhook line. Discord-era rows carry the name only — no UID, prefab or tax split — and are marked <span class="chip disc">discord</span>. Safe to re-run: duplicates are skipped.</div>
+              <div class="si-row">
+                <input type="text" id="dcChannel" placeholder="Discord channel ID (right-click channel → Copy ID)" style="min-width:320px">
+                <input type="number" id="dcDays" placeholder="Days back (blank = all)" min="1" style="width:190px">
+                <button class="si-btn" id="dcGo">Import</button>
+              </div>
+              <div id="dcErr" class="si-err"></div>
+              <pre class="st" id="stImport" style="margin-top:12px;display:none"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const CATS = { 0:'None', 1:'Weapons', 2:'Attachments', 4:'Ammo', 8:'Clothing', 16:'Backpacks', 32:'Food', 64:'Medical', 128:'Tools', 256:'Explosives', 512:'Gear', 1024:'Collectables', 2048:'Motorbikes', 4096:'Cars', 8192:'Vans', 16384:'Trucks', 32768:'Mil. vehicles', 65536:'Boats', 131072:'Helis', 262144:'Special', 524288:'Pistols', 1048576:'Shotguns', 2097152:'Melee', 4194304:'Assault rifles', 8388608:'Sniper rifles', 16777216:'LMGs', 33554432:'SMGs', 67108864:'Currency', 134217728:'Drugs', 268435456:'Base building', 536870912:'Vehicle parts', 1073741824:'Fishing' };
+    const catName = (c) => c == null ? '— (Discord era)' : (CATS[c] || ('cat ' + c));
+    const CSS = getComputedStyle(document.documentElement);
+    const COL = { income: CSS.getPropertyValue('--c-income').trim(), spend: CSS.getPropertyValue('--c-spend').trim(), net: CSS.getPropertyValue('--c-net').trim(), tax: CSS.getPropertyValue('--c-tax').trim(), muted: CSS.getPropertyValue('--muted').trim(), grid: CSS.getPropertyValue('--grid').trim(), ink2: CSS.getPropertyValue('--ink2').trim() };
+
+    function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    const nf = new Intl.NumberFormat('en-GB');
+    const fmt = (n) => n == null ? '—' : nf.format(Math.round(n));
+    const fmt1 = (n) => n == null ? '—' : nf.format(Math.round(n * 10) / 10);
+    const when = (ts) => ts ? new Date(ts*1000).toISOString().replace('T',' ').slice(0,16) + 'Z' : '—';
+    const ago = (ts) => { if(!ts) return '—'; const s=Math.floor(Date.now()/1000)-ts; if(s<3600) return Math.floor(s/60)+'m ago'; if(s<86400) return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago'; };
+    const signed = (n) => (n>0?'+':'') + fmt(n);
+    const pctOf = (n, max) => max > 0 ? Math.max(2, Math.round(100 * n / max)) : 0;
+
+    // ---- filters ----
+    let rangeDays = 7, customFrom = null, customTo = null;
+    function filterQS(extra = {}) {
+      const p = new URLSearchParams();
+      if ($('server').value) p.set('server', $('server').value);
+      let from = 0, to = 0;
+      if (customFrom || customTo) {
+        if (customFrom) from = Math.floor(Date.parse(customFrom + 'T00:00:00Z') / 1000);
+        if (customTo) to = Math.floor(Date.parse(customTo + 'T00:00:00Z') / 1000) + 86400;
+      } else if (rangeDays === 1) {
+        from = Math.floor(Date.now() / 1000 / 86400) * 86400;
+      } else if (rangeDays > 0) {
+        from = Math.floor(Date.now() / 1000) - rangeDays * 86400;
+      }
+      p.set('from', String(from));
+      if (to) p.set('to', String(to));
+      for (const [k, v] of Object.entries(extra)) if (v !== '' && v != null) p.set(k, v);
+      return p.toString();
+    }
+    async function api(path, extra) {
+      const r = await fetch(`/api/shop/admin/economy/${path}?${filterQS(extra)}`);
+      if (r.status === 403) { $('content').style.display='none'; $('denied').style.display='block'; throw new Error('denied'); }
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    }
+    async function post(path, body) {
+      const r = await fetch(`/api/shop/admin/economy/${path}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    }
+
+    // ---- charts ----
+    Chart.defaults.color = COL.muted;
+    Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+    Chart.defaults.font.size = 11;
+    const charts = {};
+    function mk(id, cfg) {
+      if (charts[id]) charts[id].destroy();
+      charts[id] = new Chart($(id).getContext('2d'), cfg);
+    }
+    const baseScales = (yFmt) => ({
+      x: { grid: { display:false }, border: { color: COL.grid }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+      y: { grid: { color: COL.grid }, border: { display:false }, ticks: { callback: (v) => yFmt ? yFmt(v) : fmt(v) }, beginAtZero: true }
+    });
+    const tooltip = { mode:'index', intersect:false, backgroundColor:'#1f1f27', titleColor:'#fff', bodyColor:COL.ink2, borderColor:'#33333d', borderWidth:1, padding:10, callbacks: { label: (c) => ` ${c.dataset.label}: ${fmt(c.parsed.y)}` } };
+    const legend = { position:'top', align:'end', labels: { boxWidth:10, boxHeight:10, usePointStyle:true, pointStyle:'circle', color: COL.ink2 } };
+    const lineDs = (label, data, color) => ({ label, data, borderColor: color, backgroundColor: color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHoverBorderWidth: 2, pointHoverBorderColor: '#15151b', tension: .25 });
+    const barDs = (label, data, color) => ({ label, data, backgroundColor: color, borderRadius: 4, borderSkipped: 'start', barPercentage: .8, categoryPercentage: .9 });
+
+    // ---- overview ----
+    async function loadOverview() {
+      const d = await api('summary');
+      const t = d.totals || {};
+      const net = (t.income||0) - (t.spend||0);
+      const days = Math.max(1, (d.daily||[]).length);
+      $('ovTiles').innerHTML = [
+        ['income', 'Player income', fmt(t.income), `sold to traders + market · ${fmt((t.income||0)/days)} / active day`],
+        ['spend', 'Player spend', fmt(t.spend), `bought from traders + market · ${fmt((t.spend||0)/days)} / active day`],
+        ['net', 'Net caps injected', signed(net), net >= 0 ? 'economy gained caps (inflation)' : 'economy lost caps (sink)'],
+        ['tax', 'Tax sunk', fmt(t.tax), 'humanity tax on buys, sells & market'],
+        ['', 'Trades', fmt(t.trades), `${fmt(t.market_sales)} marketplace · ${fmt((t.trades||0)/days)} / active day`],
+        ['', 'Active players', fmt(t.players), `${fmt((t.income||0)/Math.max(1,t.players||0))} income each on avg`],
+        ['', 'Items sold', fmt(t.sold_qty), 'units players sold'],
+        ['', 'Items bought', fmt(t.bought_qty), 'units players bought'],
+      ].map(([cls,l,n,s]) => `<div class="si-statcard ${cls}"><div class="l">${l}</div><div class="n">${n}</div><div class="s">${esc(s)}</div></div>`).join('');
+      if (t.discord_rows) $('sub').innerHTML = `Every caps transaction from the traders and the player marketplace. Income = caps INTO players' pockets, spend = caps out. <span class="chip disc">discord</span> ${fmt(t.discord_rows)} rows in this range come from the Discord backfill (name only, no tax split).`;
+
+      const labels = d.daily.map(r => r.day.slice(5));
+      mk('chFlow', { type:'line', data:{ labels, datasets:[ lineDs('Income', d.daily.map(r=>r.income), COL.income), lineDs('Spend', d.daily.map(r=>r.spend), COL.spend) ] },
+        options:{ responsive:true, maintainAspectRatio:false, interaction:{ mode:'index', intersect:false }, plugins:{ legend, tooltip }, scales: baseScales() } });
+      const nets = d.daily.map(r => (r.income||0)-(r.spend||0));
+      mk('chNet', { type:'bar', data:{ labels, datasets:[ { ...barDs('Net', nets, nets.map(v => v >= 0 ? COL.income : COL.spend)), borderSkipped:false } ] },
+        options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false }, tooltip:{ ...tooltip, callbacks:{ label:(c)=>` Net: ${signed(c.parsed.y)}` } } }, scales:{ ...baseScales(), y:{ ...baseScales().y, beginAtZero:false } } } });
+      mk('chActivity', { type:'bar', data:{ labels, datasets:[ barDs('Trades', d.daily.map(r=>r.trades), COL.net), barDs('Active players', d.daily.map(r=>r.players), COL.tax) ] },
+        options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend, tooltip }, scales: baseScales() } });
+      const hours = Array.from({length:24}, (_,h) => (d.byHour.find(r => r.hour === h) || {}).trades || 0);
+      mk('chHour', { type:'bar', data:{ labels: Array.from({length:24}, (_,h)=>String(h).padStart(2,'0')), datasets:[ barDs('Trades', hours, COL.net) ] },
+        options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false }, tooltip }, scales: baseScales() } });
+
+      const maxCat = Math.max(1, ...d.byCategory.map(r => (r.income||0)+(r.spend||0)));
+      $('tCat').innerHTML = `<tr><th>Category</th><th>Trades</th><th>Qty</th><th>Paid to players</th><th>Spent by players</th><th>Net</th><th>Share</th></tr>` +
+        d.byCategory.map(r => { const n=(r.income||0)-(r.spend||0); return `<tr class="click" onclick="goItemsCat(${r.category==null?"''":r.category})"><td>${esc(catName(r.category))}</td><td>${fmt(r.trades)}</td><td>${fmt(r.qty)}</td><td class="inc">${fmt(r.income)}</td><td class="spd">${fmt(r.spend)}</td><td class="${n>=0?'pos':'neg'}">${signed(n)}</td><td><span class="bar" style="width:${pctOf((r.income||0)+(r.spend||0), maxCat)}px"></span></td></tr>`; }).join('');
+      $('tSrv').innerHTML = `<tr><th>Server</th><th>Trades</th><th>Players</th><th>Paid to players</th><th>Spent by players</th><th>Net</th></tr>` +
+        d.byServer.map(r => { const n=(r.income||0)-(r.spend||0); return `<tr><td>${esc(r.server_id)}</td><td>${fmt(r.trades)}</td><td>${fmt(r.players)}</td><td class="inc">${fmt(r.income)}</td><td class="spd">${fmt(r.spend)}</td><td class="${n>=0?'pos':'neg'}">${signed(n)}</td></tr>`; }).join('');
+    }
+
+    // ---- players ----
+    async function loadPlayers() {
+      const d = await api('players', { q: $('plQ').value.trim(), sort: $('plSort').value, limit: $('plLimit').value });
+      const rows = d.rows || [];
+      const max = Math.max(1, ...rows.map(r => Math.max(r.income||0, r.spend||0)));
+      $('tPlayers').innerHTML = `<tr><th>Player</th><th>Servers</th><th>Trades</th><th>Income</th><th>Spend</th><th>Net</th><th>Income today</th><th>Income 7d</th><th>Income 30d</th><th>Spend 7d</th><th>Last trade</th></tr>` +
+        (rows.length ? rows.map(r => { const n=(r.income||0)-(r.spend||0); return `<tr class="click" onclick="openPlayer('${esc(r.player_key)}')">
+          <td>${esc(r.player_name)}${r.uid?'':'<span class="chip disc">discord</span>'}</td><td>${esc(r.servers)}</td><td>${fmt(r.trades)}</td>
+          <td class="inc"><span class="bar inc" style="width:${pctOf(r.income, max)}px"></span>${fmt(r.income)}</td>
+          <td class="spd"><span class="bar spd" style="width:${pctOf(r.spend, max)}px"></span>${fmt(r.spend)}</td>
+          <td class="${n>=0?'pos':'neg'}">${signed(n)}</td><td>${fmt(r.income_1d)}</td><td>${fmt(r.income_7d)}</td><td>${fmt(r.income_30d)}</td><td>${fmt(r.spend_7d)}</td><td title="${when(r.last_ts)}">${ago(r.last_ts)}</td></tr>`; }).join('')
+        : `<tr><td colspan="11" class="txt">No trades in this range.</td></tr>`);
+    }
+    async function openPlayer(key) {
+      $('plPanel').innerHTML = '<div class="si-note">Loading…</div>';
+      let d; try { d = await api('player', { key }); } catch (e) { $('plPanel').innerHTML = `<div class="si-err">${esc(e.message)}</div>`; return; }
+      const t = d.totals; const net = (t.income||0)-(t.spend||0);
+      const itemRows = (list, isSell) => list.length ? list.map(r => `<tr class="click" onclick="openItemFromPlayer('${esc(r.item_key)}')"><td class="txt">${esc(r.label)}</td><td>${esc(catName(r.category))}</td><td>${fmt(r.trades)}</td><td>${fmt(r.qty)}</td><td class="${isSell?'inc':'spd'}">${fmt(isSell?r.income:r.spend)}</td><td>${fmt1(r.avg_unit)}</td></tr>`).join('') : '<tr><td colspan="6" class="txt">—</td></tr>';
+      $('plPanel').innerHTML = `<div class="si-card">
+        <div class="panel-head"><span class="name">${esc(t.player_name)}</span><span class="id">${esc(t.uid || 'no UID (Discord era)')} · ${esc(t.servers)}</span><span class="mono">first ${when(t.first_ts)} · last ${when(t.last_ts)} · ${fmt(t.active_days)} active days</span><button class="si-btn ghost x" onclick="$('plPanel').innerHTML=''">✕ Close</button></div>
+        <div style="padding:14px 16px 0"><div class="si-statrow">
+          <div class="si-statcard income"><div class="l">Income</div><div class="n">${fmt(t.income)}</div><div class="s">${fmt((t.income||0)/Math.max(1,t.active_days))} per active day</div></div>
+          <div class="si-statcard spend"><div class="l">Spend</div><div class="n">${fmt(t.spend)}</div><div class="s">${fmt((t.spend||0)/Math.max(1,t.active_days))} per active day</div></div>
+          <div class="si-statcard net"><div class="l">Net</div><div class="n">${signed(net)}</div><div class="s">caps kept from trading</div></div>
+          <div class="si-statcard tax"><div class="l">Tax paid</div><div class="n">${fmt(t.tax)}</div><div class="s">humanity tax</div></div>
+          <div class="si-statcard"><div class="l">Trades</div><div class="n">${fmt(t.trades)}</div><div class="s">${fmt((t.trades||0)/Math.max(1,t.active_days))} per active day</div></div>
+        </div></div>
+        <div class="grid2" style="padding:0 16px">
+          <div class="si-card"><h3>Per day</h3><div class="chart sm"><canvas id="chPl"></canvas></div></div>
+          <div class="si-card"><h3>Per week / month</h3><div class="tw" style="max-height:200px"><table class="t"><tr><th>Period</th><th>Trades</th><th>Income</th><th>Spend</th><th>Net</th></tr>
+            ${d.monthly.map(r=>`<tr><td>${esc(r.month)}</td><td>${fmt(r.trades)}</td><td class="inc">${fmt(r.income)}</td><td class="spd">${fmt(r.spend)}</td><td class="${r.income-r.spend>=0?'pos':'neg'}">${signed(r.income-r.spend)}</td></tr>`).join('')}
+            ${d.weekly.map(r=>`<tr><td>${esc(r.week)} <span class="mono">from ${esc(r.from_day)}</span></td><td>${fmt(r.trades)}</td><td class="inc">${fmt(r.income)}</td><td class="spd">${fmt(r.spend)}</td><td class="${r.income-r.spend>=0?'pos':'neg'}">${signed(r.income-r.spend)}</td></tr>`).join('')}
+          </table></div></div>
+        </div>
+        <div class="grid2" style="padding:0 16px">
+          <div class="si-card"><h3>What they SELL <span class="sp">top 50 by caps earned</span></h3><div class="tw" style="max-height:320px"><table class="t"><tr><th>Item</th><th>Category</th><th>Trades</th><th>Qty</th><th>Caps earned</th><th>Avg / unit</th></tr>${itemRows(d.topSold, true)}</table></div></div>
+          <div class="si-card"><h3>What they BUY <span class="sp">top 50 by caps spent</span></h3><div class="tw" style="max-height:320px"><table class="t"><tr><th>Item</th><th>Category</th><th>Trades</th><th>Qty</th><th>Caps spent</th><th>Avg / unit</th></tr>${itemRows(d.topBought, false)}</table></div></div>
+        </div>
+        <div class="grid2" style="padding:0 16px">
+          <div class="si-card"><h3>Traders used</h3><div class="tw" style="max-height:260px"><table class="t"><tr><th>Trader</th><th>Trades</th><th>Paid them</th><th>Took from them</th></tr>${d.traders.map(r=>`<tr><td>${esc(r.trader)}</td><td>${fmt(r.trades)}</td><td class="inc">${fmt(r.income)}</td><td class="spd">${fmt(r.spend)}</td></tr>`).join('')}</table></div></div>
+          <div class="si-card"><h3>Recent trades <span class="sp">last 200</span></h3><div class="tw" style="max-height:260px"><table class="t"><tr><th>Time</th><th>Op</th><th>Item</th><th>Qty</th><th>Unit</th><th>Net caps</th><th>Trader</th></tr>${d.recent.map(r=>`<tr><td>${when(r.ts)}</td><td>${esc(r.op)}</td><td class="txt">${esc(r.label)}${r.cp_name?` <span class="mono">↔ ${esc(r.cp_name)}</span>`:''}</td><td>${fmt(r.qty)}</td><td>${fmt(r.unit_price)}</td><td class="${r.income?'inc':'spd'}">${r.income?'+'+fmt(r.income):'−'+fmt(r.spend)}</td><td>${esc(r.trader)}</td></tr>`).join('')}</table></div></div>
+        </div></div>`;
+      mk('chPl', { type:'bar', data:{ labels: d.daily.map(r=>r.day.slice(5)), datasets:[ barDs('Income', d.daily.map(r=>r.income), COL.income), barDs('Spend', d.daily.map(r=>r.spend), COL.spend) ] },
+        options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend, tooltip }, scales: baseScales() } });
+      $('plPanel').scrollIntoView({ behavior:'smooth', block:'start' });
+    }
+    function openItemFromPlayer(key){ showTab('items'); openItem(key); }
+
+    // ---- items ----
+    let itemSortCol = null;
+    async function loadItems() {
+      const d = await api('items', { q: $('itQ').value.trim(), sort: $('itSort').value, limit: $('itLimit').value, category: $('itCat').value });
+      const rows = d.rows || [];
+      const max = Math.max(1, ...rows.map(r => Math.max(r.sell_caps||0, r.buy_caps||0)));
+      $('tItems').innerHTML = `<tr><th>Item</th><th>Category</th><th>Sold qty</th><th>Caps paid out</th><th>Avg sell</th><th>Bought qty</th><th>Caps sunk</th><th>Avg buy</th><th>Players</th><th>Trades</th><th>Last</th></tr>` +
+        (rows.length ? rows.map(r => `<tr class="click" onclick="openItem('${esc(r.item_key)}')">
+          <td class="txt">${esc(r.label)}${r.prefab?'':'<span class="chip disc">discord</span>'}</td><td>${esc(catName(r.category))}</td>
+          <td>${fmt(r.sell_qty)}</td><td class="inc"><span class="bar inc" style="width:${pctOf(r.sell_caps, max)}px"></span>${fmt(r.sell_caps)}</td><td>${fmt1(r.sell_avg)}</td>
+          <td>${fmt(r.buy_qty)}</td><td class="spd"><span class="bar spd" style="width:${pctOf(r.buy_caps, max)}px"></span>${fmt(r.buy_caps)}</td><td>${fmt1(r.buy_avg)}</td>
+          <td>${fmt(r.players)}</td><td>${fmt(r.trades)}</td><td title="${when(r.last_ts)}">${ago(r.last_ts)}</td></tr>`).join('')
+        : `<tr><td colspan="11" class="txt">No trades in this range.</td></tr>`);
+    }
+    async function openItem(key) {
+      $('itPanel').innerHTML = '<div class="si-note">Loading…</div>';
+      let d; try { d = await api('item', { key }); } catch (e) { $('itPanel').innerHTML = `<div class="si-err">${esc(e.message)}</div>`; return; }
+      const t = d.totals;
+      $('itPanel').innerHTML = `<div class="si-card">
+        <div class="panel-head"><span class="name">${esc(t.label)}</span><span class="id">${esc(t.prefab || 'no prefab (Discord era)')}</span><span class="chip">${esc(catName(t.category))}</span><span class="mono">first ${when(t.first_ts)} · last ${when(t.last_ts)}</span><button class="si-btn ghost x" onclick="$('itPanel').innerHTML=''">✕ Close</button></div>
+        <div style="padding:14px 16px 0"><div class="si-statrow">
+          <div class="si-statcard income"><div class="l">Sold by players</div><div class="n">${fmt(t.sell_qty)}</div><div class="s">${fmt(t.sell_caps)} caps paid out · avg ${fmt1(t.sell_caps/Math.max(1,t.sell_qty))}</div></div>
+          <div class="si-statcard spend"><div class="l">Bought by players</div><div class="n">${fmt(t.buy_qty)}</div><div class="s">${fmt(t.buy_caps)} caps sunk · avg ${fmt1(t.buy_caps/Math.max(1,t.buy_qty))}</div></div>
+          <div class="si-statcard"><div class="l">Players</div><div class="n">${fmt(t.players)}</div><div class="s">${fmt(t.trades)} trades</div></div>
+          <div class="si-statcard net"><div class="l">Net for economy</div><div class="n">${signed((t.sell_caps||0)-(t.buy_caps||0))}</div><div class="s">positive = this item prints caps</div></div>
+        </div></div>
+        <div class="grid2" style="padding:0 16px">
+          <div class="si-card"><h3>Units per day</h3><div class="chart sm"><canvas id="chIt"></canvas></div></div>
+          <div class="si-card"><h3>Price range per day <span class="sp">unit price seen (stock drift)</span></h3><div class="tw" style="max-height:200px"><table class="t"><tr><th>Day</th><th>Sell unit min–max</th><th>Buy unit min–max</th><th>Sold</th><th>Bought</th></tr>
+            ${d.daily.slice().reverse().map(r=>`<tr><td>${esc(r.day)}</td><td>${r.sell_unit_min==null?'—':fmt(r.sell_unit_min)+' – '+fmt(r.sell_unit_max)}</td><td>${r.buy_unit_min==null?'—':fmt(r.buy_unit_min)+' – '+fmt(r.buy_unit_max)}</td><td>${fmt(r.sell_qty)}</td><td>${fmt(r.buy_qty)}</td></tr>`).join('')}
+          </table></div></div>
+        </div>
+        <div class="grid2" style="padding:0 16px">
+          <div class="si-card"><h3>Who trades it <span class="sp">top 50</span></h3><div class="tw" style="max-height:280px"><table class="t"><tr><th>Player</th><th>Trades</th><th>Qty</th><th>Earned</th><th>Spent</th></tr>${d.topPlayers.map(r=>`<tr class="click" onclick="showTab('players');openPlayer('${esc(r.player_key)}')"><td>${esc(r.player_name)}</td><td>${fmt(r.trades)}</td><td>${fmt(r.qty)}</td><td class="inc">${fmt(r.income)}</td><td class="spd">${fmt(r.spend)}</td></tr>`).join('')}</table></div></div>
+          <div class="si-card"><h3>At which trader</h3><div class="tw" style="max-height:280px"><table class="t"><tr><th>Trader</th><th>Trades</th><th>Qty</th><th>Paid out</th><th>Taken in</th></tr>${d.traders.map(r=>`<tr><td>${esc(r.trader)}</td><td>${fmt(r.trades)}</td><td>${fmt(r.qty)}</td><td class="inc">${fmt(r.income)}</td><td class="spd">${fmt(r.spend)}</td></tr>`).join('')}</table></div></div>
+        </div></div>`;
+      mk('chIt', { type:'bar', data:{ labels: d.daily.map(r=>r.day.slice(5)), datasets:[ barDs('Sold', d.daily.map(r=>r.sell_qty), COL.income), barDs('Bought', d.daily.map(r=>r.buy_qty), COL.spend) ] },
+        options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend, tooltip }, scales: baseScales() } });
+      $('itPanel').scrollIntoView({ behavior:'smooth', block:'start' });
+    }
+    function goItemsCat(c){ $('itCat').value = c === '' ? '' : String(c); showTab('items'); }
+
+    // ---- traders ----
+    async function loadTraders() {
+      const d = await api('traders');
+      const rows = d.rows || [];
+      const max = Math.max(1, ...rows.map(r => Math.max(r.paid_out||0, r.taken_in||0)));
+      $('tTraders').innerHTML = `<tr><th>Trader</th><th>Trades</th><th>Players</th><th>Units</th><th>Distinct items</th><th>Paid out</th><th>Taken in</th><th>Net</th><th>Tax</th><th>Last</th></tr>` +
+        (rows.length ? rows.map(r => { const n=(r.paid_out||0)-(r.taken_in||0); return `<tr><td>${esc(r.trader)}</td><td>${fmt(r.trades)}</td><td>${fmt(r.players)}</td><td>${fmt(r.qty)}</td><td>${fmt(r.distinct_items)}</td>
+          <td class="inc"><span class="bar inc" style="width:${pctOf(r.paid_out, max)}px"></span>${fmt(r.paid_out)}</td><td class="spd"><span class="bar spd" style="width:${pctOf(r.taken_in, max)}px"></span>${fmt(r.taken_in)}</td>
+          <td class="${n>=0?'pos':'neg'}">${signed(n)}</td><td>${fmt(r.tax)}</td><td title="${when(r.last_ts)}">${ago(r.last_ts)}</td></tr>`; }).join('') : `<tr><td colspan="10" class="txt">No trades in this range.</td></tr>`);
+    }
+
+    // ---- ledger ----
+    let lgOffset = 0; const LG_LIMIT = 200;
+    async function loadLedger() {
+      const d = await api('ledger', { q: $('lgQ').value.trim(), op: $('lgOp').value, limit: LG_LIMIT, offset: lgOffset });
+      $('lgCsv').href = `/api/shop/admin/economy/ledger.csv?${filterQS({ q: $('lgQ').value.trim(), op: $('lgOp').value })}`;
+      $('lgInfo').textContent = `${fmt(d.offset+1)}–${fmt(Math.min(d.offset+d.rows.length, d.total))} of ${fmt(d.total)}`;
+      $('lgPrev').disabled = d.offset <= 0; $('lgNext').disabled = d.offset + d.rows.length >= d.total;
+      $('tLedger').innerHTML = `<tr><th>Time (UTC)</th><th>Server</th><th>Op</th><th>Player</th><th>Item</th><th>Qty</th><th>Unit</th><th>Gross</th><th>Tax</th><th>Net</th><th>Trader</th><th>Stock after</th></tr>` +
+        (d.rows.length ? d.rows.map(r => `<tr>
+          <td>${when(r.ts)}</td><td>${esc(r.server_id)}</td><td>${esc(r.op)}</td>
+          <td class="txt"><a href="#" onclick="showTab('players');openPlayer('${esc(r.player_key)}');return false" style="color:inherit">${esc(r.player_name)}</a>${r.uid?'':'<span class="chip disc">discord</span>'}${r.cp_name?` <span class="mono">↔ ${esc(r.cp_name)}</span>`:''}</td>
+          <td class="txt" title="${esc(r.prefab)}">${esc(r.label)}</td><td>${fmt(r.qty)}</td><td>${fmt(r.unit_price)}</td><td>${fmt(r.gross)}</td><td>${fmt(r.tax)}</td>
+          <td class="${r.income?'inc':'spd'}">${r.income?'+'+fmt(r.income):'−'+fmt(r.spend)}</td><td>${esc(r.trader)}</td><td>${r.stock_after==null?'—':fmt(r.stock_after)}</td></tr>`).join('') : `<tr><td colspan="12" class="txt">No rows.</td></tr>`);
+    }
+
+    // ---- data / status ----
+    async function loadStatus() {
+      const s = await api('status');
+      const lines = [];
+      lines.push(`Rows in shop.db: ${fmt(s.total)}`);
+      for (const r of s.perServer) lines.push(`  ${r.server_id.padEnd(8)} ${r.source.padEnd(8)} ${String(fmt(r.rows_)).padStart(9)} rows   ${when(r.first_ts)} → ${when(r.last_ts)}`);
+      if (s.lastPull) {
+        lines.push('');
+        lines.push(`Last pull: ${when(Math.floor(s.lastPull.finishedAt/1000))} (${s.pulling ? 'RUNNING' : 'idle'})${s.lastPull.error ? '  ERROR: ' + s.lastPull.error : ''}`);
+        for (const r of (s.lastPull.report || [])) lines.push(`  ${r.server.padEnd(8)} ${r.error ? 'ERROR ' + r.error : r.skipped ? 'skipped: ' + r.skipped : `${r.files} file(s), ${r.lines} lines read, ${r.inserted} new, ${r.bad} bad`}`);
+      } else lines.push('\nNo pull has run since the shop started.');
+      if (s.cursors.length) { lines.push('\nCursors (bytes read per file):'); for (const c of s.cursors) lines.push(`  ${c.server_id.padEnd(8)} ${c.file}  ${fmt(c.offset)}  (${when(c.updated_at)})`); }
+      $('stStatus').textContent = lines.join('\n');
+      renderImport(s.discordImport);
+    }
+    function renderImport(j) {
+      if (!j) { $('stImport').style.display='none'; return; }
+      $('stImport').style.display='block';
+      $('stImport').textContent = `Channel ${j.channelId}${j.since?` since ${when(j.since)}`:' (all history)'}\n${j.running?'RUNNING':'finished'} · ${fmt(j.messages)} messages · ${fmt(j.parsed)} trade lines · ${fmt(j.inserted)} new rows\noldest reached: ${when(j.oldestTs)}${j.error?'\nERROR: '+j.error:''}`;
+      if (j.running) setTimeout(loadStatus, 3000);
+    }
+    async function pullNow(btn) {
+      btn.disabled = true; $('pullMsg').textContent = 'Pulling…';
+      try { const r = await post('pull'); const n = (r.report||[]).reduce((a,x)=>a+(x.inserted||0),0); $('pullMsg').textContent = r.error ? 'Failed: '+r.error : r.skipped ? r.skipped : `Done — ${fmt(n)} new rows`; await loadStatus(); await refreshTab(); }
+      catch (e) { $('pullMsg').textContent = 'Failed: ' + e.message; }
+      btn.disabled = false;
+    }
+    async function startImport() {
+      $('dcErr').textContent = '';
+      try { const j = await post('import-discord', { channelId: $('dcChannel').value.trim(), sinceDays: $('dcDays').value }); renderImport(j); }
+      catch (e) { $('dcErr').textContent = e.message; }
+    }
+
+    // ---- tabs / wiring ----
+    let curTab = 'overview';
+    function showTab(t) {
+      curTab = t;
+      document.querySelectorAll('#tabs .si-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === t));
+      ['overview','players','items','traders','ledger','data'].forEach(x => $('tab-'+x).style.display = x === t ? 'block' : 'none');
+      refreshTab();
+    }
+    async function refreshTab() {
+      $('err').textContent = '';
+      try {
+        if (curTab === 'overview') await loadOverview();
+        else if (curTab === 'players') await loadPlayers();
+        else if (curTab === 'items') await loadItems();
+        else if (curTab === 'traders') await loadTraders();
+        else if (curTab === 'ledger') await loadLedger();
+        else if (curTab === 'data') await loadStatus();
+      } catch (e) { if (e.message !== 'denied') $('err').textContent = e.message; }
+    }
+    document.querySelectorAll('#tabs .si-tab').forEach(el => el.onclick = () => showTab(el.dataset.tab));
+    document.querySelectorAll('#range .si-tab').forEach(el => el.onclick = () => { rangeDays = parseInt(el.dataset.days, 10); customFrom = customTo = null; $('from').value = $('to').value = ''; document.querySelectorAll('#range .si-tab').forEach(x => x.classList.toggle('active', x === el)); refreshTab(); });
+    $('apply').onclick = () => { customFrom = $('from').value || null; customTo = $('to').value || null; if (customFrom || customTo) document.querySelectorAll('#range .si-tab').forEach(x => x.classList.remove('active')); refreshTab(); };
+    $('server').onchange = refreshTab;
+    $('pull').onclick = () => pullNow($('pull'));
+    $('pull2').onclick = () => pullNow($('pull2'));
+    $('plGo').onclick = loadPlayers; $('plQ').onkeydown = (e) => { if (e.key === 'Enter') loadPlayers(); }; $('plSort').onchange = loadPlayers; $('plLimit').onchange = loadPlayers;
+    $('itGo').onclick = loadItems; $('itQ').onkeydown = (e) => { if (e.key === 'Enter') loadItems(); }; $('itSort').onchange = loadItems; $('itLimit').onchange = loadItems; $('itCat').onchange = loadItems;
+    $('lgGo').onclick = () => { lgOffset = 0; loadLedger(); }; $('lgQ').onkeydown = (e) => { if (e.key === 'Enter') { lgOffset = 0; loadLedger(); } }; $('lgOp').onchange = () => { lgOffset = 0; loadLedger(); };
+    $('lgPrev').onclick = () => { lgOffset = Math.max(0, lgOffset - LG_LIMIT); loadLedger(); }; $('lgNext').onclick = () => { lgOffset += LG_LIMIT; loadLedger(); };
+    $('dcGo').onclick = startImport;
+    $('itCat').innerHTML += Object.entries(CATS).filter(([k]) => k !== '0').map(([k,v]) => `<option value="${k}">${esc(v)}</option>`).join('');
+
+    (async () => {
+      try {
+        const r = await fetch('/api/shop/admin/economy/servers');
+        if (r.status === 403) { $('denied').style.display='block'; return; }
+        const j = await r.json();
+        $('server').innerHTML = '<option value="">All servers</option>' + (j.servers||[]).map(s => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
+        $('content').style.display = 'block';
+        showTab('overview');
+      } catch { $('denied').style.display='block'; }
+    })();
+  </script>
+</body>
+</html>

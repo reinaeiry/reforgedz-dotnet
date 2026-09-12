@@ -702,6 +702,9 @@ app.get('/api/shop/fx', async (req, res) => {
 // ---- Shop API routes ----
 app.use(shopRoutes.router);
 
+// ---- Economy KPI API (/admin/economy) ----
+app.use(require('./routes/economy').router);
+
 // ---- Radio ----
 let trackCache = null;
 
@@ -1093,6 +1096,10 @@ app.get('/admin/console-relink', requireAdminPage, (req, res) => {
 
 app.get('/admin/saves', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-saves.html'));
+});
+
+app.get('/admin/economy', requireAdminPage, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin-economy.html'));
 });
 
 app.get('/map', (req, res) => {

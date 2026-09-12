@@ -590,4 +590,51 @@ function identityForUser(u) {
   if (res.changes > 0) console.log(`[db] accounts backfill: linked ${res.changes} order(s)`);
 }
 
+// Economy KPI ledger: one row per side of every in-game caps transaction, pulled
+// from the game servers' trade_ledger files (tradeLedger.js) or backfilled from
+// the Discord trade channel (tradeDiscordImport.js). `income` = caps that entered
+// the player's pocket, `spend` = caps that left it; a marketplace sale is two rows.
+// dedupe_key makes every re-read a no-op (INSERT OR IGNORE).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS trade_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id    TEXT    NOT NULL,
+    source       TEXT    NOT NULL,
+    dedupe_key   TEXT    NOT NULL UNIQUE,
+    ts           INTEGER NOT NULL,
+    day          TEXT    NOT NULL,
+    op           TEXT    NOT NULL,
+    uid          TEXT,
+    player_name  TEXT    NOT NULL DEFAULT '',
+    player_key   TEXT    NOT NULL,
+    trader       TEXT    NOT NULL DEFAULT '',
+    prefab       TEXT    NOT NULL DEFAULT '',
+    label        TEXT    NOT NULL DEFAULT '',
+    category     INTEGER,
+    qty          INTEGER NOT NULL DEFAULT 1,
+    unit_price   INTEGER NOT NULL DEFAULT 0,
+    gross        INTEGER NOT NULL DEFAULT 0,
+    tax          INTEGER NOT NULL DEFAULT 0,
+    net          INTEGER NOT NULL DEFAULT 0,
+    income       INTEGER NOT NULL DEFAULT 0,
+    spend        INTEGER NOT NULL DEFAULT 0,
+    stock_after  INTEGER,
+    cp_uid       TEXT,
+    cp_name      TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_trade_events_server_ts ON trade_events (server_id, ts);
+  CREATE INDEX IF NOT EXISTS idx_trade_events_ts        ON trade_events (ts);
+  CREATE INDEX IF NOT EXISTS idx_trade_events_player    ON trade_events (player_key, ts);
+  CREATE INDEX IF NOT EXISTS idx_trade_events_prefab    ON trade_events (prefab, ts);
+  CREATE INDEX IF NOT EXISTS idx_trade_events_day       ON trade_events (day);
+
+  CREATE TABLE IF NOT EXISTS trade_ledger_cursors (
+    server_id   TEXT    NOT NULL,
+    file        TEXT    NOT NULL,
+    offset      INTEGER NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (server_id, file)
+  );
+`);
+
 module.exports = db;
