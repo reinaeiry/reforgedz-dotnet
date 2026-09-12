@@ -212,6 +212,21 @@ function sendWifiBlob(res, mib) {
   })();
 }
 
+// ---- wiki.reforgedz.net: the retired wiki's host, every request 301s to the new wiki ----
+// Served from this box (it used to be a Cloudflare Worker, which bots on the old host pushed past the free daily
+// request cap). Any method; the target only ever comes from lib/wiki-aliases.json.
+const wikiRedirect = require('./lib/wiki-redirect');
+app.use((req, res, next) => {
+  if (req.hostname !== 'wiki.reforgedz.net') return next();
+  res.writeHead(301, {
+    Location: wikiRedirect.locationFor(`https://wiki.reforgedz.net${req.originalUrl}`),
+    // A day, not forever, so browsers pick up a changed table or a removed redirect.
+    'Cache-Control': 'public, max-age=86400',
+    'Content-Length': '0'
+  });
+  res.end();
+});
+
 app.use((req, res, next) => {
   if (req.hostname !== 'wifi.reforgedz.net') return next();
 
@@ -345,6 +360,41 @@ app.use((req, res, next) => {
   }
   next();
 });
+// ---- The wiki (reforgedz.net/wiki) ----
+// Built by the ReforgedZ-Wiki repo and copied into public/wiki by its deploy script; served from this box rather
+// than a Cloudflare Worker. Its security headers come from public/wiki/_headers, which the wiki build writes, so
+// the wiki repo stays the source of truth for its own CSP. HTML and data revalidate on every visit (the pages
+// change with the mod); Express's ETags keep that cheap.
+const WIKI_DIR = path.join(__dirname, 'public', 'wiki');
+const WIKI_HEADERS = (() => {
+  const out = {};
+  try {
+    let inBlock = false;
+    for (const line of fs.readFileSync(path.join(WIKI_DIR, '_headers'), 'utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      if (!/^\s/.test(line)) { inBlock = line.trim() === '/wiki/*'; continue; }
+      if (!inBlock) continue;
+      const i = line.indexOf(':');
+      if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+    }
+  } catch {}
+  return out;
+})();
+function setWikiHeaders(res) {
+  for (const [name, value] of Object.entries(WIKI_HEADERS)) res.setHeader(name, value);
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+}
+const wikiStatic = express.static(WIKI_DIR, { index: 'index.html', redirect: true, maxAge: 0, setHeaders: setWikiHeaders });
+app.use('/wiki', (req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  if (/^\/_headers$/i.test(req.path)) return next();   // build metadata, not a page
+  wikiStatic(req, res, () => {
+    // Nothing on disk for this path: the wiki's own 404 page, with the wiki's headers.
+    setWikiHeaders(res);
+    res.status(404).sendFile(path.join(WIKI_DIR, '404.html'), (err) => { if (err) next(); });
+  });
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/radio', express.static(path.join(__dirname, 'radio')));
 

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Looting Works · ReforgedZ Wiki</title>
+<meta name="description" content="Loot tiers, why a container comes up empty, what Search and Open mean, and how long before loot comes back.">
+<link rel="canonical" href="https://reforgedz.net/wiki/mechanics/how-looting-works/">
+<meta name="theme-color" content="#cc1f1f">
+<link rel="icon" href="/wiki/img/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/wiki/assets/wiki.css">
+</head>
+<body class="wk-is-page">
+<a class="wk-skip" href="#wk-main">Skip to content</a>
+<header class="wk-top">
+  <div class="wk-top-inner">
+    <a class="wk-brand" href="https://reforgedz.net/">Reforged<span class="z">Z</span></a>
+    <a class="wk-brand-sub" href="/wiki/">Wiki</a>
+    <button class="wk-search-open" type="button" data-search-open aria-label="Search the wiki">
+      <span>Search the wiki</span><kbd>/</kbd>
+    </button>
+    <nav class="wk-site-links" aria-label="reforgedz.net">
+      <a href="https://reforgedz.net/">Home</a><a href="https://reforgedz.net/map">Map</a><a href="https://reforgedz.net/shop">Shop</a><a href="https://discord.gg/reforgedz">Discord</a>
+    </nav>
+    <button class="wk-menu" type="button" data-menu aria-controls="wk-side" aria-expanded="false" aria-label="Wiki sections">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+  
+</header>
+<div class="wk-shell">
+<nav class="wk-side" id="wk-side" aria-label="Wiki sections">
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/start/">Start Here</a>
+      <ul><li><a href="/wiki/start/your-first-hour/">Your First Hour</a></li><li><a href="/wiki/start/how-you-die/">How You Die in Your First Hour</a></li><li><a href="/wiki/start/which-server/">Which Server Should I Join?</a></li><li><a href="/wiki/start/controls/">Controls</a></li><li><a href="/wiki/start/coming-from-other-games/">Coming from Other Games</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/systems/">Systems</a>
+      <ul><li><a href="/wiki/systems/fishing/">Fishing</a></li><li><a href="/wiki/systems/farming/">Farming</a></li><li><a href="/wiki/systems/fires-and-cooking/">Fires and Cooking</a></li><li><a href="/wiki/systems/crafting/">Crafting</a></li><li><a href="/wiki/systems/mining/">Mining</a></li><li><a href="/wiki/systems/salvage/">Salvage</a></li><li><a href="/wiki/systems/claiming-your-first-base/">Claiming Your First Base</a></li><li><a href="/wiki/systems/stashes/">Stashes</a></li><li><a href="/wiki/systems/codelocks/">Codelocks</a></li><li><a href="/wiki/systems/raiding-and-defending/">Raiding and Defending</a></li><li><a href="/wiki/systems/drugs/">Drugs</a></li><li><a href="/wiki/systems/traders-and-caps/">Traders and Caps</a></li><li><a href="/wiki/systems/heroes-and-bandits/">Heroes and Bandits</a></li><li><a href="/wiki/systems/your-first-vehicle/">Your First Vehicle</a></li><li><a href="/wiki/systems/contracts/">Contracts</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/locations/">Locations</a>
+      <ul><li><a href="/wiki/locations/where-to-go/">Where to Go for What</a></li><li><a href="/wiki/locations/chernarus/">Chernarus</a></li><li><a href="/wiki/locations/faircroft-islands/">Faircroft Islands</a></li><li><a href="/wiki/locations/the-safezone/">The Safezone</a></li><li><a href="/wiki/locations/the-black-market/">The Black Market</a></li><li><a href="/wiki/locations/rify/">Rify</a></li><li><a href="/wiki/locations/the-oil-rigs/">The Oil Rigs</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/mechanics/">Gameplay Mechanics</a>
+      <ul><li><a href="/wiki/mechanics/staying-alive/">Staying Alive</a></li><li><a href="/wiki/mechanics/food-and-water/">Food and Water</a></li><li><a href="/wiki/mechanics/cooking-and-spoilage/">Cooking and Spoilage</a></li><li><a href="/wiki/mechanics/body-temperature/">Body Temperature</a></li><li><a href="/wiki/mechanics/sickness-and-medicine/">Sickness and Medicine</a></li><li><a href="/wiki/mechanics/wounds-and-bleeding/">Wounds and Bleeding</a></li><li><a href="/wiki/mechanics/how-looting-works/" aria-current="page">How Looting Works</a></li><li><a href="/wiki/mechanics/keys-and-locked-containers/">Keys and Locked Containers</a></li><li><a href="/wiki/mechanics/zombies/">Zombies</a></li><li><a href="/wiki/mechanics/animals/">Animals</a></li><li><a href="/wiki/mechanics/death-and-combat-logging/">Death and Combat Logging</a></li><li><a href="/wiki/mechanics/server-restarts/">Server Restarts</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/lookup/">Look It Up</a>
+      <ul><li><a href="/wiki/lookup/fish/">Fish</a></li><li><a href="/wiki/lookup/recipes/">Recipes</a></li><li><a href="/wiki/lookup/keybinds/">Keybinds</a></li><li><a href="/wiki/lookup/map-icons/">Map Icons</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/about/">About</a>
+      <ul><li><a href="/wiki/about/about-this-wiki/">About This Wiki</a></li></ul>
+    </div>
+  </nav>
+<main class="wk-main" id="wk-main">
+<article class="wk-article">
+    <p class="wk-crumb"><a href="/wiki/">Wiki</a> <span aria-hidden="true">›</span> <a href="/wiki/mechanics/">Gameplay Mechanics</a></p>
+    <h1>How Looting Works</h1>
+    <p class="wk-lede">Loot tiers, why a container comes up empty, what Search and Open mean, and how long before loot comes back.</p>
+    <details class="wk-toc-mobile">
+      <summary>On this page</summary>
+      <ul><li><a href="#loot-tiers">Loot tiers</a></li><li><a href="#searching-a-container">Searching a container</a></li><li><a href="#loot-lying-in-the-world">Loot lying in the world</a></li><li><a href="#where-you-can-t-loot">Where you can’t loot</a></li><li><a href="#cash-registers">Cash registers</a></li></ul>
+    </details>
+    <div class="wk-body">
+<p>Nothing is in a container until you search it. Each search rolls a chance of success, and win or lose, that container is done for about 30 minutes. Better loot sits in higher-tier parts of the map.</p>
+<div class="tablewrap"><table>
+<tbody>
+<tr>
+<td><strong>Search chance</strong></td>
+<td>Household furniture fails more often than military crates. Military crates succeed 30–50% of the time, and the aircraft carrier’s crates 50%.</td>
+</tr>
+<tr>
+<td><strong>Container resets after</strong></td>
+<td>About 30 minutes</td>
+</tr>
+<tr>
+<td><strong>Loot lying in the world</strong></td>
+<td>Gone after about an hour if nobody takes it</td>
+</tr>
+<tr>
+<td><strong>Tiers on both maps</strong></td>
+<td>Tier 1, Tier 2 and Tier 3</td>
+</tr>
+<tr>
+<td><strong>No looting</strong></td>
+<td>Safe zones and black markets</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="loot-tiers">Loot tiers</h2>
+<p>Both maps are split into loot tier zones, and every item can only spawn in certain tiers. A Tier 2 item never turns up in a Tier 1 area, however long you look. Where zones overlap, the higher tier wins.</p>
+<p>Items are also limited to certain kinds of place, so what’s there depends on both the tier and the spot.</p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>Map</th>
+<th>Tier 1</th>
+<th>Tier 2</th>
+<th>Tier 3</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Chernarus</strong> (EU1, NA1)</td>
+<td>The south coast from Komarovo to Elektrozavodsk, and the east from Kamyshovo north to Berezino and Novomitravsk</td>
+<td>The west, the centre and the north: Kamenka, Zelenogorsk, Green Mountain, Vybor, Stary Sobor, Gorka, Krasnostav, Pisy and Arsenov</td>
+<td><a href="/wiki/locations/rify/">Rify</a>, and <a href="/wiki/locations/the-oil-rigs/">the oil rig and the aircraft carrier</a>. Town by town on <a href="/wiki/locations/chernarus/">Chernarus</a>.</td>
+</tr>
+<tr>
+<td><strong>Faircroft Islands</strong> (EU2, NA2)</td>
+<td>The west: Calverston, Broughton, Tanmuth, Chipping Stratton and Arlo Tower</td>
+<td>Most of the islands, including Pendleworth, Calaig, Mertun, Ogden, Seahaven, South Huts and the aircraft carrier</td>
+<td>RAF Haverbrook, the Brickworks and <a href="/wiki/locations/the-oil-rigs/">the oil rig</a>. Town by town on <a href="/wiki/locations/faircroft-islands/">Faircroft Islands</a>.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Tier 3 is always a small slice of the map, so expect a fight for it.</p>
+<h2 id="searching-a-container">Searching a container</h2>
+<p>Look at a container and the prompt tells you its state:</p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>Prompt</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Search</strong></td>
+<td>Nobody has searched it since it last reset. Your search rolls for loot.</td>
+</tr>
+<tr>
+<td><strong>Open</strong></td>
+<td>Someone has already searched it. You can open it and take what’s left, but nothing new is rolled.</td>
+</tr>
+<tr>
+<td><strong>Searched</strong></td>
+<td>A one-time find that’s already been taken this restart</td>
+</tr>
+<tr>
+<td><strong>Locked</strong> / <strong>Unlock</strong></td>
+<td>Needs a coloured key in your hands. See <a href="/wiki/mechanics/keys-and-locked-containers/">Keys and Locked Containers</a>.</td>
+</tr>
+<tr>
+<td><strong>Bunker Doors Closed</strong></td>
+<td>Bunker crates stay shut until the bunker is opened. See <a href="/wiki/mechanics/keys-and-locked-containers/">Keys and Locked Containers</a>.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="what-happens-when-you-search">What happens when you search</h3>
+<ol>
+<li><strong>Hold the search.</strong> Furniture and wooden crates take 1 second. Military crates and locked containers take 5.</li>
+<li><strong>The game rolls.</strong> Household furniture fails more often than military crates. Military crates, like the ones at <a href="/wiki/locations/rify/">Rify</a>, succeed 30% to 50% of the time, and the aircraft carrier’s crates 50%. On a success, loot appears inside and the container opens.</li>
+<li><strong>On a failure it opens empty.</strong> That’s the roll, not someone beating you to it.</li>
+<li><strong>Either way, the container is done.</strong> The prompt now reads <em>Open</em> for everyone. It rolls nothing new until it resets.</li>
+</ol>
+<h3 id="when-a-container-resets">When a container resets</h3>
+<p>About <strong>30 minutes</strong> after it was searched, a container resets. <strong>Anything still inside is removed</strong> and the prompt goes back to <em>Search</em>. After a failed search the prompt keeps reading <em>Open</em>, but the container can roll again once the 30 minutes are up. Military crates reset on their own timer instead: 6 minutes, 30 minutes or 1 hour, depending on the crate.</p>
+<ul>
+<li><strong>Take what you want the first time.</strong> Leftovers don’t wait for you.</li>
+<li><strong>An empty <em>Open</em> container isn’t worth a second look.</strong> Come back after it resets.</li>
+<li><strong>A failed search still costs the full wait.</strong> There’s no retry.</li>
+</ul>
+<h2 id="loot-lying-in-the-world">Loot lying in the world</h2>
+<p>Some loot spawns loose, on floors and shelves, not inside containers.</p>
+<ul>
+<li><strong>Untouched loot disappears</strong> after about an hour, give or take 15 minutes.</li>
+<li><strong>Once someone takes an item</strong>, it’s about 30 minutes before the world spawns another one of it.</li>
+<li>Some items vanish faster: seeds and Soil after about 20 minutes. See <a href="/wiki/systems/farming/">Farming</a>.</li>
+</ul>
+<h2 id="where-you-can-t-loot">Where you can’t loot</h2>
+<p><strong>Safe zones and black markets are no-loot areas.</strong> Try to search a container there and you’ll see <em>No Looting Zone</em>. See <a href="/wiki/locations/the-safezone/">The Safezone</a> and <a href="/wiki/locations/the-black-market/">The Black Market</a>.</p>
+<h2 id="cash-registers">Cash registers</h2>
+<p>Cash registers stand at some traders and a few other spots. Use <strong>Search Register</strong>:</p>
+<ul>
+<li><strong>25% chance</strong> of 100 to 600 caps, straight into your inventory (<em>Found 350 caps!</em>).</li>
+<li><strong>Otherwise</strong> you’ll see <em>The register is empty</em>.</li>
+<li><strong>Either way, you’re locked out of that register for 30 minutes.</strong> Other players aren’t: the wait is yours alone.</li>
+<li><strong>Not inside a safe zone.</strong> The action is blocked there.</li>
+</ul>
+<aside class="callout callout-tip" role="note"><p class="callout-title">Tip</p>
+<p>Search every container on your route once and move on. A building’s containers all reset on their own clock, so a loop through a town pays better than waiting at one house.</p>
+</aside>
+<p><strong>Next:</strong> <a href="/wiki/mechanics/keys-and-locked-containers/">Keys and Locked Containers</a> · <a href="/wiki/start/your-first-hour/">Your First Hour</a> · <a href="/wiki/locations/where-to-go/">Where to Go</a> · <a href="/wiki/systems/salvage/">Salvage</a></p>
+
+    </div>
+    <footer class="wk-page-foot">
+      <p class="wk-stamp">Numbers from ReforgedZ 1.0.225 · Text not yet checked · <a href="https://discord.gg/reforgedz">Something wrong? Tell us</a></p>
+      <div class="wk-prevnext">
+        <a class="wk-prev" href="/wiki/mechanics/wounds-and-bleeding/"><span>Previous</span>Wounds and Bleeding</a>
+        <a class="wk-next" href="/wiki/mechanics/keys-and-locked-containers/"><span>Next</span>Keys and Locked Containers</a>
+      </div>
+    </footer>
+  </article>
+</main>
+<nav class="wk-toc" aria-label="On this page">
+    <p class="wk-toc-title">On this page</p>
+    <ul><li><a href="#loot-tiers">Loot tiers</a></li><li><a href="#searching-a-container">Searching a container</a></li><li><a href="#loot-lying-in-the-world">Loot lying in the world</a></li><li><a href="#where-you-can-t-loot">Where you can’t loot</a></li><li><a href="#cash-registers">Cash registers</a></li></ul>
+  </nav>
+</div>
+<div class="wk-search" id="wk-search" hidden>
+  <div class="wk-search-panel" role="dialog" aria-modal="true" aria-label="Search the wiki">
+    <div class="wk-search-field">
+      <input id="wk-search-input" type="search" enterkeyhint="search" autocomplete="off" spellcheck="false" placeholder="Search fish, codelocks, planks…" aria-controls="wk-search-results">
+      <button type="button" data-search-close aria-label="Close search">Close</button>
+    </div>
+    <div id="wk-search-results" class="wk-search-results" role="listbox" aria-label="Results"></div>
+    <p class="wk-search-hint">Typos are fine. Press Enter to open the first result.</p>
+  </div>
+</div>
+<script src="/wiki/assets/vendor/minisearch.js" defer></script>
+<script src="/wiki/assets/wiki.js" defer></script>
+</body>
+</html>
