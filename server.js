@@ -17,7 +17,7 @@ sessionDb.pragma('journal_mode = WAL');
 const passport = require('passport');
 const SteamStrategy = require('passport-steam').Strategy;
 const db = require('./db');
-const { lookupPlayerByGamertag } = require('./battlemetrics');
+const { lookupPlayerByGamertag, cleanGamertag, orgId: bmOrgId } = require('./battlemetrics');
 const fx = require('./fx');
 const reforgedzServers = require('./reforgedzServers');
 
@@ -520,8 +520,10 @@ app.post('/api/auth/console/lookup', authLimiter, async (req, res) => {
   const { platform, gamertag } = req.body || {};
   if (!VALID_PLATFORMS.has(platform)) return res.status(400).json({ error: 'Invalid platform' });
   if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
+  const tag = cleanGamertag(gamertag);
+  if (!tag) return res.status(400).json({ error: 'That does not look like a gamertag. Check it and try again.' });
 
-  const result = await lookupPlayerByGamertag(gamertag.trim(), platform);
+  const result = await lookupPlayerByGamertag(tag, platform);
   // BattleMetrics being down or rate limiting us is not the player not existing.
   // Checked first: an unavailable result is a truthy object, not null.
   if (result && result.unavailable) return res.status(503).json({ error: 'We could not reach BattleMetrics to check that gamertag. Please try again in a minute.' });
@@ -534,7 +536,20 @@ app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
   if (!VALID_PLATFORMS.has(platform)) return res.status(400).json({ error: 'Invalid platform' });
   if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
 
-  const lookup = await lookupPlayerByGamertag(gamertag.trim(), platform);
+  const tag = cleanGamertag(gamertag);
+  if (!tag) return res.status(400).json({ error: 'That does not look like a gamertag. Check it and try again.' });
+
+  // A player who gives up while BattleMetrics is slow must not have the account
+  // created after they have gone: the lock cookie would never reach them, and
+  // their next attempt would be refused as "already linked".
+  let clientGone = false;
+  res.on('close', () => { if (!res.writableFinished) clientGone = true; });
+
+  const lookup = await lookupPlayerByGamertag(tag, platform);
+  if (clientGone) {
+    console.warn('[console] sign-in confirm abandoned before BattleMetrics answered; no account written');
+    return;
+  }
   // Checked before anything reads lookup.*: an unavailable result is a truthy object.
   if (lookup && lookup.unavailable) return res.status(503).json({ error: 'We could not reach BattleMetrics to check that gamertag. Please try again in a minute.' });
   if (!lookup) return res.status(404).json({ error: 'Could not verify that gamertag against BattleMetrics.' });
@@ -568,11 +583,15 @@ app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
   }
 
   if (!existing) {
+    if (clientGone) {
+      console.warn('[console] sign-in confirm abandoned just before the account was written; nothing written');
+      return;
+    }
     try {
       db.prepare(`
         INSERT INTO users (steam_id, persona, avatar_url, bi_uid, role, platform, gamertag, bm_player_id)
         VALUES (?, ?, NULL, ?, 'user', ?, ?, ?)
-      `).run(synthId, lookup.displayName || gamertag.trim(), lookup.biUid || null, platform, gamertag.trim(), lookup.bmPlayerId);
+      `).run(synthId, lookup.displayName || tag, lookup.biUid || null, platform, tag, lookup.bmPlayerId);
     } catch (e) {
       if (String(e.message).includes('UNIQUE')) {
         return res.status(409).json({ error: 'That console identity is already in use. Open a ticket in our Discord.' });
@@ -927,6 +946,12 @@ const STATUS_POLL_INTERVAL = 30000;
 // BattleMetrics IDs are resolved automatically per server (by IP, then port,
 // then by server name) and cached for the lifetime of the process.
 const bmIdCache = new Map();
+// What console sign-in searched first after the last poll, so a change is logged once.
+let lastSignInScope = null;
+// Per panel server: why its record is kept out of the sign-in scope (null = it is
+// in), and when a record outside the organisation was last looked up again.
+const signInRefusal = new Map();
+const signInRetryAt = new Map();
 
 let serverStatusCache = { servers: [], lastUpdate: null };
 
@@ -947,7 +972,10 @@ async function fetchBattleMetricsPlayers(bmId) {
     if (!a) return null;
     // ip/port come back on the same request, so the caller can confirm this
     // BattleMetrics record still belongs to the server we cached it for.
-    return { players: a.players ?? 0, max: a.maxPlayers ?? 0, ip: a.ip ?? null, port: a.port ?? null };
+    // The owning organisation tells console sign-in whether this record is ours
+    // (see pollServerStatus). Records outside it carry no organization relationship.
+    const org = data?.data?.relationships?.organization?.data?.id;
+    return { players: a.players ?? 0, max: a.maxPlayers ?? 0, ip: a.ip ?? null, port: a.port ?? null, orgId: org ? String(org) : null };
   } catch {
     return null;
   }
@@ -962,7 +990,11 @@ async function resolveBattleMetricsId(rawIp, port, serverName) {
     if (!res.ok) console.warn(`[bm] server search HTTP ${res.status} for ${rawIp}`);
     if (res.ok) {
       const list = (await res.json())?.data || [];
-      const exact = list.find(s => s.attributes?.ip === rawIp && Number(s.attributes?.port) === portNum);
+      // More than one record can sit at one address (BattleMetrics can create a
+      // new record when a server moves). Prefer the one under our organisation:
+      // console sign-in only trusts that one.
+      const exacts = list.filter(s => s.attributes?.ip === rawIp && Number(s.attributes?.port) === portNum);
+      const exact = exacts.find(s => String(s.relationships?.organization?.data?.id || '') === bmOrgId()) || exacts[0];
       if (exact?.id) return exact.id;
       // Fall back to IP-only ONLY when that IP hosts a single Reforger server.
       // Several of ours share a box (EU1/EU2/EU Dev on one IP), so an unqualified
@@ -1058,11 +1090,8 @@ async function pollServerStatus() {
         bmId = await resolveBattleMetricsId(def?.attributes?.ip, def?.attributes?.port, attr.name);
         if (bmId) {
           bmIdCache.set(id, bmId);
-          reforgedzServers.rememberBmId(bmId);
           console.log(`Resolved BattleMetrics ID for ${attr.name}: ${bmId}`);
         }
-      } else {
-        reforgedzServers.rememberBmId(bmId);
       }
       if (bmId) {
         let bm = await fetchBattleMetricsPlayers(bmId);
@@ -1073,20 +1102,57 @@ async function pollServerStatus() {
         // re-resolve once if it does not. Costs no extra request: the check uses
         // the ip/port already returned above.
         const wantIp = def?.attributes?.ip;
+        const wantAlias = def?.attributes?.ip_alias;
         const wantPort = Number(def?.attributes?.port);
-        if (bm && wantIp && bm.ip && (bm.ip !== wantIp || Number(bm.port) !== wantPort)) {
+        // The panel can hold a bind address in ip and the public one in ip_alias;
+        // BattleMetrics only ever sees the public one.
+        const pointsElsewhere = (b) => !!(b && wantIp && b.ip && ((b.ip !== wantIp && b.ip !== wantAlias) || Number(b.port) !== wantPort));
+        if (pointsElsewhere(bm)) {
           console.warn(`[bm] cached id ${bmId} for ${attr.name} points at ${bm.ip}:${bm.port}, expected ${wantIp}:${wantPort} — re-resolving`);
           bmIdCache.delete(id);
+          // Proven not to be this server: out of the sign-in scope now, even if
+          // the read of a replacement below fails.
+          reforgedzServers.forgetBmId(id);
           const fresh = await resolveBattleMetricsId(wantIp, wantPort, attr.name);
           if (fresh && fresh !== bmId) {
             bmId = fresh;
             bmIdCache.set(id, bmId);
-            reforgedzServers.rememberBmId(bmId);
             console.log(`Re-resolved BattleMetrics ID for ${attr.name}: ${bmId}`);
             bm = await fetchBattleMetricsPlayers(bmId);
           }
         }
-        if (bm) { players = bm.players; max = bm.max; }
+        if (bm) {
+          players = bm.players;
+          max = bm.max;
+          // Console sign-in searches these records first and trusts a gamertag
+          // found there without asking the organisation. So only a record at this
+          // server's own address that BattleMetrics lists under our organisation
+          // may join that scope: the tag fallback in resolveBattleMetricsId can
+          // pick another community's "[EU1]". When BattleMetrics could not be read
+          // (bm null) the scope is left as it was.
+          let refused = null;
+          if (pointsElsewhere(bm)) refused = `record ${bmId} is at ${bm.ip}:${bm.port}, not this server's address`;
+          else if (String(bm.orgId || '') !== bmOrgId()) refused = `record ${bmId} is not under BattleMetrics organisation ${bmOrgId()}`;
+          if (!refused) {
+            reforgedzServers.setBmId(id, bmId);
+          } else {
+            reforgedzServers.forgetBmId(id);
+            // A record at the right address but outside the organisation is never
+            // corrected by the address check above. Look again every 10 minutes:
+            // after a move, the organisation's own record can appear beside it.
+            if (!pointsElsewhere(bm) && Date.now() - (signInRetryAt.get(id) || 0) > 10 * 60 * 1000) {
+              signInRetryAt.set(id, Date.now());
+              bmIdCache.delete(id);
+            }
+          }
+          // Say why, once, whenever a server leaves or rejoins the scope.
+          const was = signInRefusal.get(id) || null;
+          if (refused !== was) {
+            if (refused) console.warn(`[bm] ${attr.name} is not in the console sign-in scope: ${refused}`);
+            else console.log(`[bm] ${attr.name} is back in the console sign-in scope (${bmId})`);
+            signInRefusal.set(id, refused);
+          }
+        }
       }
       if (state !== 'running') {
         players = 0;
@@ -1094,6 +1160,14 @@ async function pollServerStatus() {
       }
 
       statusList.push({ name: attr.name, identifier: id, region, state, ip, uptime: formatUptime(uptime), players, max });
+    }
+
+    // A server the panel no longer lists leaves the sign-in scope too.
+    reforgedzServers.retainServers(statusList.map((s) => s.identifier));
+    const signInScope = reforgedzServers.getBmIds().join(',');
+    if (signInScope !== lastSignInScope) {
+      console.log(`[bm] console sign-in searches ${signInScope ? `these server records first: ${signInScope}` : 'the organisation only (no verified server records yet)'}`);
+      lastSignInScope = signInScope;
     }
 
     serverStatusCache = { servers: statusList, lastUpdate: new Date().toISOString() };

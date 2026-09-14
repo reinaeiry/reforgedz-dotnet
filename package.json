@@ -11,7 +11,8 @@
     "restore": "node tools/restore.js",
     "health": "node tools/healthReport.js",
     "close-suspended": "node tools/closeSuspendedSubscriptions.js",
-    "env:example": "node tools/envExample.js"
+    "env:example": "node tools/envExample.js",
+    "test": "node --test test/battlemetrics.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",

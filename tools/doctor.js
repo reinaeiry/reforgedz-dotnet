@@ -328,6 +328,14 @@ check('battlemetrics', 'integrations', {}, async () => {
   if (!tk) return REHEARSAL ? skip('token blanked for rehearsal') : fail('BATTLEMETRICS_TOKEN not set: console sign-in and player counts break');
   const r = await fetchJson('https://api.battlemetrics.com/servers?filter[search]=ReforgedZ&page[size]=1', { headers: { Authorization: `Bearer ${tk}` } });
   if (!r.ok) return fail(`BattleMetrics answered ${r.status}`);
+  // BattleMetrics ignores a filter it cannot read and searches every player, so
+  // the sign-in scope settings must be numbers. The app ignores bad values; say so.
+  const notes = [];
+  const org = String(process.env.REFORGEDZ_BM_ORG_ID || '').trim();
+  if (org && !/^\d+$/.test(org)) notes.push('REFORGEDZ_BM_ORG_ID is not a number, so the default 112993 is used');
+  const ids = String(process.env.REFORGEDZ_BM_SERVER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (ids.some(s => !/^\d+$/.test(s))) notes.push('REFORGEDZ_BM_SERVER_IDS has entries that are not numbers, and they are ignored');
+  if (notes.length) return warn(`token accepted, but ${notes.join('; ')}`);
   return ok('token accepted');
 });
 
