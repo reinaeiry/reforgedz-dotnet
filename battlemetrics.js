@@ -20,6 +20,7 @@ const T = {
   budgetPerMin: 120,     // sign-in calls per minute, sustained; the token allows 300/min in total
   budgetBurst: 30,       // and at most this many at once
   gamertagMax: 32,       // stored console gamertags are 4 to 16 characters
+  findMax: 6,            // players the finder offers to pick from
 };
 
 // Time source for the budget and the cache, replaceable in tests. The lookup
@@ -100,21 +101,25 @@ function takeBudget() {
 // lookups that arrive together share one search. An outage is never cached.
 const cache = new Map();
 const inflight = new Map();
+// The finder keeps its own maps: a gamertag may contain "|", so sharing keys
+// with the lookup could let one answer stand in for the other.
+const findCache = new Map();
+const findInflight = new Map();
 
-function cacheGet(key) {
-  const entry = cache.get(key);
+function cacheGet(key, store = cache) {
+  const entry = store.get(key);
   if (!entry) return undefined;
   if (clock.now() - entry.at > T.cacheTtlMs) {
-    cache.delete(key);
+    store.delete(key);
     return undefined;
   }
   return entry.value;
 }
 
-function cachePut(key, value) {
-  cache.delete(key);
-  cache.set(key, { at: clock.now(), value });
-  while (cache.size > T.cacheMax) cache.delete(cache.keys().next().value);
+function cachePut(key, value, store = cache) {
+  store.delete(key);
+  store.set(key, { at: clock.now(), value });
+  while (store.size > T.cacheMax) store.delete(store.keys().next().value);
 }
 
 // ---- HTTP -------------------------------------------------------------------
@@ -137,7 +142,7 @@ async function discard(res) {
 // One BattleMetrics GET for a sign-in lookup. Never throws. A 429 is retried
 // once, and no call runs past the lookup's deadline.
 //   { ok: true, data }  |  { ok: false, outage, status, reason }
-async function bmGet(path, deadline) {
+async function bmGet(path, deadline, init = {}) {
   const tk = token();
   if (!tk) return { ok: false, outage: true, status: 0, reason: 'BATTLEMETRICS_TOKEN not set' };
   for (let attempt = 0; ; attempt += 1) {
@@ -147,8 +152,12 @@ async function bmGet(path, deadline) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), Math.min(T.callTimeoutMs, left));
     try {
+      const headers = { Authorization: `Bearer ${tk}` };
+      if (init.body !== undefined) headers['Content-Type'] = 'application/json';
       const res = await fetch(`${BM_BASE}${path}`, {
-        headers: { Authorization: `Bearer ${tk}` },
+        method: init.method || 'GET',
+        headers,
+        body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
         signal: ctrl.signal,
       });
       if (res.status === 429 && attempt === 0) {
@@ -346,6 +355,226 @@ async function resolveGamertag(tag, serverIds, key) {
   return result;
 }
 
+// ---- Identity finder --------------------------------------------------------
+// Sign-in and the in-game id box used to demand the player's current name
+// exactly as BattleMetrics has it. A typo, a renamed player, a name two players
+// share, or an Xbox "#1234" suffix all ended in "No ReforgedZ player found" with
+// no way forward. The finder returns the players the text could mean and the
+// player picks themselves. Picking from a list is no weaker than typing the
+// exact name, which was always enough to choose a player; accounts that have
+// purchases stay behind the ownership check in server.js either way.
+
+// An Identity ID pasted from the game, tidied, or null.
+function asReforgerUuid(raw) {
+  if (typeof raw !== 'string') return null;
+  const v = raw.replace(/[{}\s]/g, '').toLowerCase();
+  if (!UUID_RE.test(v) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(v)) return null;
+  return v;
+}
+
+// A name with case, spacing and punctuation ignored and an Xbox "#1234" suffix dropped.
+function looseName(s) {
+  return String(s || '').normalize('NFKC').replace(/#\d{3,5}\s*$/, '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function editDistance(a, b, cap) {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > cap) return cap + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// How close a name is to what was typed: 0 the same name, 1 the same once case,
+// spacing, punctuation and a suffix are ignored, 2 one contains the other, 3 or
+// 4 a typo or two. null means not close enough to offer.
+function closeness(name, typed) {
+  if (String(name).toLowerCase() === String(typed).toLowerCase()) return 0;
+  const a = looseName(name);
+  const b = looseName(typed);
+  if (!a || !b) return null;
+  if (a === b) return 1;
+  if (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a))) return 2;
+  if (b.length >= 4) {
+    const d = editDistance(a, b, 2);
+    if (d <= 2) return 2 + d;
+  }
+  return null;
+}
+
+// Per player in a response: current name, past names, the in-game ids linked to
+// them, and when BattleMetrics last saw any of their identifiers.
+function playerFacts(data) {
+  const facts = new Map();
+  const rows = data && Array.isArray(data.data) ? data.data : (data && data.data ? [data.data] : []);
+  for (const p of rows) {
+    if (!p || p.type !== 'player' || p.id == null) continue;
+    facts.set(String(p.id), {
+      bmPlayerId: String(p.id),
+      name: String((p.attributes && p.attributes.name) || ''),
+      pastNames: [],
+      lastSeen: null,
+      uuids: new Set(),
+    });
+  }
+  for (const inc of (data && data.included) || []) {
+    if (!inc || inc.type !== 'identifier' || !inc.attributes) continue;
+    const link = inc.relationships && inc.relationships.player && inc.relationships.player.data;
+    const f = link && link.id != null ? facts.get(String(link.id)) : null;
+    if (!f) continue;
+    const seen = inc.attributes.lastSeen;
+    if (typeof seen === 'string' && (!f.lastSeen || seen > f.lastSeen)) f.lastSeen = seen;
+    const type = String(inc.attributes.type).toLowerCase();
+    const value = String(inc.attributes.identifier || '');
+    if (type === 'name') {
+      if (value && value.toLowerCase() !== f.name.toLowerCase() && !f.pastNames.includes(value)) f.pastNames.push(value);
+    } else if (type === 'reforgeruuid' && UUID_RE.test(value.toLowerCase())) {
+      f.uuids.add(value.toLowerCase());
+    }
+  }
+  return facts;
+}
+
+function toCandidate(f, score, via) {
+  return {
+    bmPlayerId: f.bmPlayerId,
+    name: f.name,
+    lastSeen: f.lastSeen || null,
+    previousName: via || null,
+    biUid: f.uuids.size === 1 ? Array.from(f.uuids)[0] : null,
+    exact: score === 0 && !via,
+  };
+}
+
+// Players the typed text could mean, best first, for the player to pick from.
+//   { candidates: [{ bmPlayerId, name, lastSeen, previousName, biUid, exact }] }
+//   { unavailable: true, reason }
+// `wide` skips the today's-servers shortcut ("not me, show everyone").
+// Never throws.
+async function findPlayers(query, { wide = false } = {}) {
+  const uuid = asReforgerUuid(query);
+  const tag = uuid ? null : cleanGamertag(query);
+  if (!uuid && !tag) return { candidates: [] };
+  if (!token()) return { unavailable: true, reason: 'BATTLEMETRICS_TOKEN not set' };
+
+  const serverIds = reforgedzServers.getBmIds();
+  const key = `${uuid ? 'uuid' : 'name'}|${wide ? 'wide' : 'narrow'}|${serverIds.join(',')}|${uuid || tag.toLowerCase()}`;
+  const copy = (list) => list.map((c) => ({ ...c }));
+  const cached = cacheGet(key, findCache);
+  if (cached !== undefined) return { candidates: copy(cached) };
+
+  let pending = findInflight.get(key);
+  if (!pending) {
+    pending = (uuid ? findByUuid(uuid) : findByName(tag, serverIds, wide))
+      .then((r) => {
+        if (!r.unavailable) cachePut(key, r.candidates, findCache);
+        return r;
+      })
+      .catch((e) => {
+        console.error(`[bm] identity finder failed unexpectedly: ${(e && e.message) || e}`);
+        return { unavailable: true, reason: 'internal error' };
+      })
+      .finally(() => findInflight.delete(key));
+    findInflight.set(key, pending);
+  }
+  const r = await pending;
+  return r.unavailable ? r : { candidates: copy(r.candidates) };
+}
+
+async function findByUuid(uuid) {
+  const deadline = Date.now() + T.deadlineMs;
+  const m = await bmGet('/players/match', deadline, {
+    method: 'POST',
+    body: { data: [{ type: 'identifier', attributes: { type: 'reforgerUUID', identifier: uuid } }] },
+  });
+  if (!m.ok) return m.outage ? { unavailable: true, reason: m.reason } : { candidates: [] };
+  const hit = ((m.data && m.data.data) || [])[0];
+  const rel = hit && hit.relationships;
+  const pid = rel && rel.player && rel.player.data && rel.player.data.id;
+  if (pid == null) return { candidates: [] };
+  const orgs = ((rel.organizations && rel.organizations.data) || []).map((o) => String(o.id));
+  // Seen by BattleMetrics, but never on a ReforgedZ server.
+  if (!orgs.includes(orgId())) return { candidates: [] };
+  const d = await bmGet(`/players/${encodeURIComponent(String(pid))}?include=identifier`, deadline);
+  if (!d.ok) return d.outage ? { unavailable: true, reason: d.reason } : { candidates: [] };
+  const f = playerFacts(d.data).get(String(pid));
+  if (!f) return { candidates: [] };
+  const c = toCandidate(f, 0, null);
+  c.biUid = uuid;
+  c.lastSeen = c.lastSeen || (hit.attributes && hit.attributes.lastSeen) || null;
+  return { candidates: [c] };
+}
+
+async function findByName(tag, serverIds, wide) {
+  const deadline = Date.now() + T.deadlineMs;
+  const facts = new Map();
+  const search = (filter) => bmGet(
+    `/players?filter[search]=${encodeURIComponent(tag)}&${filter}&include=identifier&page[size]=${T.pageSize}`,
+    deadline,
+  );
+  const absorb = (data) => {
+    for (const [id, f] of playerFacts(data)) if (!facts.has(id)) facts.set(id, f);
+  };
+
+  // Today's servers first, as the lookup always did: exactly one player with
+  // that current name there is the answer.
+  if (serverIds.length && !wide) {
+    const r = await search(`filter[servers]=${serverIds.join(',')}`);
+    if (!r.ok) return r.outage ? { unavailable: true, reason: r.reason } : { candidates: [] };
+    absorb(r.data);
+    const exact = Array.from(facts.values()).filter((f) => f.name.toLowerCase() === tag.toLowerCase());
+    if (exact.length === 1) return { candidates: [toCandidate(exact[0], 0, null)] };
+  }
+
+  const r = await search(`filter[organizations]=${orgId()}`);
+  if (!r.ok) return r.outage ? { unavailable: true, reason: r.reason } : { candidates: [] };
+  absorb(r.data);
+
+  const scored = [];
+  for (const f of facts.values()) {
+    let best = closeness(f.name, tag);
+    let via = null;
+    for (const past of f.pastNames) {
+      const c = closeness(past, tag);
+      if (c !== null && (best === null || c < best)) { best = c; via = past; }
+    }
+    if (best !== null) scored.push({ f, best, via });
+  }
+  scored.sort((a, b) => (a.best - b.best) || String(b.f.lastSeen || '').localeCompare(String(a.f.lastSeen || '')));
+  return { candidates: scored.slice(0, T.findMax).map(({ f, best, via }) => toCandidate(f, best, via)) };
+}
+
+// The in-game id of a player the finder showed, when the search did not carry
+// exactly one.  { biUid } (null when BattleMetrics has none)  |  { unavailable, reason }
+async function reforgerUuidForPlayer(bmPlayerId) {
+  const id = String(bmPlayerId == null ? '' : bmPlayerId);
+  if (!/^\d{1,20}$/.test(id)) return { biUid: null };
+  if (!token()) return { unavailable: true, reason: 'BATTLEMETRICS_TOKEN not set' };
+  try {
+    const d = await bmGet(`/players/${id}?include=identifier`, Date.now() + T.deadlineMs);
+    if (!d.ok) return { unavailable: true, reason: d.reason };
+    const f = playerFacts(d.data).get(id);
+    if (f && f.uuids.size) return { biUid: Array.from(f.uuids)[0] };
+    for (const inc of (d.data && d.data.included) || []) {
+      if (!inc || inc.type !== 'identifier' || !inc.attributes) continue;
+      if (String(inc.attributes.type).toLowerCase() !== 'reforgeruuid') continue;
+      const v = String(inc.attributes.identifier || '').toLowerCase();
+      if (UUID_RE.test(v)) return { biUid: v };
+    }
+    return { biUid: null };
+  } catch (e) {
+    return { unavailable: true, reason: String((e && e.message) || e) };
+  }
+}
+
 // Has BattleMetrics ever seen this Reforger identity? The text search cannot
 // answer that (it is a fuzzy name search and returns strangers for any
 // string), but the identifier-match endpoint is exact. Used to check an id a
@@ -381,12 +610,19 @@ module.exports = {
   matchReforgerUuid,
   cleanGamertag,
   orgId,
+  findPlayers,
+  reforgerUuidForPlayer,
+  asReforgerUuid,
   _test: {
     T,
     clock,
+    looseName,
+    closeness,
     reset() {
       cache.clear();
       inflight.clear();
+      findCache.clear();
+      findInflight.clear();
       bucket.tokens = null;
       bucket.at = 0;
       warnedBadOrg = false;

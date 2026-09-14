@@ -1312,7 +1312,7 @@
     }
 
     function renderTopBuyers(rows) {
-      const platformLabel = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
+      const platformLabel = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation', web: 'Website' };
       document.getElementById('topBuyersBody').innerHTML = rows.length === 0
         ? '<tr><td colspan="4" class="empty-state">No buyers yet.</td></tr>'
         : rows.map(b => `<tr><td>${escHtml(b.name || b.steam_id)}</td><td>${platformLabel[b.platform] || b.platform || 'Steam'}</td><td>${b.orders}</td><td><span class="amount-cell">${centsToUsd(b.cents)}</span></td></tr>`).join('');

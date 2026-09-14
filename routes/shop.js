@@ -8,6 +8,8 @@ const db = require('../db');
 const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus } = require('../sync');
 const { SERVER_IDS, SERVER_LABELS, isValidServerId, isSaveServerId, listSaveServers } = require('../gameServers');
 const discord = require('../discord');
+const consoleIdentity = require('../consoleIdentity');
+const webAuth = require('../webAuth');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
@@ -84,7 +86,15 @@ function detectImageExt(buf) {
   return null;
 }
 
-const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
+const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation', web: 'Website' };
+
+// The name to call a player by, or null. A website account is "Player" until its
+// in-game ID is found, which is no name at all.
+function playerNameOf(u) {
+  if (!u) return null;
+  const persona = u.persona && u.persona !== webAuth.DEFAULT_PERSONA ? u.persona : null;
+  return persona || u.gamertag || null;
+}
 
 function sendDiscordNotification({ eventType, user, biUid, productTitle, amountCents, currency, status, serverId, extraFields }) {
   if (!DISCORD_WEBHOOK_URL) return;
@@ -123,6 +133,9 @@ function sendDiscordNotification({ eventType, user, biUid, productTitle, amountC
   if (platform === 'steam') {
     fields.push({ name: 'Player', value: (user && user.persona) || 'Unknown', inline: true });
     fields.push({ name: 'Steam ID', value: (user && user.steam_id) || 'Unknown', inline: true });
+  } else if (platform === 'web') {
+    fields.push({ name: 'Player', value: playerNameOf(user) || 'In-game name not known yet', inline: true });
+    fields.push({ name: 'Website account', value: (user && user.steam_id) || 'Unknown', inline: true });
   } else {
     fields.push({ name: 'Gamertag', value: (user && user.gamertag) || 'Unknown', inline: true });
     fields.push({ name: 'BM Player ID', value: (user && user.bm_player_id) || 'Unknown', inline: true });
@@ -446,11 +459,9 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
   const { productId, testMode, serverId, customAmountCents } = req.body;
   if (!productId) return res.status(400).json({ error: 'Missing productId' });
 
-  // Only admins can use test mode (sandbox).
+  // Only admins can use test mode (sandbox). Checked after the product, so a
+  // player is told what their purchase needs before anything about PayPal.
   const useTest = testMode && req.user.role === 'admin';
-  if (!paypal.isConfigured(useTest)) {
-    return res.status(503).json({ error: `PayPal ${useTest ? 'sandbox' : 'live'} is not configured.` });
-  }
 
   const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId);
   if (!product) return res.status(404).json({ error: 'Product not found' });
@@ -459,6 +470,17 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
   // endpoint can't carry — it has its own multipart checkout below.
   if (product.type === 'custom_flag') {
     return res.status(400).json({ error: 'This product needs additional details — use the Custom Flag checkout form.' });
+  }
+
+  // Queue priority is delivered to an in-game id. Taking the money first and
+  // asking later left paid orders with nowhere to deliver (#106 and #675, found
+  // 2026-09-14), so the id comes first.
+  if (product.grants_priority_queue && !req.user.bi_uid) {
+    return res.status(400).json({ code: 'needs_in_game_id', error: 'Add your in-game ID first, so your priority queue has somewhere to go.' });
+  }
+
+  if (!paypal.isConfigured(useTest)) {
+    return res.status(503).json({ error: `PayPal ${useTest ? 'sandbox' : 'live'} is not configured.` });
   }
 
   let orderServerId = null;
@@ -472,13 +494,22 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
       let used, alreadyHas, limit = effLimit;
       if (product.grants_priority_queue) {
         // Gate against the real reserved set (effective purchases + manual
-        // grants, deduped by GUID) so manual grants can't push game.admins
-        // past the cap. A buyer whose GUID is already reserved here is a
-        // renewal — let them through (they don't add a new slot). The cap is
-        // also squeezed by the server's GM count so PQ + GMs <= ADMIN_CEILING.
+        // grants, deduped by GUID) so manual grants can't push game.admins past
+        // the cap. The cap is also squeezed by the server's GM count so
+        // PQ + GMs <= ADMIN_CEILING.
         const set = buildPriorityQueueGuidsPerServer()[serverId] || new Set();
         used = set.size;
-        alreadyHas = !!(req.user.bi_uid && set.has(req.user.bi_uid));
+        // A renewal (this account already holds a live purchase here) takes no new
+        // slot, so it may buy on a full server. Keyed on the account's own orders,
+        // not on the in-game ID: anyone can set their ID to a current holder's, buy
+        // "as a renewal", then change the ID back and take a new slot.
+        alreadyHas = !!db.prepare(`
+          SELECT 1 FROM orders o JOIN products p ON p.id = o.product_id
+          WHERE o.steam_id = ? AND o.status = 'completed' AND p.grants_priority_queue = 1
+            AND (COALESCE(p.server_specific, 0) = 0 OR o.server_id = ?)
+            AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
+          LIMIT 1
+        `).get(req.user.steam_id, serverId);
         const gm = gmCountPerServer()[serverId] || 0;
         limit = Math.min(effLimit, ADMIN_CEILING - gm);
       } else {
@@ -822,7 +853,7 @@ function fulfillOrder(orderId, cap) {
       currency: order.currency,
       feeCents: cap.feeCents,
       serverLabel: order.server_id ? (SERVER_LABELS[order.server_id] || order.server_id) : null,
-      buyerName: cap.payerName || order.persona || null,
+      buyerName: cap.payerName || playerNameOf(order),
       dateMs: Date.now(),
       nextSteps: purchaseNextSteps(order)
     }).catch(() => {});
@@ -1050,7 +1081,7 @@ router.post('/api/shop/priority-queue/move', requireAuth, (req, res) => {
     return res.status(400).json({ error: `${SERVER_LABELS[to] || to} is full right now. Try another server or check back later.` });
   }
 
-  const name = req.user.gamertag || req.user.persona || null;
+  const name = req.user.gamertag || playerNameOf(req.user);
   const by = `self:${req.user.steam_id}`;
   db.transaction(() => {
     applyPqGrant(guid, to, name, by);
@@ -1070,47 +1101,98 @@ router.post('/api/shop/priority-queue/move', requireAuth, (req, res) => {
   res.json({ ok: true, from, to, nextRestart: describeNextRestart().text, nextMoveAt: now + PQ_MOVE_COOLDOWN_DAYS * 86400 });
 });
 
-// Set own BI UID. Steam-OpenID users are trusted to enter their own UID
-// because Steam doesn't expose it for us. Console (PSN/Xbox) users had
-// their UID resolved from BattleMetrics during signup — we don't let them
-// change it from the web, because an attacker who hijacked their session
-// would otherwise redirect their entitlements (priority queue etc.) onto
-// the attacker's own GUID. Console-account UID changes go through admin
-// support via /api/shop/admin/users/:steamId/bi-uid.
+// Set own in-game id (the Bohemia identity id the game servers key queue priority
+// and perks on). Anyone signed in can set or change it: the owner's rule is that a
+// player who typed it wrong, or has a new game account, fixes it themselves.
+// Changing it moves their priority queue to the new id at the next sync, because
+// entitlements are read from users.bi_uid every time.
+//
+// One exception: an Xbox or PlayStation account whose email sign-in is not
+// confirmed. Console sign-in never proved who was typing, so whoever got into one
+// could otherwise send a paying player's priority to their own ID. It changes once
+// the account has email sign-in confirmed through its own inbox: a claim with the
+// email it paid with, or an email added just after a staff re-link.
 router.post('/api/shop/set-bi-uid', requireAuth, async (req, res) => {
-  if (req.user.platform === 'psn' || req.user.platform === 'xbox') {
+  try {
+    await setOwnBiUid(req, res);
+  } catch (e) {
+    console.error('[bi-uid] save failed:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Could not save your in-game ID. Try again.' });
+  }
+});
+
+async function setOwnBiUid(req, res) {
+  const isConsole = req.user.platform === 'psn' || req.user.platform === 'xbox';
+  if (isConsole && !req.user.email_verified_at) {
     return res.status(403).json({
-      error: 'Console accounts have their UID set automatically from BattleMetrics. To change it, open a ticket in our Discord.'
+      code: 'needs_login',
+      error: 'Set up email sign-in on this account first, then you can set your in-game ID. Your account page shows how.'
     });
   }
 
-  const { biUid } = req.body;
-  if (!biUid || typeof biUid !== 'string') return res.status(400).json({ error: 'Missing BI UID' });
+  const body = req.body || {};
+  const bm = require('../battlemetrics');
+  const bmDown = 'We could not reach BattleMetrics. Please try again in a minute.';
+  let cleaned = null;
+  let playerName = null;
+  let verified = false;
 
-  // Pasted from the game's profile screen; braces, spaces and capitals are
-  // the usual noise around a correct id.
-  const cleaned = biUid.replace(/[{}\s]/g, '').toLowerCase();
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(cleaned)) {
-    return res.status(400).json({ error: 'That does not look like an Identity ID. It is 36 characters with dashes, like 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac.' });
+  if (body.ref != null) {
+    // A player picked from "Find me"; only picks this browser was shown count.
+    const cand = consoleIdentity.pickCandidate(req.session, body.ref);
+    if (!cand) return res.status(400).json({ code: 'pick_expired', error: 'That choice has expired. Search for yourself again.' });
+    cleaned = cand.biUid;
+    if (!cleaned) {
+      const found = await bm.reforgerUuidForPlayer(cand.bmPlayerId);
+      if (found.unavailable) return res.status(503).json({ error: bmDown });
+      cleaned = found.biUid;
+    }
+    if (!cleaned) {
+      return res.status(404).json({ code: 'not_recorded', error: 'BattleMetrics has not recorded an in-game ID for that player yet. Play one round on a ReforgedZ server, or paste your ID from the game.' });
+    }
+    playerName = cand.name || null;
+    verified = true;
+  } else {
+    const raw = typeof body.biUid === 'string' ? body.biUid : '';
+    if (!raw.trim()) return res.status(400).json({ error: 'Enter your in-game ID.' });
+    if (/^[{\s]*0{8}-0{4}-0{4}-0{4}-0{12}[}\s]*$/.test(raw)) {
+      return res.status(400).json({ error: 'That is the placeholder ID, not yours. Copy the real one from your profile in the game.' });
+    }
+    // Pasted from the game's profile screen; braces, spaces and capitals are the
+    // usual noise around a correct id.
+    cleaned = bm.asReforgerUuid(raw);
+    if (!cleaned) {
+      return res.status(400).json({ error: 'That does not look like an in-game ID. It is 36 characters with dashes, like 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac.' });
+    }
+    // Checked with BattleMetrics, so a typo cannot send every perk to nobody and
+    // the player sees whose ID it is. A player who has never got onto one of our
+    // servers (the queue is why they are buying) is still accepted when
+    // BattleMetrics has seen the ID anywhere. If BattleMetrics cannot be asked at
+    // all, the save goes through rather than blocking on someone else's outage.
+    const ours = await bm.findPlayers(cleaned);
+    if (!ours.unavailable && ours.candidates.length) {
+      playerName = ours.candidates[0].name || null;
+      verified = true;
+    } else {
+      const seen = await bm.matchReforgerUuid(cleaned).catch(() => ({ found: null }));
+      if (seen.found === false) {
+        return res.status(400).json({ error: 'BattleMetrics has never seen that ID on any server. Check it against your profile in the game. If you only just started playing, play one round and try again.' });
+      }
+      if (seen.found === true) verified = true;
+      else console.warn('[bi-uid] BattleMetrics check unavailable (%s); saving %s unverified for %s', seen.error, cleaned, req.user.steam_id);
+    }
   }
-  if (/^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(cleaned)) {
-    return res.status(400).json({ error: 'That is the placeholder id, not yours. Copy the real one from your profile in the game.' });
-  }
-
-  // A typo here sends every perk to nobody, so the id is checked against
-  // BattleMetrics before it is saved. If BattleMetrics cannot be asked, the
-  // save goes through; a player must not be blocked by someone else's outage.
-  const match = await require('../battlemetrics').matchReforgerUuid(cleaned).catch(() => ({ found: null }));
-  if (match.found === false) {
-    return res.status(400).json({ error: 'BattleMetrics has never seen that id on any server. Check it against your profile in the game; if it is right and you have played recently, try again in a few minutes or open a ticket.' });
-  }
-  if (match.found === null) console.warn('[bi-uid] BattleMetrics check unavailable (%s); saving %s unverified for %s', match.error, cleaned, req.user.steam_id);
 
   db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(cleaned, req.user.steam_id);
+  // A website account goes by its in-game name once we know it: that is what the
+  // account page shows and the name the game-server sync writes.
+  if (playerName && req.user.platform === 'web') {
+    db.prepare('UPDATE users SET persona = ? WHERE steam_id = ?').run(String(playerName).slice(0, 64), req.user.steam_id);
+  }
   req.user.bi_uid = cleaned;
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  res.json({ ok: true, bi_uid: cleaned, verified: match.found === true, lastSeen: match.lastSeen || null });
-});
+  res.json({ ok: true, bi_uid: cleaned, verified, playerName });
+}
 
 // Verify/capture a PayPal order (fallback when the return redirect or webhook
 // didn't complete fulfillment). Frontend calls this with the order id.
@@ -1694,7 +1776,7 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
   if (refund && order.payer_email) {
     sendRefundConfirmation({
       to: order.payer_email,
-      displayName: order.persona || order.gamertag || null,
+      displayName: playerNameOf(order),
       productTitle: order.product_title,
       amountCents: refundedCents || order.amount_cents,
       currency: order.currency,
@@ -3369,7 +3451,7 @@ async function postBillingIssueAlert(opts) {
   const platform = (ctx && ctx.platform) || 'steam';
 
   const fields = [
-    { name: 'Player', value: (ctx && (ctx.persona || ctx.gamertag)) || 'Unknown', inline: true },
+    { name: 'Player', value: playerNameOf(ctx) || 'Unknown', inline: true },
     { name: 'Platform', value: PLATFORM_LABELS[platform] || platform, inline: true },
     { name: 'Discord', value: ctx && ctx.discord_id ? '<@' + ctx.discord_id + '>' : 'Not linked', inline: true },
     { name: 'Product', value: (ctx && ctx.product_title) || 'Unknown', inline: true },
@@ -3524,7 +3606,7 @@ async function handleBillingFailure(opts) {
     try {
       await sendPaymentFailed({
         to: ctx.payer_email,
-        displayName: ctx.persona || ctx.gamertag || null,
+        displayName: playerNameOf(ctx),
         productTitle: ctx.product_title,
         amountCents: ctx.amount_cents,
         currency: ctx.currency,
@@ -3719,7 +3801,8 @@ router.get('/api/shop/admin/doctor', requireAdmin, async (req, res) => {
 router.get('/api/shop/account/summary', requireAuth, (req, res) => {
   const me = db.prepare(`
     SELECT steam_id, persona, avatar_url, platform, gamertag, bm_player_id,
-           bi_uid, discord_id, role, created_at
+           bi_uid, discord_id, role, created_at, email, email_verified_at,
+           password_hash IS NOT NULL AS has_password
     FROM users WHERE steam_id = ?
   `).get(req.user.steam_id);
   if (!me) return res.status(404).json({ error: 'Account not found' });
@@ -3814,9 +3897,17 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
       // stored row, which still says 'admin' for someone removed from that list.
       isAdmin: req.user.role === 'admin',
       createdAt: me.created_at,
-      // Console UIDs are resolved from BattleMetrics and deliberately not
-      // self-editable (see /api/shop/set-bi-uid).
-      canEditBiUid: me.platform !== 'psn' && me.platform !== 'xbox'
+      email: me.email || null,
+      hasPassword: !!me.has_password,
+      // Anyone can change their in-game id, except a console account whose email
+      // sign-in is not confirmed yet (see /api/shop/set-bi-uid).
+      canEditBiUid: (me.platform !== 'psn' && me.platform !== 'xbox') || !!me.email_verified_at,
+      // Whether "add email sign-in" is offered here, and if not, what to do instead.
+      addLogin: (() => {
+        const refusal = webAuth.addLoginRefusal(me, { relinkedAt: req.session && req.session.relinkedAt });
+        if (!refusal) return { allowed: true };
+        return { allowed: false, code: refusal.code, help: refusal.code === 'has_login' ? null : refusal.error };
+      })()
     },
     subscriptions: subs,
     orders
@@ -4407,7 +4498,7 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         });
         const to = resource.subscriber?.email_address || ctx.payer_email;
         if (to) {
-          const displayName = ctx.persona || ctx.gamertag || null;
+          const displayName = playerNameOf(ctx);
           const mail = endedReason === 'suspended'
             ? sendSubscriptionSuspended({
                 to, displayName,
@@ -4511,7 +4602,7 @@ async function dispatchPayPalEvent(event, resource, orderId) {
           if (to) {
             sendRefundConfirmation({
               to,
-              displayName: full.persona || full.gamertag || null,
+              displayName: playerNameOf(full),
               productTitle: full.product_title,
               amountCents: full.amount_cents,
               currency: full.currency,

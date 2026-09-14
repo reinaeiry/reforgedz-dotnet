@@ -715,24 +715,7 @@
           <button type="button" class="currency-pill" data-cur="EUR">€ EUR</button>
         </div>
         <div class="signin-wrap" id="signinWrap">
-          <button type="button" class="signin-btn" id="signinBtn">
-            Sign in <span class="chevron"></span>
-          </button>
-          <div class="signin-menu" id="signinMenu">
-            <a href="/auth/steam" class="signin-item">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.04 2 11.04c0 3.15 1.73 5.92 4.33 7.5l2.6-3.76c-.14-.04-.28-.1-.41-.17a2.5 2.5 0 1 1 3.45-.91l2.58 3.73C18.16 16.99 22 14.36 22 11.04 22 6.04 17.52 2 12 2zm4.5 9.54a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
-              Steam
-            </a>
-            <button type="button" class="signin-item" data-platform="xbox">
-              <span class="platform-mark xbox-mark">X</span>
-              Xbox
-            </button>
-            <button type="button" class="signin-item" data-platform="psn">
-              <span class="platform-mark psn-mark">PS</span>
-              PlayStation
-            </button>
-            <div class="signin-hint">Sign in with the platform you play on. You can link Discord afterwards from your <a href="/account">Account</a> page.</div>
-          </div>
+          <button type="button" class="signin-btn" id="signinBtn">Sign in</button>
         </div>
       </div>
     </div>
@@ -906,23 +889,27 @@
     </div>
   </div>
 
-  <!-- BI UID Modal -->
+  <!-- In-game ID Modal (before a checkout that needs one) -->
   <div class="biuid-overlay" id="biuidOverlay">
     <div class="biuid-modal">
-      <h3>Your in-game Identity ID</h3>
-      <p>Your perks follow this id in the game, so it has to be exactly right. Find it in Arma Reforger:</p>
-      <ol>
-        <li>Open the <strong>Main Menu</strong></li>
-        <li>Click your <strong>account name</strong> in the top right corner</li>
-        <li>Copy the ID that looks like <code>41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac</code> (36 characters with dashes)</li>
-      </ol>
-      <p style="font-size:0.78rem;color:var(--text-ghost);margin-top:-4px">Paste it as it is; we tidy spaces and braces, and check it against BattleMetrics before saving so a typo cannot send your perks to nobody.</p>
-      <input type="text" class="biuid-input" id="biuidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellcheck="false" autocomplete="off">
+      <h3>Your in-game ID</h3>
+      <p id="biuidLead">Your perks go to your in-game ID. Type the name you play under and pick yourself, or paste the ID.</p>
+      <input type="text" class="biuid-input" id="biuidInput" placeholder="In-game name or ID" spellcheck="false" autocomplete="off" maxlength="40">
+      <div class="finder-list" id="biuidMatches" style="display:none"></div>
+      <details class="biuid-help">
+        <summary>Where do I find my in-game ID?</summary>
+        <ol>
+          <li>Open the <strong>Main Menu</strong> in Arma Reforger</li>
+          <li>Select your <strong>account name</strong> in the top right corner</li>
+          <li>Copy the ID that looks like <code>41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac</code></li>
+        </ol>
+      </details>
       <div class="biuid-error" id="biuidError"></div>
       <div class="biuid-actions">
         <button class="biuid-cancel" id="biuidCancel">Cancel</button>
         <button class="biuid-skip" id="biuidSkip">Skip for now</button>
-        <button class="biuid-submit" id="biuidSubmit">Save & Continue</button>
+        <button class="biuid-skip" id="biuidFind">Find me</button>
+        <button class="biuid-submit" id="biuidSubmit">Save and continue</button>
       </div>
     </div>
   </div>
@@ -976,20 +963,28 @@
     </div>
   </div>
 
-  <!-- Console Sign-in Modal -->
-  <div class="console-overlay" id="consoleOverlay">
-    <div class="console-modal">
-      <h3 id="consoleModalTitle">Sign in with Xbox</h3>
-      <p>Enter your <span id="consolePlatformLabel">Xbox</span> gamertag. We'll match it against BattleMetrics to find your in-game identity.</p>
-      <input type="text" class="console-input" id="consoleGamertagInput" placeholder="Gamertag" spellcheck="false" autocomplete="off" maxlength="32">
-      <div class="console-result" id="consoleResult" style="display:none"></div>
-      <div class="console-error" id="consoleError"></div>
-      <div class="console-actions">
-        <button class="console-cancel" id="consoleCancel">Cancel</button>
-        <button class="console-lookup" id="consoleLookup">Look up</button>
-        <button class="console-confirm" id="consoleConfirm" style="display:none">Confirm &amp; Sign in</button>
+  <!-- Sign-in Modal (email and password) -->
+  <div class="console-overlay" id="authOverlay">
+    <div class="console-modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+      <h3 id="authTitle">Sign in</h3>
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" id="authTabSignin">Sign in</button>
+        <button type="button" class="auth-tab" id="authTabRegister">Create account</button>
       </div>
-      <p class="console-warn">You can only set your console identity once per browser. If you make a mistake, open a ticket in our Discord.</p>
+      <form id="authForm" novalidate>
+        <label class="auth-label" for="authEmail">Email</label>
+        <input type="email" class="console-input" id="authEmail" autocomplete="email" maxlength="254" spellcheck="false">
+        <label class="auth-label" for="authPassword" id="authPasswordLabel">Password</label>
+        <input type="password" class="console-input" id="authPassword" autocomplete="current-password" maxlength="200">
+        <div class="console-error" id="authError" role="alert"></div>
+        <div class="console-result auth-info" id="authNotice" role="status" style="display:none"></div>
+        <div class="console-actions">
+          <button type="button" class="console-cancel" id="authCancel">Cancel</button>
+          <button type="submit" class="console-confirm" id="authSubmit">Sign in</button>
+        </div>
+      </form>
+      <p class="auth-alt"><button type="button" class="finder-more" id="authForgot">Forgot password, or bought before on Xbox or PlayStation?</button></p>
+      <p class="auth-alt">Staff, or signed in with Steam before? <a href="/auth/steam" id="authSteamLink">Sign in with Steam</a></p>
     </div>
   </div>
 
@@ -1524,6 +1519,90 @@
       min-height: 1.2em;
       line-height: 1.5;
     }
+
+    /* ---- Sign-in modal ---- */
+    .auth-tabs { display: flex; gap: 6px; margin: 4px 0 8px; }
+    .auth-tab {
+      flex: 1;
+      padding: 8px 10px;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-family: var(--body);
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .auth-tab.active { color: #fff; border-color: rgba(204, 31, 31, 0.5); background: rgba(204, 31, 31, 0.12); }
+    .auth-tab:focus-visible { outline: 2px solid rgba(204, 31, 31, 0.6); outline-offset: 2px; }
+    .auth-label { display: block; font-size: 0.75rem; color: var(--text-dim); margin: 12px 0 4px; }
+    .console-modal .auth-alt { font-size: 0.78rem; color: var(--text-ghost); margin: 12px 0 0; line-height: 1.6; }
+    .console-modal .auth-alt a { color: var(--text-dim); text-decoration: underline; }
+    .web-mark { background: var(--accent); }
+    /* Phone widths: the sign-in modal scrolls instead of running off the screen,
+       and button rows wrap instead of pushing Cancel off the left edge. */
+    .console-modal { max-height: 90vh; overflow-y: auto; }
+    .console-actions, .biuid-actions { flex-wrap: wrap; }
+    /* An explanation, not a success: neutral, not the green result box. */
+    .console-result.auth-info { background: rgba(255, 255, 255, 0.04); border-color: var(--border); color: var(--text-dim); }
+
+    /* ---- Identity finder: "is one of these you?" ---- */
+    .finder-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 12px;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+
+    .finder-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--body);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .finder-item:hover { border-color: var(--border-hover); }
+    .finder-item:focus-visible { outline: 2px solid rgba(74, 222, 128, 0.6); outline-offset: 2px; }
+    .finder-item.selected { border-color: #4ade80; background: rgba(74, 222, 128, 0.08); }
+    .finder-name { font-size: 0.9rem; font-weight: 600; overflow-wrap: anywhere; }
+    .finder-meta { font-size: 0.75rem; color: var(--text-ghost); }
+
+    .finder-more {
+      margin-top: 6px;
+      padding: 0;
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 0.78rem;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    .finder-proof {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .finder-proof p { margin-bottom: 10px; }
+
+    .biuid-help { font-size: 0.8rem; color: var(--text-dim); margin-top: 10px; }
+    .biuid-help summary { cursor: pointer; }
+    .biuid-help ol { margin: 8px 0 0; }
 
     .console-actions {
       display: flex;

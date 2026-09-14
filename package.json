@@ -12,7 +12,7 @@
     "health": "node tools/healthReport.js",
     "close-suspended": "node tools/closeSuspendedSubscriptions.js",
     "env:example": "node tools/envExample.js",
-    "test": "node --test test/battlemetrics.test.js"
+    "test": "node --test test/battlemetrics.test.js test/identity.test.js test/webAuth.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",

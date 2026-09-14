@@ -17,9 +17,12 @@ sessionDb.pragma('journal_mode = WAL');
 const passport = require('passport');
 const SteamStrategy = require('passport-steam').Strategy;
 const db = require('./db');
-const { lookupPlayerByGamertag, cleanGamertag, orgId: bmOrgId } = require('./battlemetrics');
+const { cleanGamertag, orgId: bmOrgId, findPlayers, asReforgerUuid } = require('./battlemetrics');
 const fx = require('./fx');
 const reforgedzServers = require('./reforgedzServers');
+const webAuth = require('./webAuth');
+const consoleIdentity = require('./consoleIdentity');
+const { sendAccountLink } = require('./invoiceMail');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -280,6 +283,46 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
+// Every sign-in records the account's auth_gen in the session, and a session whose
+// generation no longer matches (the password was reset since) is signed out.
+// Sessions from before this existed carry none, which reads as 0, the value every
+// account starts with, so nobody is signed out by the change itself.
+//
+// It also records how the session signed in (options.authMethod: 'steam',
+// 'password', 'link' or 'relink'). Admin rights come from ADMIN_STEAM_IDS and hold
+// only on a Steam session: a password or an emailed link never makes anyone an
+// admin. Sessions from before this existed carry no method, and the only way one
+// of those could belong to an ADMIN_STEAM_IDS account was Steam.
+app.use((req, res, next) => {
+  const logIn = req.logIn;
+  if (typeof logIn === 'function') {
+    const wrapped = function (user, options, done) {
+      if (typeof options === 'function') { done = options; options = {}; }
+      const method = (options && options.authMethod) || 'other';
+      return logIn.call(req, user, options, (err) => {
+        if (!err && req.session && user) {
+          req.session.authGen = Number(user.auth_gen) || 0;
+          req.session.authMethod = method;
+        }
+        if (done) done(err);
+      });
+    };
+    req.login = wrapped;
+    req.logIn = wrapped;
+  }
+  if (req.user && (Number(req.session && req.session.authGen) || 0) !== (Number(req.user.auth_gen) || 0)) {
+    return req.logout((err) => {
+      if (err) console.error('[auth] sign-out after a password reset failed:', err.message);
+      next();
+    });
+  }
+  if (req.user && req.user.role === 'admin') {
+    const method = req.session && req.session.authMethod;
+    if (method !== undefined && method !== 'steam') req.user.role = 'user';
+  }
+  next();
+});
+
 // ---- Tighter limiter on /api writes ----
 app.use('/api', (req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD') return next();
@@ -421,7 +464,8 @@ app.get('/auth/steam', authLimiter, (req, res, next) => {
 app.get('/auth/steam/callback', authLimiter,
   // passport ≥0.6 regenerates the session on login and would drop returnTo
   // without keepSessionInfo.
-  passport.authenticate('steam', { failureRedirect: '/shop', keepSessionInfo: true }),
+  // authMethod reaches the sign-in wrapper below: admin rights need a Steam session.
+  passport.authenticate('steam', { failureRedirect: '/shop', keepSessionInfo: true, authMethod: 'steam' }),
   (req, res) => {
     const dest = safeReturnTo(req.session.returnTo) || '/shop';
     delete req.session.returnTo;
@@ -445,174 +489,250 @@ app.get('/api/auth/me', (req, res) => {
     bi_uid: req.user.bi_uid || null,
     platform: req.user.platform || 'steam',
     gamertag: req.user.gamertag || null,
-    discord_id: req.user.discord_id || null
+    discord_id: req.user.discord_id || null,
+    email: req.user.email || null,
+    has_password: !!req.user.password_hash,
+    email_verified: !!req.user.email_verified_at
   });
 });
 
-// ---- Console sign-in (Xbox / PlayStation, no real OAuth) ----
-const CONSOLE_COOKIE = 'rz_console_locked';
-const CONSOLE_COOKIE_MAX_AGE = 365 * 24 * 60 * 60 * 1000;
+// ---- Website accounts: email and password -----------------------------------
+// The shop's own sign-in (webAuth.js, which explains who can add email sign-in to
+// an existing account, and why). Steam stays for staff and existing Steam
+// customers. Xbox and PlayStation customers move over with "Forgot password" and
+// the email they paid with, which sets a password on the account they already
+// have, so no order or subscription moves.
 
-function signConsoleCookie(payload) {
-  const secret = process.env.SESSION_SECRET || 'dev-secret-change-me';
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = crypto.createHmac('sha256', secret).update(encoded).digest('base64url');
-  return `${encoded}.${sig}`;
-}
-
-function verifyConsoleCookie(req) {
-  const header = req.headers.cookie;
-  if (!header) return null;
-  let raw = null;
-  for (const part of header.split(';')) {
-    const trimmed = part.trim();
-    const eq = trimmed.indexOf('=');
-    if (eq < 0) continue;
-    if (trimmed.slice(0, eq) === CONSOLE_COOKIE) { raw = decodeURIComponent(trimmed.slice(eq + 1)); break; }
-  }
-  if (!raw) return null;
-  const dot = raw.lastIndexOf('.');
-  if (dot < 0) return null;
-  const encoded = raw.slice(0, dot);
-  const sig = raw.slice(dot + 1);
-  const secret = process.env.SESSION_SECRET || 'dev-secret-change-me';
-  const expected = crypto.createHmac('sha256', secret).update(encoded).digest('base64url');
-  let sigBuf, expBuf;
-  try { sigBuf = Buffer.from(sig, 'base64url'); expBuf = Buffer.from(expected, 'base64url'); }
-  catch { return null; }
-  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
-  let payload;
-  try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); }
-  catch { return null; }
-  // The signed ts is the server's own expiry. CONSOLE_COOKIE_MAX_AGE on the cookie
-  // is only a hint to the browser, so a copied cookie value used to verify for ever.
-  // Every issued cookie carries ts; one without it (none are known) is left valid
-  // rather than signing someone out on a guess.
-  if (payload && typeof payload.ts === 'number' && Date.now() - payload.ts > CONSOLE_COOKIE_MAX_AGE) return null;
-  return payload;
-}
-
-function setConsoleCookie(res, payload) {
-  res.cookie(CONSOLE_COOKIE, signConsoleCookie(payload), {
-    httpOnly: true,
-    sameSite: 'lax',
-    // Secure whenever this request came in over HTTPS; see the session cookie for why this no
-    // longer keys on NODE_ENV. res.req is the request Express attached to this response.
-    secure: !!(res.req && res.req.secure),
-    maxAge: CONSOLE_COOKIE_MAX_AGE,
-    path: '/'
-  });
-}
-
-// A lock cookie proves ownership only if it names this console identity AND was
-// issued at the account's current lock generation. Cookies minted before the
-// generation existed carry none, which counts as 0 -- the column default -- so
-// they keep working until the first re-link for that account is consumed.
-function cookieProvesOwnership(lockCookie, user) {
-  return !!lockCookie
-    && lockCookie.bmPlayerId === user.bm_player_id
-    && (Number(lockCookie.gen) || 0) === (Number(user.console_lock_gen) || 0);
-}
-
-const VALID_PLATFORMS = new Set(['xbox', 'psn']);
-
-app.post('/api/auth/console/lookup', authLimiter, async (req, res) => {
-  const { platform, gamertag } = req.body || {};
-  if (!VALID_PLATFORMS.has(platform)) return res.status(400).json({ error: 'Invalid platform' });
-  if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
-  const tag = cleanGamertag(gamertag);
-  if (!tag) return res.status(400).json({ error: 'That does not look like a gamertag. Check it and try again.' });
-
-  const result = await lookupPlayerByGamertag(tag, platform);
-  // BattleMetrics being down or rate limiting us is not the player not existing.
-  // Checked first: an unavailable result is a truthy object, not null.
-  if (result && result.unavailable) return res.status(503).json({ error: 'We could not reach BattleMetrics to check that gamertag. Please try again in a minute.' });
-  if (!result) return res.status(404).json({ error: 'No ReforgedZ player found with that gamertag. Enter the gamertag you play under now. If you changed it recently, play one round on a server so it updates.' });
-  res.json({ bmPlayerId: result.bmPlayerId, biUid: result.biUid, displayName: result.displayName, platform });
-});
-
-app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
-  const { platform, gamertag } = req.body || {};
-  if (!VALID_PLATFORMS.has(platform)) return res.status(400).json({ error: 'Invalid platform' });
-  if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
-
-  const tag = cleanGamertag(gamertag);
-  if (!tag) return res.status(400).json({ error: 'That does not look like a gamertag. Check it and try again.' });
-
-  // A player who gives up while BattleMetrics is slow must not have the account
-  // created after they have gone: the lock cookie would never reach them, and
-  // their next attempt would be refused as "already linked".
-  let clientGone = false;
-  res.on('close', () => { if (!res.writableFinished) clientGone = true; });
-
-  const lookup = await lookupPlayerByGamertag(tag, platform);
-  if (clientGone) {
-    console.warn('[console] sign-in confirm abandoned before BattleMetrics answered; no account written');
-    return;
-  }
-  // Checked before anything reads lookup.*: an unavailable result is a truthy object.
-  if (lookup && lookup.unavailable) return res.status(503).json({ error: 'We could not reach BattleMetrics to check that gamertag. Please try again in a minute.' });
-  if (!lookup) return res.status(404).json({ error: 'Could not verify that gamertag against BattleMetrics.' });
-
-  const lockCookie = verifyConsoleCookie(req);
-  if (lockCookie && (lockCookie.platform !== platform || lockCookie.bmPlayerId !== lookup.bmPlayerId)) {
-    return res.status(409).json({
-      error: `Your console identity is already linked to ${lockCookie.gamertag} (${lockCookie.platform}). To change it, open a ticket in our Discord.`
-    });
-  }
-
-  const synthId = 'console:' + lookup.bmPlayerId;
-
-  let existing = db.prepare('SELECT * FROM users WHERE bm_player_id = ?').get(lookup.bmPlayerId);
-  if (existing && existing.platform !== platform) {
-    return res.status(409).json({
-      error: `That BattleMetrics player is already registered on a different platform. Open a ticket in our Discord to fix this.`
-    });
-  }
-
-  // Account takeover protection: gamertags are public, BM lookup just maps
-  // gamertag → bm_player_id with no proof of ownership. If we already have an
-  // account on that bm_player_id, only let the requester log in when their
-  // console cookie proves they're the same person who originally linked.
-  // First-time account creation is unrestricted because there's nothing yet
-  // to take over.
-  if (existing && !cookieProvesOwnership(lockCookie, existing)) {
-    return res.status(409).json({
-      error: 'This gamertag is already linked to an account. If it is yours and you cleared your cookies (or switched browsers), open a ticket in our Discord and an admin will re-link you.'
-    });
-  }
-
-  if (!existing) {
-    if (clientGone) {
-      console.warn('[console] sign-in confirm abandoned just before the account was written; nothing written');
-      return;
+function signInAndReply(req, res, user, method, extra = {}) {
+  req.login(user, { authMethod: method }, (err) => {
+    if (err) {
+      console.error('[auth] session error:', err.message);
+      return res.status(500).json({ error: 'Could not sign you in. Try again.' });
     }
+    res.json({ ok: true, ...extra });
+  });
+}
+
+// A thrown error in a sign-in route: "busy" (too many passwords hashing at once)
+// is its own answer; anything else is logged and a 500.
+function authError(res, e, where, message) {
+  if (e && e.code === 'auth_busy') return res.status(503).json({ code: 'busy', error: e.message });
+  console.error(`[auth] ${where} failed:`, e && e.message);
+  return res.status(500).json({ error: message });
+}
+
+// The name an existing account goes by in emails and on the link page.
+function accountLabel(user) {
+  if (!user || user.platform === 'web') return null;
+  return user.gamertag || user.persona || null;
+}
+
+function publicBase() {
+  let base = String(process.env.PUBLIC_BASE_URL || BASE_URL);
+  while (base.endsWith('/')) base = base.slice(0, -1);
+  return base;
+}
+
+// Send what an email target needs: a reset, claim or attach link, or for a Steam
+// customer a pointer to Steam sign-in. Never throws. { ok } or { ok: false,
+// skipped | error }: skipped 'cooldown' when this account had the same link
+// moments ago, 'budget' when this address or the site has had its share of mail.
+async function mailAccountLink(target, email) {
+  const now = Math.floor(Date.now() / 1000);
+  const usesLink = target.purpose !== 'steam';
+  if (usesLink && webAuth.recentlyIssued(db, target.user.steam_id, target.purpose, now)) return { ok: false, skipped: 'cooldown' };
+  if (!webAuth.takeMailSlot(email, now)) return { ok: false, skipped: 'budget' };
+  let url = `${publicBase()}/auth/steam?next=${encodeURIComponent('/account')}`;
+  if (usesLink) {
+    const token = webAuth.issueToken(db, { steamId: target.user.steam_id, purpose: target.purpose, email, now });
+    url = `${publicBase()}/account/reset?token=${encodeURIComponent(token)}`;
+  }
+  const sent = await sendAccountLink({
+    to: email,
+    purpose: target.purpose,
+    accountName: accountLabel(target.user),
+    url,
+    expiresMinutes: Math.round(webAuth.TOKEN_TTL_S / 60)
+  });
+  if (sent.ok) console.log(`[auth] ${target.purpose} email sent for ${target.user.steam_id}`);
+  else console.error(`[auth] ${target.purpose} email for ${target.user.steam_id} not sent: ${sent.skipped || 'send failed'}`);
+  return sent;
+}
+
+// A sign-up with an email ReforgedZ already knows (an account signs in with it,
+// or a customer paid with it) gets this one answer whichever it is, and the email
+// itself gets what fits: a reset link, a link to set up sign-in on the account the
+// customer already has, or a pointer to Steam. So sign-up does not reveal whether
+// an address belongs to a paying customer, and a customer never ends up with a
+// second, empty account that hides their purchases.
+const KNOWN_EMAIL_REPLY = {
+  ok: true,
+  linkSent: true,
+  message: 'That email is already registered with ReforgedZ, so we have not made a second account. We sent it an email with the next step. If you know your password, choose Sign in instead. Check your spam folder too.'
+};
+
+app.post('/api/auth/register', authLimiter, async (req, res) => {
+  try {
+    const { email: rawEmail, password } = req.body || {};
+    const email = webAuth.normalizeEmail(rawEmail);
+    if (!email) return res.status(400).json({ error: 'Enter a valid email address.' });
+    const problem = webAuth.passwordProblem(password);
+    if (problem) return res.status(400).json({ error: problem });
+    const target = webAuth.resolveEmailTarget(db, email);
+    if (target) {
+      mailAccountLink(target, email).catch((e) => console.error('[auth] sign-up email failed:', e.message));
+      return res.json(KNOWN_EMAIL_REPLY);
+    }
+    const hash = await webAuth.hashPassword(password);
+    let user;
     try {
-      db.prepare(`
-        INSERT INTO users (steam_id, persona, avatar_url, bi_uid, role, platform, gamertag, bm_player_id)
-        VALUES (?, ?, NULL, ?, 'user', ?, ?, ?)
-      `).run(synthId, lookup.displayName || tag, lookup.biUid || null, platform, tag, lookup.bmPlayerId);
+      user = webAuth.createWebUser(db, { email, passwordHash: hash });
     } catch (e) {
-      if (String(e.message).includes('UNIQUE')) {
-        return res.status(409).json({ error: 'That console identity is already in use. Open a ticket in our Discord.' });
-      }
+      // Registered by someone else while the password was hashing.
+      if (String(e.message).includes('UNIQUE')) return res.json(KNOWN_EMAIL_REPLY);
       throw e;
     }
-    existing = db.prepare('SELECT * FROM users WHERE bm_player_id = ?').get(lookup.bmPlayerId);
-  } else if (lookup.biUid && !existing.bi_uid) {
-    db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(lookup.biUid, existing.steam_id);
-    existing.bi_uid = lookup.biUid;
+    console.log(`[auth] new website account ${user.steam_id}`);
+    signInAndReply(req, res, user, 'password');
+  } catch (e) {
+    authError(res, e, 'register', 'Could not create your account. Try again.');
   }
+});
 
-  req.login(existing, (err) => {
-    if (err) {
-      console.error('Console login error:', err.message);
-      return res.status(500).json({ error: 'Session creation failed' });
+app.post('/api/auth/login', authLimiter, async (req, res) => {
+  try {
+    const { email: rawEmail, password } = req.body || {};
+    const email = webAuth.normalizeEmail(rawEmail);
+    const wrong = () => res.status(401).json({ error: 'Email or password is incorrect.' });
+    if (!email || typeof password !== 'string' || !password) return wrong();
+    if (webAuth.loginLocked(email, req.ip)) {
+      return res.status(429).json({ code: 'locked', error: 'Too many wrong passwords. Wait 15 minutes, or use "Forgot password".' });
     }
-    setConsoleCookie(res, { platform, gamertag: existing.gamertag, bmPlayerId: existing.bm_player_id, gen: Number(existing.console_lock_gen) || 0, ts: Date.now() });
-    res.json({ ok: true, persona: existing.persona, gamertag: existing.gamertag, platform: existing.platform, bi_uid: existing.bi_uid || null });
+    const user = webAuth.findUserByEmail(db, email);
+    const ok = await webAuth.verifyPassword(password, user ? user.password_hash : null);
+    if (!user || !ok) {
+      webAuth.recordLoginFailure(email, req.ip);
+      return wrong();
+    }
+    webAuth.clearLoginFailures(email, req.ip);
+    signInAndReply(req, res, user, 'password');
+  } catch (e) {
+    authError(res, e, 'login', 'Could not sign you in. Try again.');
+  }
+});
+
+app.post('/api/auth/reset/request', authLimiter, (req, res) => {
+  const email = webAuth.normalizeEmail((req.body || {}).email);
+  if (!email) return res.status(400).json({ error: 'Enter a valid email address.' });
+  // The same answer, at the same speed, whether or not the email is known.
+  res.json({
+    ok: true,
+    message: 'If that email has a ReforgedZ account or has bought from us, an email is on its way. A link in it works once and expires in 60 minutes. Check your spam folder too.'
+  });
+  try {
+    const target = webAuth.resolveEmailTarget(db, email);
+    if (target) mailAccountLink(target, email).catch((e) => console.error('[auth] reset email failed:', e.message));
+  } catch (e) {
+    console.error('[auth] reset request failed:', e.message);
+  }
+});
+
+app.get('/api/auth/reset/check', authLimiter, (req, res) => {
+  const token = typeof req.query.token === 'string' ? req.query.token : '';
+  const found = webAuth.readToken(db, token);
+  if (found.error) return res.status(400).json({ code: found.code || null, error: found.error });
+  res.json({
+    ok: true,
+    purpose: found.row.purpose,
+    email: found.row.email,
+    accountName: accountLabel(found.user)
   });
 });
+
+app.post('/api/auth/reset/complete', authLimiter, async (req, res) => {
+  try {
+    const { token, password } = req.body || {};
+    const done = await webAuth.completeToken(db, { token: typeof token === 'string' ? token : '', password });
+    if (done.error) return res.status(400).json({ code: done.code || null, error: done.error });
+    if (done.user.email) webAuth.clearLoginFailures(done.user.email, req.ip);
+    console.log(`[auth] ${done.purpose} completed for ${done.user.steam_id}`);
+    signInAndReply(req, res, done.user, 'link', { purpose: done.purpose });
+  } catch (e) {
+    authError(res, e, 'reset complete', 'Could not save your password. Try again.');
+  }
+});
+
+app.get('/account/reset', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'reset.html'));
+});
+
+// A signed-in account asks to add email sign-in. Nothing is saved yet: the email
+// gets a link, and opening it (proof the address is theirs) sets the email and a
+// password on this same account, so every order stays where it is.
+app.post('/api/auth/add-login', authLimiter, async (req, res) => {
+  if (!req.isAuthenticated()) return res.status(401).json({ error: 'Sign in required' });
+  try {
+    const email = webAuth.normalizeEmail((req.body || {}).email);
+    if (!email) return res.status(400).json({ error: 'Enter a valid email address.' });
+    const refusal = webAuth.addLoginRefusal(req.user, { relinkedAt: req.session && req.session.relinkedAt });
+    if (refusal) return res.status(refusal.status).json({ code: refusal.code, error: refusal.error });
+    if (webAuth.findUserByEmail(db, email)) {
+      return res.status(409).json({ code: 'email_taken', error: 'That email already signs in to another ReforgedZ account. Use a different email, or sign in to that account instead.' });
+    }
+    const sent = await mailAccountLink({ purpose: 'attach', user: req.user }, email);
+    if (sent.ok) {
+      return res.json({ ok: true, linkSent: true, message: `We emailed a link to ${email}. Open it within 60 minutes to confirm the address and choose a password. Check your spam folder too.` });
+    }
+    if (sent.skipped === 'cooldown' || sent.skipped === 'budget') {
+      return res.status(429).json({ code: 'wait', error: 'We sent a link moments ago. Check your email, or try again in a few minutes.' });
+    }
+    return res.status(503).json({ code: 'mail_failed', error: 'We could not send the email just now. Try again in a few minutes.' });
+  } catch (e) {
+    authError(res, e, 'add-login', 'Could not send the link. Try again.');
+  }
+});
+
+// "Find me" in the in-game ID box: the players a name or pasted ID could mean,
+// for a signed-in player to pick from. Picks are remembered in the session, and
+// /api/shop/set-bi-uid only accepts a pick this browser was shown.
+const findLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many searches. Try again in a minute.' }
+});
+
+app.post('/api/identity/find', findLimiter, async (req, res) => {
+  if (!req.isAuthenticated()) return res.status(401).json({ error: 'Sign in required' });
+  const { query, wide } = req.body || {};
+  if (typeof query !== 'string' || !query.trim()) return res.status(400).json({ error: 'Type the name you play under, or paste your in-game ID.' });
+  if (!asReforgerUuid(query) && !cleanGamertag(query)) {
+    return res.status(400).json({ error: 'That does not look like a player name or an in-game ID.' });
+  }
+  const result = await findPlayers(query, { wide: wide === true });
+  if (result.unavailable) return res.status(503).json({ error: 'We could not reach BattleMetrics to search. Please try again in a minute.' });
+  consoleIdentity.rememberCandidates(req.session, result.candidates);
+  res.json({
+    candidates: result.candidates.map((c) => ({
+      ref: c.bmPlayerId, name: c.name, lastSeen: c.lastSeen, previousName: c.previousName, exact: c.exact
+    }))
+  });
+});
+
+// ---- Console sign-in (retired 2026-09-14) -----------------------------------
+// Xbox and PlayStation sign-in was a gamertag plus a browser cookie. It never
+// proved who was typing, so it is gone. Existing console customers set up email
+// sign-in with "Forgot password" and the email they paid with (webAuth.js
+// "claim"); anyone without that email gets a staff re-link below. Old pages that
+// still call these routes are told where sign-in went.
+const VALID_PLATFORMS = new Set(['xbox', 'psn']);
+const CONSOLE_SIGNIN_MOVED = {
+  code: 'console_signin_moved',
+  error: 'Xbox and PlayStation sign-in has moved to email. Choose Sign in, then "Forgot password", and enter the email you paid with: we will email you a link to set a password on the account you already have. New here? Create an account with your email. No access to the email you paid with? Open a ticket in our Discord.'
+};
+app.post('/api/auth/console/lookup', authLimiter, (req, res) => res.status(410).json(CONSOLE_SIGNIN_MOVED));
+app.post('/api/auth/console/confirm', authLimiter, (req, res) => res.status(410).json(CONSOLE_SIGNIN_MOVED));
 
 // ---- Console re-link (staff-issued, single use) ----------------------------
 // See db.js for why this exists: without it, a console player who clears
@@ -729,42 +849,44 @@ app.get('/api/auth/console/relink/check', authLimiter, (req, res) => {
 // previews, which would burn a single-use token before the player ever clicked.
 app.post('/api/auth/console/relink', authLimiter, (req, res) => {
   const { token } = req.body || {};
-  const { row, user, error } = loadRelinkToken(token);
+  const { row, user, error } = loadRelinkToken(typeof token === 'string' ? token : '');
   if (error) return res.status(400).json({ error });
 
-  // Atomic claim, and in the same transaction retire every lock cookie already
-  // issued for this account. Two requests racing the same link, only one can win;
-  // the winner's cookie is then the only one that proves ownership -- which is
-  // the point of a re-link when someone else has got into the account. Keyed on
-  // steam_id: the primary key of the exact row confirm reads back.
-  let newGen = 0;
+  // Atomic claim. In the same transaction the account is handed over cleanly:
+  // every email sign-in, session and outstanding link on it is retired
+  // (webAuth.clearLoginForRelink), because whoever is already in may be the reason
+  // staff issued the link. Keyed on steam_id, the row's primary key.
+  const nowSec = Math.floor(Date.now() / 1000);
   const claimAndRetire = db.transaction(() => {
     const claimed = db.prepare(
       'UPDATE console_relink_tokens SET used_at = ?, used_note = ? WHERE token_hash = ? AND used_at IS NULL'
-    ).run(Math.floor(Date.now() / 1000), String(req.ip || '').slice(0, 64), row.token_hash);
+    ).run(nowSec, String(req.ip || '').slice(0, 64), row.token_hash);
     if (claimed.changes !== 1) return false;
     db.prepare('UPDATE users SET console_lock_gen = console_lock_gen + 1 WHERE steam_id = ?').run(user.steam_id);
-    newGen = db.prepare('SELECT console_lock_gen FROM users WHERE steam_id = ?').get(user.steam_id).console_lock_gen;
+    webAuth.clearLoginForRelink(db, user.steam_id, nowSec);
     return true;
   });
   if (!claimAndRetire()) {
     return res.status(400).json({ error: 'This link has already been used. Ask staff for a new one.' });
   }
 
-  req.login(user, (err) => {
+  // Read back after the transaction: signing in with the old auth_gen would end
+  // this session on its very next request.
+  const fresh = db.prepare('SELECT * FROM users WHERE steam_id = ?').get(user.steam_id);
+  req.login(fresh, { authMethod: 'relink' }, (err) => {
     if (err) {
       console.error('[console-relink] session error:', err.message);
       return res.status(500).json({ error: 'Could not sign you in. Ask staff for a new link.' });
     }
-    setConsoleCookie(res, {
-      platform: user.platform,
-      gamertag: user.gamertag,
-      bmPlayerId: user.bm_player_id,
-      gen: newGen,
-      ts: Date.now()
+    // For the next hour this session may add email sign-in (webAuth.addLoginRefusal).
+    req.session.relinkedAt = nowSec;
+    console.log(`[console-relink] consumed for ${fresh.gamertag} (${fresh.platform}) from ${req.ip}`);
+    res.json({
+      ok: true,
+      gamertag: fresh.gamertag,
+      platform: fresh.platform,
+      addEmailWithinMinutes: Math.round(webAuth.RELINK_ATTACH_WINDOW_S / 60)
     });
-    console.log(`[console-relink] consumed for ${user.gamertag} (${user.platform}) from ${req.ip}`);
-    res.json({ ok: true, gamertag: user.gamertag, platform: user.platform });
   });
 });
 

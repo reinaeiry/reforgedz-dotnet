@@ -157,6 +157,36 @@ if (!userHasColumn('console_lock_gen')) {
   db.exec("ALTER TABLE users ADD COLUMN console_lock_gen INTEGER NOT NULL DEFAULT 0");
 }
 
+// Plain website accounts (webAuth.js, 2026-09-14): an email and a scrypt password
+// hash on the same users row, so an existing customer who adds email sign-in keeps
+// every order and entitlement. auth_gen goes up on a password reset and ends every
+// other session (server.js compares it with the one stored at sign-in).
+if (!userHasColumn('email')) {
+  db.exec("ALTER TABLE users ADD COLUMN email TEXT");
+}
+if (!userHasColumn('password_hash')) {
+  db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT");
+}
+if (!userHasColumn('email_verified_at')) {
+  db.exec("ALTER TABLE users ADD COLUMN email_verified_at INTEGER");
+}
+if (!userHasColumn('auth_gen')) {
+  db.exec("ALTER TABLE users ADD COLUMN auth_gen INTEGER NOT NULL DEFAULT 0");
+}
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS auth_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    steam_id    TEXT NOT NULL REFERENCES users(steam_id),
+    purpose     TEXT NOT NULL CHECK(purpose IN ('reset','claim','attach')),
+    email       TEXT NOT NULL,
+    issued_at   INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    used_at     INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(steam_id, purpose);
+`);
+
 // PayPal Subscriptions API: cache the live + sandbox catalog-product + plan
 // ids per product so checkout doesn't recreate them on every purchase.
 if (!productHasColumn('paypal_product_id_live')) {
@@ -515,6 +545,8 @@ if (!tableHasColumn('orders', 'account_id')) {
 // stable half of "console:<id>" (the gamertag is a display name and can change).
 function identityForUser(u) {
   const platform = u.platform || 'steam';
+  // A website account signs in with an email, which this table does not model.
+  if (platform === 'web') return null;
   if (platform === 'steam') {
     return { provider: 'steam', providerId: u.steam_id, displayName: u.persona || null };
   }

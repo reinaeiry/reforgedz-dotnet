@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Choose a password | ReforgedZ</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .reset-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
+    .reset-card {
+      width: 100%; max-width: 440px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 28px 24px; display: flex; flex-direction: column; gap: 16px;
+    }
+    .reset-card h1 { font-family: var(--display); text-transform: uppercase; font-size: 1.5rem; letter-spacing: 1px; margin: 0; }
+    .reset-card p { margin: 0; color: var(--text-dim); font-size: 0.95rem; line-height: 1.6; }
+    .reset-who { padding: 12px 14px; background: var(--bg-black); border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; }
+    .reset-who strong { color: var(--text); }
+    .reset-label { font-size: 0.8rem; color: var(--text-dim); margin-bottom: -10px; }
+    .reset-input {
+      width: 100%; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--text); font-family: var(--body); font-size: 0.95rem;
+    }
+    .reset-input:focus { outline: none; border-color: rgba(204, 31, 31, 0.5); }
+    .reset-btn {
+      padding: 14px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px;
+      font-family: var(--body); font-size: 0.95rem; font-weight: 600; cursor: pointer; text-align: center; text-decoration: none;
+    }
+    .reset-btn:hover:not(:disabled) { background: var(--accent-hover); }
+    .reset-btn:disabled { opacity: 0.55; cursor: default; }
+    .reset-msg { font-size: 0.9rem; line-height: 1.6; min-height: 1.2em; }
+    .reset-msg.error { color: #f87171; }
+    .reset-msg.ok { color: #4ade80; }
+    .reset-links { display: flex; gap: 10px; flex-wrap: wrap; }
+    .reset-links .reset-btn { flex: 1 1 160px; }
+    .reset-note { font-size: 0.75rem; color: var(--text-ghost); line-height: 1.6; }
+    .reset-hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <main class="reset-page">
+    <div class="reset-card">
+      <h1 id="title">Choose a password</h1>
+
+      <div id="loading"><p>Checking your link&hellip;</p></div>
+
+      <form id="ready" class="reset-hidden" novalidate>
+        <p id="lead"></p>
+        <div class="reset-who" id="who"></div>
+        <label class="reset-label" for="password">New password (at least 8 characters)</label>
+        <input class="reset-input" id="password" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+        <label class="reset-label" for="password2">Type it again</label>
+        <input class="reset-input" id="password2" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+        <div class="reset-msg" id="msg" role="alert"></div>
+        <button class="reset-btn" id="saveBtn" type="submit">Save password and sign in</button>
+      </form>
+
+      <div id="failed" class="reset-hidden">
+        <div class="reset-msg error" id="failMsg"></div>
+        <p>Ask for a new link: on the shop page choose Sign in, then "Forgot password".</p>
+        <a class="reset-btn" href="/shop">Go to the shop</a>
+      </div>
+
+      <div id="done" class="reset-hidden">
+        <div class="reset-msg ok" id="doneMsg">Your password is saved and you are signed in.</div>
+        <div class="reset-links">
+          <a class="reset-btn" href="/account">My account</a>
+          <a class="reset-btn" href="/shop">Shop</a>
+        </div>
+      </div>
+
+      <div class="reset-note">This link works once. Do not share this page with anyone.</div>
+    </div>
+  </main>
+
+  <script>
+    // The token signs someone in until it is used. Take it out of the address bar
+    // straight away so it is not left in history, bookmarks or a screen share;
+    // sessionStorage keeps it for this tab so a refresh still works.
+    const KEY = 'rz_reset_token';
+    const fromUrl = new URLSearchParams(location.search).get('token') || '';
+    if (fromUrl) {
+      try { sessionStorage.setItem(KEY, fromUrl); } catch (e) {}
+      history.replaceState(null, '', location.pathname);
+    }
+    let stored = '';
+    try { stored = sessionStorage.getItem(KEY) || ''; } catch (e) {}
+    const token = fromUrl || stored;
+    const $ = (id) => document.getElementById(id);
+    const show = (id) => $(id).classList.remove('reset-hidden');
+    const hide = (id) => $(id).classList.add('reset-hidden');
+    let purpose = 'reset';
+
+    function fail(text) {
+      hide('loading'); hide('ready');
+      $('failMsg').textContent = text;
+      show('failed');
+    }
+
+    async function check() {
+      if (!token) return fail('This link is missing its code.');
+      try {
+        const res = await fetch('/api/auth/reset/check?token=' + encodeURIComponent(token));
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return fail(data.error || 'This link is not valid.');
+        purpose = data.purpose;
+        const who = $('who');
+        who.textContent = '';
+        const strong = document.createElement('strong');
+        strong.textContent = data.email || '';
+        if (purpose === 'claim' || purpose === 'attach') {
+          $('title').textContent = purpose === 'attach' ? 'Confirm your email' : 'Set up your sign-in';
+          $('lead').textContent = 'Choose a password for the ReforgedZ account you already have. Your purchases, subscriptions and in-game ID stay exactly as they are. Anywhere else you are signed in will be signed out.';
+          who.append('You will sign in with ', strong);
+        } else {
+          $('lead').textContent = 'Choose a new password. Anywhere else you are signed in will be signed out.';
+          who.append('Account: ', strong);
+        }
+        if (data.accountName) who.append(` (${data.accountName})`);
+        hide('loading');
+        show('ready');
+        setTimeout(() => $('password').focus(), 50);
+      } catch (e) {
+        fail('Could not reach ReforgedZ. Check your connection and try again.');
+      }
+    }
+
+    $('ready').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const pw = $('password').value;
+      const pw2 = $('password2').value;
+      const msg = $('msg');
+      msg.className = 'reset-msg error';
+      if (pw.length < 8) { msg.textContent = 'Use at least 8 characters.'; return; }
+      if (pw !== pw2) { msg.textContent = 'The two passwords do not match.'; return; }
+      const btn = $('saveBtn');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      msg.textContent = '';
+      try {
+        const res = await fetch('/api/auth/reset/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, password: pw })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          btn.disabled = false;
+          btn.textContent = 'Save password and sign in';
+          msg.textContent = data.error || 'That did not work.';
+          return;
+        }
+        try { sessionStorage.removeItem(KEY); } catch (err) {}
+        if (purpose === 'claim' || purpose === 'attach') $('doneMsg').textContent = 'Done. From now on you sign in with your email and this password, from any device.';
+        hide('ready');
+        show('done');
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Save password and sign in';
+        msg.textContent = 'Could not reach ReforgedZ. Check your connection and try again.';
+      }
+    });
+
+    check();
+  </script>
+</body>
+</html>

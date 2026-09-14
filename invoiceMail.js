@@ -781,4 +781,99 @@ async function sendSubscriptionSuspended({ to, displayName, productTitle, access
   }
 }
 
-module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed };
+// A single-use link from "Forgot password, or bought before?" (server.js
+// /api/auth/reset/request). purpose 'reset' sets a new password on an account
+// that signs in with this email; 'claim' lets an existing Steam, Xbox or
+// PlayStation customer who paid with this email set up email sign-in on the
+// account they already have. Returns { ok, skipped?, error? }. Never throws.
+async function sendAccountLink({ to, purpose, accountName, url, expiresMinutes }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to || !url) return { ok: false, skipped: 'no_recipient' };
+
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const minutes = expiresMinutes || 60;
+  // reset: forgotten password. claim: an Xbox or PlayStation customer sets up email
+  // sign-in through the email they paid with. attach: confirms an email a signed-in
+  // account asked to add. steam: no link to use, just where their purchases are.
+  const named = accountName ? ` (${accountName})` : '';
+  const copy = {
+    claim: {
+      subject: 'Set up your ReforgedZ sign-in',
+      button: 'Choose a password',
+      lead: `You asked to set up email sign-in for your existing ReforgedZ account${named}. Open the link to choose a password. Your purchases and subscriptions stay exactly as they are.`
+    },
+    attach: {
+      subject: 'Confirm your email for ReforgedZ sign-in',
+      button: 'Confirm and choose a password',
+      lead: `You asked to add this email as a way to sign in to your ReforgedZ account${named}. Open the link to confirm it and choose a password. Your purchases and subscriptions stay exactly as they are.`
+    },
+    steam: {
+      subject: 'Signing in to ReforgedZ',
+      button: 'Sign in with Steam',
+      lead: 'Someone asked to sign in to ReforgedZ with this email. Your purchases are on the account you use with Steam, so sign in with Steam to reach them. Once you are in, open My account to add this email and a password, and you can sign in without Steam from then on.'
+    },
+    reset: {
+      subject: 'Reset your ReforgedZ password',
+      button: 'Reset my password',
+      lead: 'You asked to reset the password for your ReforgedZ account. Open the link to choose a new one.'
+    }
+  }[purpose] || null;
+  if (!copy) return { ok: false, skipped: 'unknown_purpose' };
+  const { subject, button, lead } = copy;
+  const footnote = purpose === 'steam'
+    ? 'If you did not ask for this, ignore this email: nothing has changed.'
+    : `The link works once and expires in ${minutes} minutes. If you did not ask for it, ignore this email: nothing changes unless the link is opened.`;
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <tr><td style="background:#0d0f12;padding:24px;color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.5px">ReforgedZ</td></tr>
+        <tr><td style="padding:28px 24px;font-size:15px;color:#1a1a1a;line-height:1.55">
+          <p style="margin:0 0 12px">${esc(lead)}</p>
+          <p style="margin:24px 0">
+            <a href="${esc(url)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">${esc(button)}</a>
+          </p>
+          <p style="margin:0 0 12px;color:#4b5563;font-size:13px">${esc(footnote)}</p>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:16px 24px;border-top:1px solid #ecedf0;font-size:12px;color:#6b7280">
+          Questions? <a href="mailto:contact@reforgedz.net" style="color:#2563eb;text-decoration:none">contact@reforgedz.net</a> &middot; <a href="${base}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    lead,
+    '',
+    `${button}:`,
+    url,
+    '',
+    footnote,
+    '',
+    'Questions? contact@reforgedz.net',
+    `${base}/shop`
+  ].join('\n');
+
+  try {
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] account link send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed, sendAccountLink };

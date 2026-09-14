@@ -161,7 +161,12 @@ async function api(url, opts = {}) {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `Request failed (${res.status})`);
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    // Some refusals carry a code the page acts on (needs_in_game_id, needs_email, ...).
+    err.code = data.code || null;
+    err.data = data;
+    err.status = res.status;
+    throw err;
   }
   if (res.status === 204 || res.headers.get('content-length') === '0') return null;
   return res.json();
@@ -205,21 +210,11 @@ const returnTo = (() => {
 })();
 
 function bindSigninDropdown() {
-  const wrap = document.getElementById('signinWrap');
   const btn = document.getElementById('signinBtn');
-  if (!wrap || !btn) return;
+  if (!btn) return;
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    signinOpen = !signinOpen;
-    wrap.classList.toggle('open', signinOpen);
-  });
-  wrap.querySelectorAll('[data-platform]').forEach(item => {
-    item.addEventListener('click', (e) => {
-      e.stopPropagation();
-      signinOpen = false;
-      wrap.classList.remove('open');
-      openConsoleModal(item.dataset.platform);
-    });
+    openAuthModal('signin');
   });
 }
 
@@ -254,17 +249,20 @@ function renderAuth() {
 
   if (currentUser) {
     const platform = currentUser.platform || 'steam';
-    const platformLabel = PLATFORM_LABELS[platform] || 'Steam';
+    const platformLabel = platform === 'web' ? 'ReforgedZ account' : (PLATFORM_LABELS[platform] || 'Steam');
     const isSteam = platform === 'steam';
-    const displayName = isSteam ? currentUser.persona : (currentUser.gamertag || currentUser.persona);
+    // A website account goes by its in-game name once one is set, its email until then.
+    const displayName = platform === 'web'
+      ? ((currentUser.persona && currentUser.persona !== 'Player') ? currentUser.persona : (currentUser.email || 'My account'))
+      : isSteam ? currentUser.persona : (currentUser.gamertag || currentUser.persona);
 
     const avatarHtml = isSteam && currentUser.avatar_url
       ? `<img src="${escHtml(currentUser.avatar_url)}" alt="" class="nav-avatar" onerror="this.style.display='none'">`
-      : `<span class="platform-mark ${platform}-mark" style="width:32px;height:32px;border-radius:6px;font-size:0.7rem">${platform === 'xbox' ? 'X' : platform === 'psn' ? 'PS' : '?'}</span>`;
+      : `<span class="platform-mark ${platform}-mark" style="width:32px;height:32px;border-radius:6px;font-size:0.7rem">${platform === 'xbox' ? 'X' : platform === 'psn' ? 'PS' : 'RZ'}</span>`;
 
     const headerImgHtml = isSteam && currentUser.avatar_url
       ? `<img src="${escHtml(currentUser.avatar_url)}" alt="" onerror="this.style.display='none'">`
-      : `<span class="platform-mark ${platform}-mark" style="width:40px;height:40px;border-radius:8px;font-size:0.78rem">${platform === 'xbox' ? 'X' : platform === 'psn' ? 'PS' : '?'}</span>`;
+      : `<span class="platform-mark ${platform}-mark" style="width:40px;height:40px;border-radius:8px;font-size:0.78rem">${platform === 'xbox' ? 'X' : platform === 'psn' ? 'PS' : 'RZ'}</span>`;
 
     // The dropdown is for getting around, not for editing. Everything a
     // player manages — in-game ID, Discord, subscriptions, purchase history —
@@ -330,24 +328,7 @@ function renderAuth() {
     navAuth.innerHTML = `
       ${currencyHtml}
       <div class="signin-wrap" id="signinWrap">
-        <button type="button" class="signin-btn" id="signinBtn">
-          Sign in <span class="chevron"></span>
-        </button>
-        <div class="signin-menu" id="signinMenu">
-          <a href="/auth/steam${returnTo ? '?next=' + encodeURIComponent(returnTo) : ''}" class="signin-item">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.04 2 11.04c0 3.15 1.73 5.92 4.33 7.5l2.6-3.76c-.14-.04-.28-.1-.41-.17a2.5 2.5 0 1 1 3.45-.91l2.58 3.73C18.16 16.99 22 14.36 22 11.04 22 6.04 17.52 2 12 2zm4.5 9.54a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
-            Steam
-          </a>
-          <button type="button" class="signin-item" data-platform="xbox">
-            <span class="platform-mark xbox-mark">X</span>
-            Xbox
-          </button>
-          <button type="button" class="signin-item" data-platform="psn">
-            <span class="platform-mark psn-mark">PS</span>
-            PlayStation
-          </button>
-          <div class="signin-hint">Sign in with the platform you play on. You can link Discord afterwards from your <a href="/account">Account</a> page.</div>
-        </div>
+        <button type="button" class="signin-btn" id="signinBtn">Sign in</button>
       </div>
     `;
     bindSigninDropdown();
@@ -374,112 +355,143 @@ testModeToggle.addEventListener('change', () => {
   sessionStorage.setItem('rz_test_mode', isTestMode ? '1' : '0');
 });
 
-// ---- Console sign-in modal ----
-const consoleState = { platform: null, gamertag: '', bmPlayerId: null, biUid: null, displayName: null };
-
-function openConsoleModal(platform) {
-  consoleState.platform = platform;
-  consoleState.gamertag = '';
-  consoleState.bmPlayerId = null;
-  consoleState.biUid = null;
-  consoleState.displayName = null;
-
-  const overlay = document.getElementById('consoleOverlay');
-  const label = platform === 'xbox' ? 'Xbox' : 'PlayStation';
-  document.getElementById('consoleModalTitle').textContent = `Sign in with ${label}`;
-  document.getElementById('consolePlatformLabel').textContent = label;
-  const input = document.getElementById('consoleGamertagInput');
-  input.value = '';
-  document.getElementById('consoleResult').style.display = 'none';
-  document.getElementById('consoleResult').innerHTML = '';
-  document.getElementById('consoleError').textContent = '';
-  document.getElementById('consoleLookup').style.display = '';
-  document.getElementById('consoleLookup').disabled = false;
-  document.getElementById('consoleLookup').textContent = 'Look up';
-  document.getElementById('consoleConfirm').style.display = 'none';
-  document.getElementById('consoleConfirm').disabled = false;
-  document.getElementById('consoleConfirm').textContent = 'Confirm & Sign in';
-  overlay.classList.add('open');
-  setTimeout(() => input.focus(), 50);
+// ---- Identity finder (the in-game ID box) ----
+// The player types a gamertag, an in-game name or their in-game ID, and picks
+// themselves from what the shop finds. Nothing has to be exact.
+function lastPlayedText(iso) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return '';
+  const days = Math.floor((Date.now() - t) / 86400000);
+  if (days <= 0) return 'played today';
+  if (days === 1) return 'played yesterday';
+  if (days < 14) return `played ${days} days ago`;
+  if (days < 60) return `played ${Math.round(days / 7)} weeks ago`;
+  return `played ${Math.max(2, Math.round(days / 30))} months ago`;
 }
 
-function closeConsoleModal() {
-  document.getElementById('consoleOverlay').classList.remove('open');
+async function findIdentity(query, wide) {
+  const data = await api('/api/identity/find', { method: 'POST', body: JSON.stringify({ query, wide: !!wide }) });
+  return Array.isArray(data.candidates) ? data.candidates : [];
 }
 
-async function consoleLookup() {
-  const input = document.getElementById('consoleGamertagInput');
-  const errBox = document.getElementById('consoleError');
-  const resultBox = document.getElementById('consoleResult');
-  const lookupBtn = document.getElementById('consoleLookup');
-  const confirmBtn = document.getElementById('consoleConfirm');
-
-  const tag = input.value.trim();
-  if (!tag) { errBox.textContent = 'Enter a gamertag.'; return; }
-
-  errBox.textContent = '';
-  lookupBtn.disabled = true;
-  lookupBtn.textContent = 'Searching...';
-
-  try {
-    const data = await api('/api/auth/console/lookup', {
-      method: 'POST',
-      body: JSON.stringify({ platform: consoleState.platform, gamertag: tag })
-    });
-    consoleState.gamertag = tag;
-    consoleState.bmPlayerId = data.bmPlayerId;
-    consoleState.biUid = data.biUid;
-    consoleState.displayName = data.displayName;
-
-    const biLine = data.biUid
-      ? `BI UID: <code>${escHtml(data.biUid)}</code>`
-      : `BI UID: <em style="color:var(--text-ghost)">not yet linked — you'll need to play on a tracked server first</em>`;
-    resultBox.innerHTML = `Found <strong>${escHtml(data.displayName)}</strong> on BattleMetrics.<br>${biLine}`;
-    resultBox.style.display = 'block';
-    lookupBtn.style.display = 'none';
-    confirmBtn.style.display = '';
-  } catch (e) {
-    errBox.textContent = e.message || 'Lookup failed';
-  } finally {
-    lookupBtn.disabled = false;
-    lookupBtn.textContent = 'Look up';
+// Draw the matches as buttons; clicking one picks it.
+function renderMatches(box, candidates, selectedRef, onPick) {
+  box.innerHTML = '';
+  for (const c of candidates) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'finder-item' + (c.ref === selectedRef ? ' selected' : '');
+    btn.setAttribute('aria-pressed', c.ref === selectedRef ? 'true' : 'false');
+    const name = document.createElement('span');
+    name.className = 'finder-name';
+    name.textContent = c.name;
+    const meta = document.createElement('span');
+    meta.className = 'finder-meta';
+    meta.textContent = [lastPlayedText(c.lastSeen), c.previousName ? `was ${c.previousName}` : ''].filter(Boolean).join(' · ');
+    btn.append(name, meta);
+    btn.addEventListener('click', () => onPick(c));
+    box.appendChild(btn);
   }
+  box.style.display = candidates.length ? 'flex' : 'none';
 }
 
-async function consoleConfirm() {
-  const confirmBtn = document.getElementById('consoleConfirm');
-  const errBox = document.getElementById('consoleError');
+// ---- Sign-in modal (email and password) ----
+// The one way into the shop. Steam stays as a small link for staff and for Steam
+// customers who have not added an email yet. Xbox and PlayStation customers move
+// over with "Forgot password", which emails the address they
+// paid with and sets up sign-in on the account they already have.
+let authMode = 'signin';
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const forgot = mode === 'forgot';
+  const register = mode === 'register';
+  document.getElementById('authTitle').textContent = register ? 'Create your account' : forgot ? 'Get a sign-in link' : 'Sign in';
+  document.getElementById('authTabSignin').classList.toggle('active', mode === 'signin');
+  document.getElementById('authTabRegister').classList.toggle('active', register);
+  const pw = document.getElementById('authPassword');
+  const pwLabel = document.getElementById('authPasswordLabel');
+  pw.style.display = forgot ? 'none' : '';
+  pwLabel.style.display = forgot ? 'none' : '';
+  pw.setAttribute('autocomplete', register ? 'new-password' : 'current-password');
+  pwLabel.textContent = register ? 'Password (at least 8 characters)' : 'Password';
+  document.getElementById('authSubmit').textContent = register ? 'Create account' : forgot ? 'Email me a link' : 'Sign in';
+  document.getElementById('authForgot').style.display = forgot ? 'none' : '';
+  document.getElementById('authError').textContent = '';
+  const notice = document.getElementById('authNotice');
+  notice.textContent = forgot
+    ? 'Enter your email and we will send you a link. Bought from us before on Xbox or PlayStation? Use the email you paid with: the link sets up sign-in on that account, so your purchases come with you. Bought with Steam? Use Sign in with Steam below.'
+    : '';
+  notice.style.display = forgot ? 'block' : 'none';
+}
+
+function openAuthModal(mode) {
+  setAuthMode(mode || 'signin');
+  document.getElementById('authPassword').value = '';
+  document.getElementById('authSteamLink').href = '/auth/steam' + (returnTo ? '?next=' + encodeURIComponent(returnTo) : '');
+  document.getElementById('authOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('authEmail').focus(), 50);
+}
+
+function closeAuthModal() {
+  document.getElementById('authOverlay').classList.remove('open');
+}
+
+async function submitAuth(e) {
+  e.preventDefault();
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const errBox = document.getElementById('authError');
+  const notice = document.getElementById('authNotice');
+  const btn = document.getElementById('authSubmit');
   errBox.textContent = '';
-  confirmBtn.disabled = true;
-  confirmBtn.textContent = 'Signing in...';
+  if (!email) { errBox.textContent = 'Enter your email.'; return; }
+  if (authMode !== 'forgot' && !password) { errBox.textContent = 'Enter your password.'; return; }
+
+  const mode = authMode;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = mode === 'forgot' ? 'Sending...' : 'One moment...';
+  let errorText = '';
   try {
-    await api('/api/auth/console/confirm', {
+    if (mode === 'forgot') {
+      const data = await api('/api/auth/reset/request', { method: 'POST', body: JSON.stringify({ email }) });
+      notice.textContent = data.message || 'If that email has an account or has bought from us, an email is on its way.';
+      notice.style.display = 'block';
+      return;
+    }
+    const data = await api(mode === 'register' ? '/api/auth/register' : '/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ platform: consoleState.platform, gamertag: consoleState.gamertag })
+      body: JSON.stringify({ email, password })
     });
-    closeConsoleModal();
+    if (data.linkSent) {
+      // Registering with an email ReforgedZ already knows: no second account,
+      // and the email itself gets the next step.
+      notice.textContent = data.message;
+      notice.style.display = 'block';
+      return;
+    }
+    closeAuthModal();
     // Sent here from another page to sign in: go back there, signed in.
     if (returnTo) { location.href = returnTo; return; }
     await loadUser();
     await loadProducts();
-  } catch (e) {
-    errBox.textContent = e.message || 'Sign in failed';
+  } catch (err) {
+    errorText = err.message || 'That did not work. Try again.';
+    if (err.code === 'email_taken') setAuthMode('signin');
   } finally {
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = 'Confirm & Sign in';
+    btn.disabled = false;
+    // setAuthMode already labelled the button if the mode changed.
+    if (authMode === mode) btn.textContent = label;
+    if (errorText) errBox.textContent = errorText;
   }
 }
 
-document.getElementById('consoleCancel').addEventListener('click', closeConsoleModal);
-document.getElementById('consoleLookup').addEventListener('click', consoleLookup);
-document.getElementById('consoleConfirm').addEventListener('click', consoleConfirm);
-document.getElementById('consoleGamertagInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    if (document.getElementById('consoleConfirm').style.display !== 'none') consoleConfirm();
-    else consoleLookup();
-  }
-});
+document.getElementById('authCancel').addEventListener('click', closeAuthModal);
+document.getElementById('authTabSignin').addEventListener('click', () => setAuthMode('signin'));
+document.getElementById('authTabRegister').addEventListener('click', () => setAuthMode('register'));
+document.getElementById('authForgot').addEventListener('click', () => setAuthMode('forgot'));
+document.getElementById('authForm').addEventListener('submit', submitAuth);
 
 // ---- Products ----
 async function loadProducts() {
@@ -555,14 +567,7 @@ function renderProducts(products) {
 }
 
 function openSigninFromCard() {
-  const wrap = document.getElementById('signinWrap');
-  if (wrap) {
-    signinOpen = true;
-    wrap.classList.add('open');
-    wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  } else {
-    window.location.href = '/auth/steam';
-  }
+  openAuthModal('signin');
 }
 
 // ---- Detail modal ----
@@ -830,22 +835,44 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowRight') document.getElementById('detailNext').click();
 });
 
-// ---- BI UID modal (Steam users only) ----
+// ---- In-game ID modal (before a checkout that needs one) ----
 let pendingProductId = null;
 let pendingServerId = null;
 let pendingCustomAmountCents = null;
+const biuidState = { candidates: [], pick: null, query: '' };
+
+// An Xbox or PlayStation account without confirmed email sign-in: console
+// sign-in never proved who was typing, so its in-game ID waits for that.
+function needsEmailSignInForId() {
+  return !!currentUser && (currentUser.platform === 'xbox' || currentUser.platform === 'psn') && !currentUser.email_verified;
+}
 
 function showBiUidModal(productId, serverId, customAmountCents) {
   pendingProductId = productId;
   pendingServerId = serverId || null;
   pendingCustomAmountCents = customAmountCents != null ? customAmountCents : null;
-  const overlay = document.getElementById('biuidOverlay');
+  biuidState.candidates = [];
+  biuidState.pick = null;
+  biuidState.query = '';
+  const product = currentProducts.find(p => p.id === productId);
+  // Queue priority has nowhere to go without the ID, so it cannot be skipped.
+  const required = !!(product && product.grants_priority_queue);
+  const locked = needsEmailSignInForId();
   const input = document.getElementById('biuidInput');
-  const error = document.getElementById('biuidError');
   input.value = '';
-  error.textContent = '';
-  overlay.classList.add('open');
-  input.focus();
+  input.style.display = locked ? 'none' : '';
+  document.getElementById('biuidError').textContent = '';
+  const matches = document.getElementById('biuidMatches');
+  matches.innerHTML = '';
+  matches.style.display = 'none';
+  document.getElementById('biuidLead').textContent = locked
+    ? 'Your perks go to your in-game ID. To set it on an Xbox or PlayStation account, first set up email sign-in, so nobody else can change it. Your account page shows how.'
+    : 'Your perks go to your in-game ID. Type the name you play under and pick yourself, or paste the ID.';
+  document.getElementById('biuidFind').style.display = locked ? 'none' : '';
+  document.getElementById('biuidSkip').style.display = required || locked ? 'none' : '';
+  document.getElementById('biuidSubmit').textContent = locked ? 'Go to my account' : 'Save and continue';
+  document.getElementById('biuidOverlay').classList.add('open');
+  if (!locked) input.focus();
 }
 
 function hideBiUidModal() {
@@ -872,40 +899,100 @@ document.getElementById('biuidSkip').addEventListener('click', () => {
   if (pid) proceedCheckout(pid, sid, amt);
 });
 
+function pickBiuidCandidate(c) {
+  biuidState.pick = c;
+  renderMatches(document.getElementById('biuidMatches'), biuidState.candidates, c.ref, pickBiuidCandidate);
+  document.getElementById('biuidError').textContent = '';
+}
+
+async function biuidFind() {
+  const input = document.getElementById('biuidInput');
+  const error = document.getElementById('biuidError');
+  const btn = document.getElementById('biuidFind');
+  const query = input.value.trim();
+  if (!query) { error.textContent = 'Type the name you play under, or paste your in-game ID.'; return; }
+  biuidState.pick = null;
+  biuidState.candidates = [];
+  biuidState.query = query;
+  error.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Searching...';
+  try {
+    const candidates = await findIdentity(query, false);
+    biuidState.candidates = candidates;
+    if (!candidates.length) {
+      renderMatches(document.getElementById('biuidMatches'), [], null, pickBiuidCandidate);
+      error.textContent = 'No ReforgedZ player matches that. Check the spelling, or paste your in-game ID.';
+      return;
+    }
+    if (candidates.length === 1 && candidates[0].exact) pickBiuidCandidate(candidates[0]);
+    else renderMatches(document.getElementById('biuidMatches'), candidates, null, pickBiuidCandidate);
+  } catch (e) {
+    error.textContent = e.message || 'Search failed';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Find me';
+  }
+}
+
+document.getElementById('biuidFind').addEventListener('click', biuidFind);
+
 document.getElementById('biuidSubmit').addEventListener('click', async () => {
   const input = document.getElementById('biuidInput');
   const error = document.getElementById('biuidError');
   const submitBtn = document.getElementById('biuidSubmit');
-
+  const typed = input.value.trim();
   // Braces, spaces and capitals are the usual noise around a correct id.
-  const raw = input.value.replace(/[{}\s]/g, '').toLowerCase();
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)) {
-    error.textContent = 'That does not look like an Identity ID. It is 36 characters with dashes, like 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac.';
+  const tidy = typed.replace(/[{}\s]/g, '').toLowerCase();
+  const looksLikeId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(tidy);
+
+  if (needsEmailSignInForId()) {
+    location.href = '/account';
     return;
   }
+  let body;
+  if (biuidState.pick && typed === biuidState.query) {
+    body = { ref: biuidState.pick.ref };
+  } else if (looksLikeId) {
+    body = { biUid: tidy };
+  } else {
+    // A name with no pick yet: search, and let them choose.
+    await biuidFind();
+    if (!biuidState.pick) {
+      if (biuidState.candidates.length) error.textContent = 'Select yourself from the list.';
+      return;
+    }
+    body = { ref: biuidState.pick.ref };
+  }
 
+  const label = submitBtn.textContent;
   submitBtn.disabled = true;
-  submitBtn.textContent = 'Checking...';
+  submitBtn.textContent = 'Saving...';
   error.textContent = '';
-
   try {
-    await api('/api/shop/set-bi-uid', {
-      method: 'POST',
-      body: JSON.stringify({ biUid: raw })
-    });
-    currentUser.bi_uid = raw;
+    const data = await api('/api/shop/set-bi-uid', { method: 'POST', body: JSON.stringify(body) });
+    currentUser.bi_uid = data.bi_uid;
     const pid = pendingProductId;
     const sid = pendingServerId;
     const amt = pendingCustomAmountCents;
     hideBiUidModal();
     renderAuth();
-    if (pid) proceedCheckout(pid, sid, amt);
+    // Back through the normal gates (Discord prompt, already-owned check) now the ID is set.
+    if (pid) buyProduct(pid, sid, amt);
   } catch (e) {
-    error.textContent = e.message || 'Failed to save BI UID';
+    error.textContent = e.code === 'pick_expired'
+      ? 'That took a while, so search again and pick yourself.'
+      : (e.message || 'Could not save your in-game ID');
   } finally {
     submitBtn.disabled = false;
-    submitBtn.textContent = 'Save & Continue';
+    submitBtn.textContent = label;
   }
+});
+
+document.getElementById('biuidInput').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  document.getElementById('biuidSubmit').click();
 });
 
 // ---- Discord ID modal (pre-checkout, only when product grants a role) ----
@@ -1139,13 +1226,10 @@ async function buyProduct(productId, serverId, customAmountCents) {
     return;
   }
 
-  const isSteam = (currentUser.platform || 'steam') === 'steam';
-  if (isSteam && !currentUser.bi_uid) {
+  // Every perk is delivered to an in-game ID, so ask for it before PayPal on
+  // any platform. Console players used to get an alert and a dead end here.
+  if (!currentUser.bi_uid) {
     showBiUidModal(productId, serverId, customAmountCents);
-    return;
-  }
-  if (!isSteam && !currentUser.bi_uid) {
-    alert("We couldn't find your BI UID via BattleMetrics yet. Play one round on a tracked ReforgedZ server, then come back.");
     return;
   }
 
@@ -1187,8 +1271,12 @@ async function proceedCheckout(productId, serverId, customAmountCents) {
       window.location.href = data.url;
     }
   } catch (e) {
-    alert(e.message || 'Checkout failed');
     if (btn) { btn.disabled = false; btn.textContent = 'Purchase'; }
+    if (e.code === 'needs_in_game_id') {
+      showBiUidModal(productId, serverId, customAmountCents);
+      return;
+    }
+    alert(e.message || 'Checkout failed');
   }
 }
 
