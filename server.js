@@ -522,7 +522,10 @@ app.post('/api/auth/console/lookup', authLimiter, async (req, res) => {
   if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
 
   const result = await lookupPlayerByGamertag(gamertag.trim(), platform);
-  if (!result) return res.status(404).json({ error: 'No matching player found on BattleMetrics. Make sure you have played on a tracked server with this gamertag.' });
+  // BattleMetrics being down or rate limiting us is not the player not existing.
+  // Checked first: an unavailable result is a truthy object, not null.
+  if (result && result.unavailable) return res.status(503).json({ error: 'We could not reach BattleMetrics to check that gamertag. Please try again in a minute.' });
+  if (!result) return res.status(404).json({ error: 'No ReforgedZ player found with that gamertag. Enter the gamertag you play under now. If you changed it recently, play one round on a server so it updates.' });
   res.json({ bmPlayerId: result.bmPlayerId, biUid: result.biUid, displayName: result.displayName, platform });
 });
 
@@ -532,6 +535,8 @@ app.post('/api/auth/console/confirm', authLimiter, async (req, res) => {
   if (!gamertag || typeof gamertag !== 'string' || !gamertag.trim()) return res.status(400).json({ error: 'Gamertag required' });
 
   const lookup = await lookupPlayerByGamertag(gamertag.trim(), platform);
+  // Checked before anything reads lookup.*: an unavailable result is a truthy object.
+  if (lookup && lookup.unavailable) return res.status(503).json({ error: 'We could not reach BattleMetrics to check that gamertag. Please try again in a minute.' });
   if (!lookup) return res.status(404).json({ error: 'Could not verify that gamertag against BattleMetrics.' });
 
   const lockCookie = verifyConsoleCookie(req);

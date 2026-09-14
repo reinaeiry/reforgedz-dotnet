@@ -65,7 +65,8 @@ const VARS = [
   { name: 'PTERODACTYL_PANEL_URL', group: 'Panel', required: true, doc: 'Panel origin for the homepage status tiles and the restart helper.', example: 'https://panel.reforgedz.net' },
   { name: 'PTERODACTYL_CLIENT_API_KEY', group: 'Panel', required: true, secret: true, doc: 'A client API key (Account, API Credentials) that can see the game servers.', example: '' },
   { name: 'BATTLEMETRICS_TOKEN', group: 'Panel', required: true, secret: true, doc: 'BattleMetrics API token: player counts and the console gamertag lookup.', example: '' },
-  { name: 'REFORGEDZ_BM_SERVER_IDS', group: 'Panel', doc: 'Comma-separated BattleMetrics server ids to scope gamertag lookups. Normally discovered from the panel; set it if the panel is unreachable.', example: '' },
+  { name: 'REFORGEDZ_BM_SERVER_IDS', group: 'Panel', doc: 'Comma-separated BattleMetrics server ids searched FIRST for a console gamertag. Normally discovered from the panel; set it if the panel is unreachable.', example: '' },
+  { name: 'REFORGEDZ_BM_ORG_ID', group: 'Panel', doc: 'BattleMetrics organisation searched when today\'s servers find nobody, so players whose history sits on an older server record can still sign in. Default 112993 (ReforgedZ). Lookups are never unscoped.', example: '' },
 
   // ---- Staff integrations ---------------------------------------------------
   { name: 'SHOP_ADMIN_API_KEY', group: 'Staff', required: true, secret: true, doc: 'Shared bearer for /api/shop/admin/* from the admin page and the ticket bot. Must match SHOP_ADMIN_API_KEY in the ticket bot\'s .env.', example: '' },

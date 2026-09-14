@@ -1,98 +1,141 @@
 const BM_BASE = 'https://api.battlemetrics.com';
 const reforgedzServers = require('./reforgedzServers');
 
+// The ReforgedZ organisation on BattleMetrics. Every server we have ever run sits
+// under it, including the records from before the June 2026 box move, when the
+// servers were on different IPs and so on different BattleMetrics server records.
+const DEFAULT_BM_ORG_ID = '112993';
+function orgId() {
+  return String(process.env.REFORGEDZ_BM_ORG_ID || DEFAULT_BM_ORG_ID).trim();
+}
+
 function token() {
   return process.env.BATTLEMETRICS_TOKEN || '';
 }
 
-async function lookupPlayerByGamertag(gamertag, platform) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// One BattleMetrics GET. Never throws. A 429 is retried, because a rate limit
+// must never read as "no such player": that is how a busy minute used to tell a
+// real console player they had never played here.
+async function bmGet(path, attempt = 0) {
   const tk = token();
-  if (!tk) {
-    console.error('[bm] BATTLEMETRICS_TOKEN not set');
-    return null;
-  }
-
-  const trimmed = String(gamertag || '').trim();
-  if (!trimmed) return null;
-
-  const ourServerIds = reforgedzServers.getBmIds();
-  let url = `${BM_BASE}/players?filter[search]=${encodeURIComponent(trimmed)}&include=identifier&page[size]=20`;
-  if (ourServerIds.length) {
-    url += `&filter[servers]=${ourServerIds.join(',')}`;
-  } else {
-    console.warn('[bm] No ReforgedZ BM server IDs cached yet — search will not be scoped to our servers. Set REFORGEDZ_BM_SERVER_IDS in .env or wait for the first Pterodactyl poll cycle.');
-  }
-
-  let data;
+  if (!tk) return { ok: false, status: 0, reason: 'BATTLEMETRICS_TOKEN not set' };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
   try {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${tk}` } });
-    if (!res.ok) {
-      console.error('[bm] HTTP', res.status);
-      return null;
+    const res = await fetch(`${BM_BASE}${path}`, { headers: { Authorization: `Bearer ${tk}` }, signal: ctrl.signal });
+    if (res.status === 429 && attempt < 3) {
+      const ra = parseFloat(res.headers.get('retry-after') || '');
+      clearTimeout(timer);
+      await sleep(Math.min(isFinite(ra) ? ra * 1000 : 1500 * (attempt + 1), 10000));
+      return bmGet(path, attempt + 1);
     }
-    data = await res.json();
+    if (!res.ok) return { ok: false, status: res.status, reason: `HTTP ${res.status}` };
+    return { ok: true, status: res.status, data: await res.json() };
   } catch (e) {
-    console.error('[bm] Fetch failed:', e.message);
-    return null;
+    return { ok: false, status: 0, reason: e.message };
+  } finally {
+    clearTimeout(timer);
   }
+}
 
+// Players in a search result matching the gamertag, by name or by any of their
+// identifiers, case-insensitively.
+function matchingPlayers(data, wanted) {
   const identifiers = new Map();
   for (const inc of (data.included || [])) {
     if (inc.type === 'identifier') identifiers.set(String(inc.id), inc);
   }
-
-  const wanted = trimmed.toLowerCase();
-  const players = (data.data || []).filter(p => p.type === 'player');
-
-  const matches = players.filter(p => {
+  const w = wanted.toLowerCase();
+  return (data.data || []).filter((p) => p.type === 'player').filter((p) => {
     const name = (p.attributes && p.attributes.name) || '';
-    if (name.toLowerCase() === wanted) return true;
-    const idRefs = (p.relationships && p.relationships.identifiers && p.relationships.identifiers.data) || [];
-    return idRefs.some(ref => {
+    if (name.toLowerCase() === w) return true;
+    const refs = (p.relationships && p.relationships.identifiers && p.relationships.identifiers.data) || [];
+    return refs.some((ref) => {
       const ident = identifiers.get(String(ref.id));
-      if (!ident || !ident.attributes) return false;
-      const val = String(ident.attributes.identifier || '').toLowerCase();
-      return val === wanted;
+      return !!(ident && ident.attributes && String(ident.attributes.identifier || '').toLowerCase() === w);
     });
   });
+}
+
+// Resolve a console gamertag to a BattleMetrics player and their Reforger id.
+//
+//   { bmPlayerId, biUid, displayName, platform, scope }   exactly one player found
+//   null                                                  no such player, or the name is ambiguous
+//   { unavailable: true, reason }                         BattleMetrics could not be asked
+//
+// ⛔ Callers MUST check `unavailable` before treating the result as a match: it is
+// a truthy object.
+//
+// Scoping. The search is first limited to the servers we run today, and only if
+// that finds nobody is it widened to the whole ReforgedZ organisation. It used to
+// stop at today's servers, which locked out every console player whose history
+// sits on an older server record. Measured 2026-09-13 across all 110 console
+// accounts: 84 could sign in, 24 could not, and the organisation scope found 19
+// of those 24 as exactly the right account. The widening only runs on zero
+// matches, so nobody who resolves today can resolve differently.
+//
+// It never searches the whole of BattleMetrics. The old code did when the server
+// id cache was still cold, and an unscoped search can match a stranger who shares
+// a gamertag and create a ReforgedZ account for them.
+async function lookupPlayerByGamertag(gamertag, platform) {
+  const trimmed = String(gamertag || '').trim();
+  if (!trimmed) return null;
+  if (!token()) {
+    console.error('[bm] BATTLEMETRICS_TOKEN not set');
+    return { unavailable: true, reason: 'BATTLEMETRICS_TOKEN not set' };
+  }
+
+  const scopes = [];
+  const serverIds = reforgedzServers.getBmIds();
+  if (serverIds.length) scopes.push({ name: 'servers', filter: `filter[servers]=${serverIds.join(',')}` });
+  scopes.push({ name: 'organization', filter: `filter[organizations]=${orgId()}` });
+
+  let matches = [];
+  let scopeUsed = null;
+  for (const scope of scopes) {
+    const r = await bmGet(`/players?filter[search]=${encodeURIComponent(trimmed)}&${scope.filter}&include=identifier&page[size]=20`);
+    if (!r.ok) {
+      console.error(`[bm] gamertag search (${scope.name}) failed: ${r.reason}`);
+      return { unavailable: true, reason: r.reason };
+    }
+    matches = matchingPlayers(r.data, trimmed);
+    scopeUsed = scope.name;
+    // Stop at the first scope that finds anyone. More than one match is
+    // ambiguous, and widening the scope could only add candidates.
+    if (matches.length) break;
+  }
 
   if (matches.length === 0) return null;
   if (matches.length > 1) {
-    console.warn('[bm] Ambiguous match for', trimmed, '- returning null');
+    console.warn(`[bm] ambiguous gamertag "${trimmed}": ${matches.length} players under the ${scopeUsed} scope, refusing to guess`);
     return null;
+  }
+  if (scopeUsed === 'organization') {
+    console.log(`[bm] "${trimmed}" found under the organisation scope, not on today's servers`);
   }
 
   const player = matches[0];
   const bmPlayerId = String(player.id);
   const displayName = (player.attributes && player.attributes.name) || trimmed;
 
-  // The /players search endpoint returns only the identifiers that matched
-  // the search query (i.e. the `name` identifier). To get the full identifier
-  // list including `reforgerUUID` (the Arma Reforger BI UID), fetch the
-  // per-player resource explicitly.
+  // The search returns only the identifiers that matched the query, so fetch the
+  // player for the full list, which includes reforgerUUID (the in-game id).
   let biUid = null;
-  try {
-    const detailUrl = `${BM_BASE}/players/${bmPlayerId}?include=identifier`;
-    const detailRes = await fetch(detailUrl, { headers: { Authorization: `Bearer ${tk}` } });
-    if (detailRes.ok) {
-      const detail = await detailRes.json();
-      for (const inc of (detail.included || [])) {
-        if (inc.type !== 'identifier' || !inc.attributes) continue;
-        if (String(inc.attributes.type).toLowerCase() !== 'reforgeruuid') continue;
-        const v = String(inc.attributes.identifier || '').toLowerCase();
-        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) {
-          biUid = v;
-          break;
-        }
-      }
-    } else {
-      console.error('[bm] player detail HTTP', detailRes.status);
+  const detail = await bmGet(`/players/${bmPlayerId}?include=identifier`);
+  if (detail.ok) {
+    for (const inc of (detail.data.included || [])) {
+      if (inc.type !== 'identifier' || !inc.attributes) continue;
+      if (String(inc.attributes.type).toLowerCase() !== 'reforgeruuid') continue;
+      const v = String(inc.attributes.identifier || '').toLowerCase();
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) { biUid = v; break; }
     }
-  } catch (e) {
-    console.error('[bm] player detail fetch failed:', e.message);
+  } else {
+    console.error(`[bm] player detail for ${bmPlayerId} failed: ${detail.reason}`);
   }
 
-  return { bmPlayerId, biUid, displayName, platform };
+  return { bmPlayerId, biUid, displayName, platform, scope: scopeUsed };
 }
 
 // Has BattleMetrics ever seen this Reforger identity? The text search cannot
