@@ -31,6 +31,16 @@ function fromAddress() {
   return process.env.INVOICE_FROM || 'ReforgedZ Billing <billing@reforgedz.net>';
 }
 
+// Sign-in emails come from the same address, so SPF, DKIM and the mail server's
+// sender rules are unchanged, but under the name "ReforgedZ": a password link from
+// "ReforgedZ Billing" looks like phishing.
+function accountFromAddress() {
+  const from = fromAddress();
+  const lt = from.lastIndexOf('<');
+  const gt = from.lastIndexOf('>');
+  return lt >= 0 && gt > lt ? `ReforgedZ <${from.slice(lt + 1, gt).trim()}>` : from;
+}
+
 function money(cents, currency) {
   return `${(cents / 100).toFixed(2)} ${String(currency || 'USD').toUpperCase()}`;
 }
@@ -862,7 +872,7 @@ async function sendAccountLink({ to, purpose, accountName, url, expiresMinutes }
 
   try {
     await tx.sendMail({
-      from: fromAddress(),
+      from: accountFromAddress(),
       to,
       replyTo: 'contact@reforgedz.net',
       subject,

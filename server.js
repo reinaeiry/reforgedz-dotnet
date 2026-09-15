@@ -1430,6 +1430,16 @@ app.get('/radio', (req, res) => {
   res.send(html);
 });
 
+// ---- Not found ----
+// Every route and static file has had its turn. API callers get JSON; people get a
+// page with the site's own look and a way back, instead of Express's bare "Cannot GET"
+// text, which also swapped the site CSP for default-src 'none'. The deliberate 9-byte
+// "Not found" for admin pages is sent earlier and never reaches this.
+app.use((req, res) => {
+  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+  res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+});
+
 // ---- Catch-all error handler ----
 // A thrown route error returns JSON (not an HTML stack page) and never bubbles
 // up to crash the process. Must be registered AFTER all routes.

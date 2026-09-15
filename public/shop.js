@@ -129,11 +129,14 @@ function formatTypeLabel(type, intervalDays) {
 function stockBadgeHtml(p) {
   if (p.stock_limit == null) return '';
   const used = p.stock_used || 0;
+  // Only the servers this page sells: the API also reports servers nobody can buy
+  // (dev1), which inflated the card to "133 / 200 left".
+  const sumSold = (byServer) => SERVER_IDS.reduce((a, id) => a + (byServer[id] || 0), 0);
   const totalCap = p.server_specific
-    ? (p.per_server_limit ? Object.values(p.per_server_limit).reduce((a, b) => a + (b || 0), 0) : p.stock_limit * SERVER_IDS.length)
+    ? (p.per_server_limit ? sumSold(p.per_server_limit) : p.stock_limit * SERVER_IDS.length)
     : p.stock_limit;
   const remaining = (p.server_specific && p.per_server_available)
-    ? Object.values(p.per_server_available).reduce((a, b) => a + (b || 0), 0)
+    ? sumSold(p.per_server_available)
     : Math.max(0, totalCap - used);
   if (remaining === 0) return '<span class="stock-badge sold-out">Sold out</span>';
   const cls = remaining <= Math.max(1, Math.floor(totalCap * 0.2)) ? 'low' : 'available';
@@ -492,6 +495,11 @@ document.getElementById('authTabSignin').addEventListener('click', () => setAuth
 document.getElementById('authTabRegister').addEventListener('click', () => setAuthMode('register'));
 document.getElementById('authForgot').addEventListener('click', () => setAuthMode('forgot'));
 document.getElementById('authForm').addEventListener('submit', submitAuth);
+// Escape closes the sign-in box, like the product box. A click outside it does not,
+// so a half-typed password is not lost to a stray tap.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('authOverlay').classList.contains('open')) closeAuthModal();
+});
 
 // ---- Products ----
 async function loadProducts() {

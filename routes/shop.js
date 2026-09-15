@@ -53,7 +53,10 @@ const PAYMENT_PROCESSOR_CHANNEL_ID =
 
 const customFlagUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: CUSTOM_FLAG_MAX_BYTES },
+  // fieldArrayIndexLimit 0: the flag form sends no bracketed field names, and without
+  // it one request with names like b[4294967294] freezes the whole process for about a
+  // minute (multer GHSA-535w). multer 2.3.0 or later is needed for the option to count.
+  limits: { fileSize: CUSTOM_FLAG_MAX_BYTES, fieldArrayIndexLimit: 0 },
   fileFilter: (req, file, cb) => {
     const ok = Object.prototype.hasOwnProperty.call(CUSTOM_FLAG_MIME_EXT, file.mimetype);
     cb(ok ? null : new Error('INVALID_FILE_TYPE'), ok);
@@ -372,6 +375,9 @@ setInterval(sweepExpiredEntitlements, 5 * 60 * 1000);
 // Periodic re-sync so each server's recorded GM count (which the PQ stock math
 // subtracts from the admin ceiling) stays fresh even with no purchase activity.
 setInterval(() => syncPurchasesToServers().catch(e => console.error('[sync periodic] Error:', e.message)), 10 * 60 * 1000);
+// And once shortly after boot, so a restart does not leave the game servers up to ten
+// minutes behind (or turn the morning health card amber for no reason).
+setTimeout(() => syncPurchasesToServers().catch(e => console.error('[sync boot] Error:', e.message)), 60 * 1000);
 
 // ---- Middleware helpers ----
 function requireAuth(req, res, next) {

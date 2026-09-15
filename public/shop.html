@@ -1664,6 +1664,10 @@
     .detail-overlay.open { display: flex; }
 
     .detail-modal {
+      /* margin:auto does the centring: a modal taller than the screen then starts at
+         the top and scrolls, instead of hiding its close button above the top edge
+         where the overlay cannot scroll to it (align-items:center did that). */
+      margin: auto;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;

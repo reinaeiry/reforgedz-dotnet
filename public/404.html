@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Page not found | ReforgedZ</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .nf-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
+    .nf-card {
+      width: 100%; max-width: 480px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 32px 24px; display: flex; flex-direction: column; gap: 16px; text-align: center;
+    }
+    .nf-code { font-family: var(--display); font-size: 3.5rem; letter-spacing: 4px; color: var(--accent); margin: 0; line-height: 1; }
+    .nf-card h1 { font-family: var(--display); text-transform: uppercase; font-size: 1.4rem; letter-spacing: 1px; margin: 0; }
+    .nf-card p { margin: 0; color: var(--text-dim); font-size: 0.95rem; line-height: 1.6; }
+    .nf-links { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    .nf-btn {
+      flex: 1 1 120px; padding: 12px 16px; background: var(--accent); color: #fff; border: 1px solid var(--accent);
+      border-radius: 8px; font-family: var(--body); font-size: 0.9rem; font-weight: 600; text-decoration: none;
+    }
+    .nf-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .nf-btn.alt { background: transparent; border-color: var(--border); color: var(--text); }
+    .nf-btn.alt:hover { border-color: var(--text-dim); background: transparent; }
+  </style>
+</head>
+<body>
+  <main class="nf-page">
+    <div class="nf-card">
+      <p class="nf-code">404</p>
+      <h1>Page not found</h1>
+      <p>That page does not exist, or it has moved. Try one of these instead.</p>
+      <div class="nf-links">
+        <a class="nf-btn" href="/">Home</a>
+        <a class="nf-btn alt" href="/shop">Shop</a>
+        <a class="nf-btn alt" href="/wiki/">Wiki</a>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
