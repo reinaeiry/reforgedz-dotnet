@@ -369,3 +369,89 @@ test('Backer and Supporter are one field for all servers: live holders per produ
   assert.equal(health.discordRoleOnlyText({ products: [{ title: 'ReforgedZ Backer', holders: 1 }], players: 1 }), 'ReforgedZ Backer: 1 · 1 player');
   assert.equal(health.discordRoleOnlyText({ products: [], players: 0 }), 'No live holders');
 });
+
+test('a check on request (/health) runs one at a time and hands the card back: never posted, nothing granted, nobody pinged', async () => {
+  const calls = [];
+  let finish;
+  const run = (opts) => { calls.push(opts); return new Promise((resolve) => { finish = resolve; }); };
+  assert.equal(health.manualHealthState().running, false);
+
+  const first = health.startManualHealthCheck({ run });
+  assert.equal(first.started, true);
+  assert.equal(first.state.running, true);
+  assert.equal(first.state.body, null);
+  const second = health.startManualHealthCheck({ run: () => { throw new Error('a second check must not run'); } });
+  assert.equal(second.started, false, 'a start while a check runs joins it');
+  assert.equal(second.state.startedAt, first.state.startedAt);
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, [{ post: false, dryRun: true, manual: true }], 'not posted to the webhook; missing roles are only listed');
+
+  process.env.PAYMENTS_ALERT_ROLE_ID = '123456789012345678';
+  try {
+    finish({ card: health.buildHealthCard(report([{ id: 'discord.bot', status: 'fail', detail: 'bot token refused' }]), null, { manual: true, now: NOW }) });
+    await first.done;
+  } finally {
+    delete process.env.PAYMENTS_ALERT_ROLE_ID;
+  }
+  const done = health.manualHealthState();
+  assert.equal(done.running, false);
+  assert.equal(done.error, null);
+  assert.ok(done.finishedAt >= done.startedAt);
+  const embed = done.body.embeds[0];
+  assert.equal(embed.title, 'Shop health: 1 problem · Manual run');
+  assert.equal(embed.color, KIND_COLORS.action);
+  assert.equal(done.body.content, undefined, 'the person who asked gets the answer; the alert role is not pinged');
+  assert.deepEqual(done.body.allowed_mentions, { parse: [] });
+  assert.equal(done.body.flags, undefined, 'a reply is not sent silently');
+
+  // A check that throws says why, and the next start runs a fresh check.
+  const err = console.error;
+  console.error = () => {};
+  try {
+    const failed = health.startManualHealthCheck({ run: async () => { throw new Error('doctor timed out'); } });
+    assert.equal(failed.started, true);
+    await failed.done;
+  } finally {
+    console.error = err;
+  }
+  const after = health.manualHealthState();
+  assert.equal(after.running, false);
+  assert.equal(after.error, 'doctor timed out');
+  assert.equal(after.body, null);
+});
+
+test('the real run behind /health asks the role heal for a preview only and sends no card', async () => {
+  const healCalls = [];
+  const sent = [];
+  let result = null;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    const check = health.startManualHealthCheck({
+      run: async (opts) => {
+        result = await health.runDailyHealth({
+          ...opts,
+          healRoles: async (o) => {
+            healCalls.push(o);
+            return { entitled: 1, held: 0, missing: 1, granted: 0, notInGuild: 0, skipped: 0, errors: 0, dryRun: o.dryRun, details: [{ userId: '100000000000000001', roleId: '200000000000000002', persona: 'Example Player', product: 'ReforgedZ Supporter' }] };
+          },
+          doctor: async () => report(),
+          send: async (card) => { sent.push(card); return { ok: true, status: 200, messageId: '1' }; }
+        });
+        return result;
+      }
+    });
+    await check.done;
+  } finally {
+    console.log = log;
+  }
+  assert.deepEqual(healCalls, [{ dryRun: true, max: 25 }], 'the heal only previews');
+  assert.equal(sent.length, 0, 'nothing goes to the webhook');
+  assert.deepEqual(result.posted, { ok: false, skipped: 'not requested' });
+  const state = health.manualHealthState();
+  assert.equal(state.error, null);
+  const embed = state.body.embeds[0];
+  assert.match(embed.description, /1 role missing, not granted/);
+  assert.ok(embed.fields.some(f => f.name === 'roles missing (preview)'), 'missing roles are listed as a preview');
+});

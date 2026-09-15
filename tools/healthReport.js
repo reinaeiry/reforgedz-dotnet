@@ -20,7 +20,7 @@ if (require.main === module) require('dotenv').config({ path: process.env.ENV_FI
 
 // The doctor, the database and the sync load only when a run starts, so the card
 // can be built and tested without them (test/healthReport.test.js).
-const { sendCard, money, serverLabel } = require('./lib/discordCard');
+const { buildCard, sendCard, money, serverLabel } = require('./lib/discordCard');
 
 const DAILY_UTC = { hour: 9, minute: 0 };
 const HOUR = 3600;
@@ -381,15 +381,21 @@ function buildHealthCard(report, heal, extra = {}) {
   };
 }
 
-// manual defaults to true: only the scheduler says a run is not by hand.
-async function runDailyHealth({ post = true, dryRun = false, manual = true } = {}) {
+// manual defaults to true: only the scheduler says a run is not by hand. healRoles,
+// doctor and send default to the real ones; tests pass their own.
+async function runDailyHealth({
+  post = true, dryRun = false, manual = true,
+  healRoles = (opts) => require('../routes/shop').healMissingDiscordRoles(opts),
+  doctor = (opts) => require('./doctor').runDoctor(opts),
+  send = sendCard
+} = {}) {
   let heal = null;
   try {
-    heal = await require('../routes/shop').healMissingDiscordRoles({ dryRun, max: 25 });
+    heal = await healRoles({ dryRun, max: 25 });
   } catch (e) {
     heal = { error: e.message };
   }
-  const report = await require('./doctor').runDoctor({ deep: true });
+  const report = await doctor({ deep: true });
   const errors = [];
   let moneyLines = null;
   try {
@@ -422,7 +428,7 @@ async function runDailyHealth({ post = true, dryRun = false, manual = true } = {
   }
   const card = buildHealthCard(report, heal, { money: moneyLines, adminLists, discordRoleOnly, reconcile, manual, errors });
   let posted = { ok: false, skipped: 'not requested' };
-  if (post) posted = await sendCard(card);
+  if (post) posted = await send(card);
   console.log(`[health] ${card.what} (${report.summary.ok}/${report.summary.warn}/${report.summary.fail})${heal && heal.granted ? `, ${heal.granted} roles healed` : ''}${posted.ok ? ', posted' : ', not posted: ' + JSON.stringify(posted)}`);
   return { report, heal, card, posted };
 }
@@ -444,8 +450,49 @@ function scheduleDailyHealth() {
   console.log(`[health] daily card at ${String(DAILY_UTC.hour).padStart(2, '0')}:${String(DAILY_UTC.minute).padStart(2, '0')} UTC`);
 }
 
+// ---- A check on request (/health in #Payment-Processor) ------------------------------------
+// The morning card, built when staff ask and handed back instead of posted, so the bot can
+// answer the person who asked. It changes nothing: Discord roles a player is missing are
+// listed, not given back (the 09:00 run does that), and no card goes to the webhook. The deep
+// doctor takes about a minute, longer than a request through the tunnel should stay open, so
+// the check runs detached and the caller polls manualHealthState(). One at a time: a start
+// while a check runs joins that check.
+let manualCheck = Object.freeze({ running: false, startedAt: null, finishedAt: null, body: null, error: null });
+let manualDone = Promise.resolve();
+
+function manualHealthState() {
+  return { ...manualCheck };
+}
+
+// The card as a reply to a person: nobody is pinged and it is not sent silently.
+function manualCheckBody(card) {
+  const body = buildCard(card);
+  delete body.content;
+  delete body.flags;
+  body.allowed_mentions = { parse: [] };
+  return body;
+}
+
+//   run  the check itself (default runDailyHealth); tests pass their own
+// Returns { started, state, done }: done settles once the check has finished.
+function startManualHealthCheck({ run = runDailyHealth } = {}) {
+  if (manualCheck.running) return { started: false, state: manualHealthState(), done: manualDone };
+  const startedAt = nowUnix();
+  manualCheck = Object.freeze({ running: true, startedAt, finishedAt: null, body: null, error: null });
+  manualDone = Promise.resolve()
+    .then(() => run({ post: false, dryRun: true, manual: true }))
+    .then((r) => {
+      manualCheck = Object.freeze({ running: false, startedAt, finishedAt: nowUnix(), body: manualCheckBody(r.card), error: null });
+    })
+    .catch((e) => {
+      console.error('[health] check on request failed:', e.message);
+      manualCheck = Object.freeze({ running: false, startedAt, finishedAt: nowUnix(), body: null, error: e.message });
+    });
+  return { started: true, state: manualHealthState(), done: manualDone };
+}
+
 module.exports = {
-  runDailyHealth, buildHealthCard, scheduleDailyHealth,
+  runDailyHealth, buildHealthCard, scheduleDailyHealth, startManualHealthCheck, manualHealthState, manualCheckBody,
   parkedWarningsFrom, sortChecks, moneyLast24h, moneyText, adminListsByServer, discordRoleOnlyHolders, discordRoleOnlyText,
   DISCORD_ROLE_ONLY_FIELD, reconcileSummary, adminCeiling
 };

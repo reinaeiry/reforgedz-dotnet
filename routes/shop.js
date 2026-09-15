@@ -3242,6 +3242,22 @@ router.get('/api/shop/admin/doctor', requireAdmin, async (req, res) => {
   }
 });
 
+// ---- Health check on request ------------------------------------------------
+
+// The morning health card, built now and handed back instead of posted, for the
+// Discord /health command (tools/healthReport.js startManualHealthCheck). Changes
+// nothing. It takes about a minute, so the POST only starts a check (or joins the
+// one already running) and the GET answers { running, startedAt, finishedAt, body,
+// error }, body being the Discord message that carries the card.
+router.post('/api/shop/admin/health-check', requireAdmin, (req, res) => {
+  const { started, state } = require('../tools/healthReport').startManualHealthCheck();
+  res.status(started ? 202 : 200).json({ started, ...state });
+});
+
+router.get('/api/shop/admin/health-check', requireAdmin, (req, res) => {
+  res.json(require('../tools/healthReport').manualHealthState());
+});
+
 // ---- Player account summary -------------------------------------------------
 
 // Everything the account page needs in one round trip: who you are, what is
