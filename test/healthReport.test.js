@@ -145,7 +145,7 @@ test('a run started by hand says Manual run; the scheduled run does not', () => 
   assert.doesNotMatch(JSON.stringify(scheduled), /Manual run/);
 });
 
-test('active entitlements are distinct in-game IDs per server, not order rows', () => {
+test('admin lists and perk players per server are distinct in-game IDs, not order rows', () => {
   const buckets = {
     eu1: [
       { guid: 'aaaaaaaa-0000-4000-8000-000000000001', item: 'Priority Queue' },
@@ -160,19 +160,23 @@ test('active entitlements are distinct in-game IDs per server, not order rows', 
     eu2: new Set(),
     na1: new Set()
   };
-  const list = health.entitlementsByServer(buckets, pq);
+  const list = health.entitlementsByServer(buckets, pq, { eu1: 9, eu2: 2 });
   assert.deepEqual(list, [
-    { serverId: 'eu1', ids: 2, priorityQueue: 2 },
-    { serverId: 'eu2', ids: 1, priorityQueue: 0 },
-    { serverId: 'na1', ids: 0, priorityQueue: 0 }
+    { serverId: 'eu1', ids: 2, priorityQueue: 2, gameMasters: 9, adminEntries: 11 },
+    { serverId: 'eu2', ids: 1, priorityQueue: 0, gameMasters: 2, adminEntries: 2 },
+    { serverId: 'na1', ids: 0, priorityQueue: 0, gameMasters: null, adminEntries: null }
   ]);
   const oldWording = [{ id: 'db.file', status: 'ok', detail: 'integrity ok, journal wal, 10 users, 20 orders, 99 active entitlements' }];
   const spec = health.buildHealthCard(report([], oldWording), null, { now: NOW, entitlements: list });
-  assert.equal(fieldOf(spec, 'Active entitlements (distinct in-game IDs per server)').value, [
-    `${serverLabel('eu1')}: 2, 2 with priority queue`,
-    `${serverLabel('eu2')}: 1, 0 with priority queue`,
-    `${serverLabel('na1')}: 0, 0 with priority queue`
+  assert.equal(fieldOf(spec, 'Admin list per server (as of the last sync)').value, [
+    `${serverLabel('eu1')}: 11 of 50 admin list entries (2 priority queue, 9 game masters); 2 players with a shop perk`,
+    `${serverLabel('eu2')}: 2 of 50 admin list entries (0 priority queue, 2 game masters); 1 player with a shop perk`,
+    `${serverLabel('na1')}: 0 priority queue, game masters not counted yet; 0 players with a shop perk`
   ].join('\n'));
+  assert.doesNotMatch(JSON.stringify(spec), /Active entitlements/, 'the perk count is never labelled as entitlements again');
+  assert.equal(health.adminCeiling({ ADMIN_CEILING: '45' }), 45);
+  assert.equal(health.adminCeiling({ ADMIN_CEILING: 'x' }), 50);
+  assert.equal(health.adminCeiling({}), 50);
   assert.doesNotMatch(spec.description, /99|entitlements/, 'the order-row count is not relabelled as entitlements');
   assert.doesNotMatch(JSON.stringify(buildCard(spec)), /aaaaaaaa-0000/);
 });

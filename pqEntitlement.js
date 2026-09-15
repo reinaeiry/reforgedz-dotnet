@@ -35,7 +35,8 @@ const RENEWAL_WINDOW_S = 6 * HOUR_S;
 // checkout stops holding anything after it.
 const CHECKOUT_RESERVATION_S = 30 * 60;
 // Reforger reads game.admins at start, and priority queue shares that list with the
-// game masters. Overridable with ADMIN_CEILING.
+// game masters. More than 50 entries has stopped servers starting, so the list never
+// goes past this. Overridable with ADMIN_CEILING.
 const DEFAULT_ADMIN_CEILING = 50;
 
 const nowUnix = () => Math.floor(Date.now() / 1000);

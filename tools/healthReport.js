@@ -200,22 +200,41 @@ function moneyText(m) {
   return lines.join('\n');
 }
 
-// ---- Active entitlements --------------------------------------------------------------
-// Distinct in-game IDs per server, from exactly what the entitlement sync sends each
-// server (sync.buildPerServerPurchaseBuckets, and buildPriorityQueueGuidsPerServer for
-// priority queue, which is pqEntitlement.js's one rule). Counting order rows overstates
-// it: one player can hold several live orders.
-function entitlementsByServer(buckets, pq = {}) {
+// ---- Admin lists and perk entries per server --------------------------------------------
+// Two different numbers, kept apart on the card because one was once read as the other:
+// - the admin list (game.admins): priority queue holders by pqEntitlement.js's rule plus the
+//   game masters the last sync counted in that server's file. This is the list that fills up:
+//   more than ADMIN_CEILING entries has stopped servers starting.
+// - players with a shop perk entry in purchases.json: priority queue, Backer and Supporter.
+//   Backer and Supporter holders take no admin list entry.
+// Both count distinct in-game IDs, not order rows: one player can hold several live orders.
+function entitlementsByServer(buckets, pq = {}, gameMasters = {}) {
   const distinct = (list) => new Set([...(list || [])].map(g => (g ? String(g).toLowerCase() : null)).filter(Boolean)).size;
-  return Object.keys(buckets || {}).map(serverId => ({
-    serverId,
-    ids: distinct((buckets[serverId] || []).map(e => e && e.guid)),
-    priorityQueue: distinct(pq && pq[serverId])
-  }));
+  return Object.keys(buckets || {}).map(serverId => {
+    const priorityQueue = distinct(pq && pq[serverId]);
+    const gm = gameMasters && Number.isFinite(gameMasters[serverId]) ? gameMasters[serverId] : null;
+    return {
+      serverId,
+      ids: distinct((buckets[serverId] || []).map(e => e && e.guid)),
+      priorityQueue,
+      gameMasters: gm,
+      adminEntries: gm == null ? null : priorityQueue + gm
+    };
+  });
 }
 
-function entitlementsText(list) {
-  return list.map(s => `${serverLabel(s.serverId)}: ${s.ids}, ${s.priorityQueue} with priority queue`).join('\n') || 'No servers';
+function entitlementsText(list, ceiling = adminCeiling()) {
+  return list.map(s => {
+    const admins = s.adminEntries == null
+      ? `${s.priorityQueue} priority queue, game masters not counted yet`
+      : `${s.adminEntries} of ${ceiling} admin list entries (${s.priorityQueue} priority queue, ${s.gameMasters} game masters)`;
+    return `${serverLabel(s.serverId)}: ${admins}; ${s.ids} ${s.ids === 1 ? 'player' : 'players'} with a shop perk`;
+  }).join('\n') || 'No servers';
+}
+
+// The shop's one admin ceiling (pqEntitlement.js), so the card never disagrees with the stock math.
+function adminCeiling(env = process.env) {
+  return require('../pqEntitlement').adminCeiling(env);
 }
 
 // ---- The PayPal reconciliation's last run ---------------------------------------------
@@ -303,7 +322,7 @@ function buildHealthCard(report, heal, extra = {}) {
     ...problems.map(c => ({ name: `FAIL ${c.id}`, value: c.detail })),
     ...warnings.map(c => ({ name: `warn ${c.id}`, value: c.detail }))
   ];
-  if (entitlements) fields.push({ name: 'Active entitlements (distinct in-game IDs per server)', value: entitlementsText(entitlements) });
+  if (entitlements) fields.push({ name: 'Admin list per server (as of the last sync)', value: entitlementsText(entitlements) });
   if (moneyLines) fields.push({ name: 'Money, last 24 hours', value: moneyText(moneyLines) });
   if (parked.length) fields.push({ name: 'Known, parked', value: parked.map(c => `${c.id}: ${c.note}`).join('\n') });
   if (heal && heal.details && heal.details.length) {
@@ -338,9 +357,12 @@ async function runDailyHealth({ post = true, dryRun = false, manual = true } = {
   let entitlements = null;
   try {
     const sync = require('../sync');
-    entitlements = entitlementsByServer(sync.buildPerServerPurchaseBuckets(), sync.buildPriorityQueueGuidsPerServer());
+    const gameMasters = Object.fromEntries(require('../db')
+      .prepare('SELECT server_id, non_shop_admin_count FROM config_admin_sync_state WHERE non_shop_admin_count IS NOT NULL')
+      .all().map(r => [r.server_id, r.non_shop_admin_count]));
+    entitlements = entitlementsByServer(sync.buildPerServerPurchaseBuckets(), sync.buildPriorityQueueGuidsPerServer(), gameMasters);
   } catch (e) {
-    errors.push({ id: 'health.entitlements', detail: `active entitlements could not be counted: ${e.message}` });
+    errors.push({ id: 'health.entitlements', detail: `the admin lists could not be counted: ${e.message}` });
   }
   let reconcile = null;
   try {
@@ -375,7 +397,7 @@ function scheduleDailyHealth() {
 
 module.exports = {
   runDailyHealth, buildHealthCard, scheduleDailyHealth,
-  parkedWarningsFrom, sortChecks, moneyLast24h, moneyText, entitlementsByServer, reconcileSummary
+  parkedWarningsFrom, sortChecks, moneyLast24h, moneyText, entitlementsByServer, reconcileSummary, adminCeiling
 };
 
 if (require.main === module) {
