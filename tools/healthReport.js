@@ -113,6 +113,8 @@ function totalsText(totals) {
 // renewals), refunds and reversals recorded, payments the reconciliation reported,
 // and every dispute still open. Sandbox orders, and refunds and disputes on them,
 // are left out. Orders carry no currency of their own; their product's is used.
+// A payment the shop refused and refunded (paymentEvents.refuseSale) was never booked
+// as a payment in, so it is counted on its own line, not among refunds of payments in.
 function moneyLast24h(db, now = nowUnix()) {
   const since = now - DAY;
   const out = {
@@ -120,6 +122,7 @@ function moneyLast24h(db, now = nowUnix()) {
     paymentsIn: { count: 0, newCount: 0, totals: {} },
     renewals: { count: 0, totals: {} },
     refundsOut: { count: 0, noAmount: 0, totals: {} },
+    refusedSales: { count: 0, totals: {} },
     reversals: { count: 0, totals: {} },
     unbookedFound: 0,
     openDisputes: { count: 0, waitingForShop: 0, totals: {} }
@@ -147,14 +150,20 @@ function moneyLast24h(db, now = nowUnix()) {
   }
 
   const refunds = db.prepare(`
-    SELECT r.kind, r.amount_cents AS cents, COALESCE(r.currency, p.currency) AS currency
+    SELECT r.kind, r.amount_cents AS cents, COALESCE(r.currency, p.currency) AS currency,
+           (r.source = 'shop' AND r.order_id IS NULL) AS refused
     FROM paypal_refunds r
     LEFT JOIN orders o ON o.id = r.order_id
     LEFT JOIN products p ON p.id = o.product_id
-    WHERE r.received_at > ? AND r.received_at <= ? AND COALESCE(o.test_mode, 0) = 0
+    WHERE r.received_at > ? AND r.received_at <= ? AND COALESCE(o.test_mode, r.test_mode, 0) = 0
       AND r.kind IN ('refund', 'reversal')
   `).all(since, now);
   for (const r of refunds) {
+    if (r.refused && r.kind === 'refund') {
+      out.refusedSales.count += 1;
+      addTo(out.refusedSales.totals, r.currency, r.cents);
+      continue;
+    }
     const bucket = r.kind === 'reversal' ? out.reversals : out.refundsOut;
     bucket.count += 1;
     if (r.cents == null) { if (bucket === out.refundsOut) out.refundsOut.noAmount += 1; } else addTo(bucket.totals, r.currency, r.cents);
@@ -183,6 +192,7 @@ function moneyText(m) {
     `Renewals booked (part of those): ${m.renewals.count}, ${totalsText(m.renewals.totals)}`,
     `Refunds out: ${m.refundsOut.count}, ${totalsText(m.refundsOut.totals)}${m.refundsOut.noAmount ? `, ${m.refundsOut.noAmount} with no amount given` : ''}`
   ];
+  if (m.refusedSales && m.refusedSales.count) lines.push(`Payments the shop refused, refunded automatically: ${m.refusedSales.count}, ${totalsText(m.refusedSales.totals)}`);
   if (m.reversals.count) lines.push(`Payments reversed: ${m.reversals.count}, ${totalsText(m.reversals.totals)}`);
   lines.push(`Unbooked payments found by the PayPal check: ${m.unbookedFound}`);
   const d = m.openDisputes;
@@ -193,8 +203,8 @@ function moneyText(m) {
 // ---- Active entitlements --------------------------------------------------------------
 // Distinct in-game IDs per server, from exactly what the entitlement sync sends each
 // server (sync.buildPerServerPurchaseBuckets, and buildPriorityQueueGuidsPerServer for
-// priority queue). Counting order rows overstates it: one player can hold several
-// live orders, and staff grants and blocks change what a server really gets.
+// priority queue, which is pqEntitlement.js's one rule). Counting order rows overstates
+// it: one player can hold several live orders.
 function entitlementsByServer(buckets, pq = {}) {
   const distinct = (list) => new Set([...(list || [])].map(g => (g ? String(g).toLowerCase() : null)).filter(Boolean)).size;
   return Object.keys(buckets || {}).map(serverId => ({
@@ -226,8 +236,14 @@ function reconcileSummary(status, now = nowUnix()) {
   if (last.unbooked && !last.posted) {
     return warn(`the ${at} PayPal check found ${last.unbooked} unbooked payment${last.unbooked === 1 ? '' : 's'} but could not post its card; the next run reports them again`);
   }
+  // The same run's check of subscriptions failing at PayPal (reconcile.endFailingSubscriptions).
+  const failing = last.failing || null;
+  if (failing && failing.error) {
+    return warn(`the ${at} check of failing PayPal subscriptions could not finish, so none was ended: ${failing.error}`);
+  }
   const n = last.incoming || 0;
-  return { bit: `PayPal check ${at}: ${n} payment${n === 1 ? '' : 's'}, ${last.unbooked ? `${last.unbooked} unbooked reported` : 'all booked'}`, check: null };
+  const ended = failing && failing.ended ? `, ${failing.ended} unpaid subscription${failing.ended === 1 ? '' : 's'} ended` : '';
+  return { bit: `PayPal check ${at}: ${n} payment${n === 1 ? '' : 's'}, ${last.unbooked ? `${last.unbooked} unbooked reported` : 'all booked'}${ended}`, check: null };
 }
 
 // ---- The card ---------------------------------------------------------------------------

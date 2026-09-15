@@ -71,13 +71,6 @@ const cancelledSub = (steamId, productId, sub, until, extra = {}) => order(steam
   sub, until, cancelledAt: until - 20 * DAY, endedReason: 'cancelled', ...extra
 });
 
-function billingIssue(sub, { resolved = false, now }) {
-  db.prepare(`
-    INSERT INTO subscription_billing_issues (paypal_subscription_id, steam_id, paypal_status, failed_count, first_seen_at, last_seen_at, resolved_at)
-    VALUES (?, NULL, 'ACTIVE', 1, ?, ?, ?)
-  `).run(sub, now - DAY, now - DAY, resolved ? now - HOUR : null);
-}
-
 function fakeSender(reply = async () => ({ ok: true })) {
   const sent = [];
   return { sent, send: async (payload) => { sent.push(payload); return reply(payload, sent.length); } };
@@ -176,15 +169,31 @@ test('only the newest cycle of a subscription counts, and a tie on the end date 
   assert.deepEqual(out.items.map(i => i.orderId), [higher]);
 });
 
-test('an open billing issue skips the reminder; a resolved one does not', async () => {
+test('another subscription still in its renewal window keeps covering; a cancelled, sandbox or undated order does not', async () => {
   const now = at(6);
-  const failing = cancelledSub(user(), PQ_EU, 'I-FAILING', now + 50 * HOUR);
-  billingIssue('I-FAILING', { now });
-  const fixed = cancelledSub(user(), PQ_EU, 'I-FIXED', now + 51 * HOUR);
-  billingIssue('I-FIXED', { now, resolved: true });
+  const until = now + 50 * HOUR;
+
+  // Due two hours ago and still billing: PayPal has not taken the renewal yet.
+  const renewing = user();
+  const a = cancelledSub(renewing, PQ_EU, 'I-W1', until);
+  order(renewing, PQ_EU, { sub: 'I-W2', until: now - 2 * HOUR });
+
+  const cancelledEarlier = user();
+  const b = cancelledSub(cancelledEarlier, PQ_EU, 'I-W3', until);
+  cancelledSub(cancelledEarlier, PQ_EU, 'I-W4', now - 2 * HOUR);
+
+  const sandbox = user();
+  const c = cancelledSub(sandbox, PQ_EU, 'I-W5', until);
+  order(sandbox, PQ_EU, { sub: 'I-W6', until: now + 20 * DAY, testMode: 1 });
+
+  const undated = user();
+  const d = cancelledSub(undated, PQ_EU, 'I-W7', until);
+  order(undated, PQ_ONE_TIME, { until: null });
+
   const out = await run({ now, dryRun: true });
-  assert.deepEqual(out.items.map(i => i.orderId), [fixed]);
-  assert.deepEqual(out.skipped, [{ orderId: failing, effectiveUntil: now + 50 * HOUR, reason: 'billingIssue' }]);
+  assert.deepEqual(out.items.map(i => i.orderId).sort((x, y) => x - y), [b, c, d]);
+  assert.deepEqual(out.skipped.map(s => [s.orderId, s.reason]), [[a, 'stillCovered']]);
+  assert.equal(Object.prototype.hasOwnProperty.call(out.counts, 'billingIssue'), false, 'a failing renewal ends the subscription, so it is no reason to skip');
 });
 
 test('an account that keeps priority queue on that server another way is not reminded', async () => {
@@ -215,6 +224,8 @@ test('an account that keeps priority queue on that server another way is not rem
   const f = cancelledSub(lapsedBefore, PQ_EU, 'I-F1', until);
   cancelledSub(lapsedBefore, PQ_EU, 'I-F0', now - 3 * DAY);
 
+  // An order with no end date is not paid priority queue (pqEntitlement.js), so it
+  // covers nothing and the dated one is reminded.
   const lifetime = user();
   const g = order(lifetime, PQ_ONE_TIME, { until });
   order(lifetime, PQ_ONE_TIME, { until: null });
@@ -224,9 +235,9 @@ test('an account that keeps priority queue on that server another way is not rem
   order(user(), PQ_EU, { sub: 'I-H2', until: now + 20 * DAY });
 
   const out = await run({ now, dryRun: true });
-  assert.deepEqual(out.items.map(i => i.orderId).sort((x, y) => x - y), [b, d, f, h]);
+  assert.deepEqual(out.items.map(i => i.orderId).sort((x, y) => x - y), [b, d, f, g, h]);
   assert.deepEqual(out.skipped.map(s => [s.orderId, s.reason]).sort((x, y) => x[0] - y[0]),
-    [[a, 'stillCovered'], [c, 'stillCovered'], [e, 'stillCovered'], [g, 'stillCovered']]);
+    [[a, 'stillCovered'], [c, 'stillCovered'], [e, 'stillCovered']]);
   assert.equal(out.items.find(i => i.orderId === d).serverId, null, 'an all-server order names no server');
 });
 

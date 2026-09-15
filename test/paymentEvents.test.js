@@ -102,7 +102,7 @@ function fakeEffects() {
 
 test('the migration adds the refund, dispute, cancel-marker and unmatched-sale tables', () => {
   const cols = (t) => db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
-  assert.deepEqual(cols('paypal_refunds'), ['refund_id', 'order_id', 'payment_id', 'amount_cents', 'currency', 'kind', 'source', 'received_at']);
+  assert.deepEqual(cols('paypal_refunds'), ['refund_id', 'order_id', 'payment_id', 'amount_cents', 'currency', 'kind', 'source', 'received_at', 'test_mode']);
   assert.deepEqual(cols('paypal_disputes'), ['dispute_id', 'order_id', 'payment_id', 'status', 'outcome', 'reason', 'stage', 'amount_cents', 'currency', 'respond_by', 'created_at', 'updated_at']);
   assert.deepEqual(cols('subscription_cancels'), ['subscription_id', 'source', 'requested_at']);
   assert.deepEqual(cols('unmatched_sales'), ['sale_id', 'subscription_id', 'amount_cents', 'currency', 'custom_id', 'received_at']);
@@ -480,11 +480,26 @@ test("a cancel PayPal refuses never removes an earlier shop cancel's marker", as
 test('after a shop cancel only a no-refund staff revoke still emails the player, and no ended card goes out', () => {
   assert.deepEqual(ev.endedNotices({ shopCancel: null }), { card: true, email: true, claimAccess: true });
   assert.deepEqual(ev.endedNotices(), { card: true, email: true, claimAccess: true });
-  for (const source of ['staff_revoke', 'auto_close_suspended', 'hard_delete', 'close_suspended_tool']) {
+  for (const source of ['staff_revoke', 'auto_close_suspended', 'hard_delete', 'close_suspended_tool', 'unpaid', 'no_slot', 'revoked']) {
     assert.deepEqual(ev.endedNotices({ shopCancel: { source } }), { card: false, email: false, claimAccess: false }, source);
   }
+  assert.ok(ev.SHOP_CANCEL_SOURCES.includes('unpaid') && ev.SHOP_CANCEL_SOURCES.includes('no_slot') && ev.SHOP_CANCEL_SOURCES.includes('revoked'));
   assert.deepEqual(ev.endedNotices({ shopCancel: { source: 'staff_revoke_no_refund' } }), { card: false, email: true, claimAccess: false });
   assert.ok(ev.SHOP_CANCEL_SOURCES.includes('staff_revoke_no_refund'));
+});
+
+test("a subscription the shop's billing rules ended stays quiet when it ends at PayPal later, whatever the marker says", () => {
+  for (const shopEnded of ['unpaid', 'no_slot']) {
+    assert.deepEqual(ev.endedNotices({ shopCancel: null, shopEnded }), { card: false, email: false, claimAccess: false }, shopEnded);
+    assert.deepEqual(ev.endedNotices({ shopCancel: { source: 'staff_revoke_no_refund' }, shopEnded }), { card: false, email: false, claimAccess: false }, shopEnded);
+  }
+  for (const shopEnded of [null, 'cancelled', 'suspended']) {
+    assert.deepEqual(ev.endedNotices({ shopCancel: null, shopEnded }), { card: true, email: true, claimAccess: true }, `${shopEnded}: a player's own cancel still gets its card and email`);
+  }
+  assert.equal(ev.billingStopped({ outcome: 'cancelled' }), true);
+  assert.equal(ev.billingStopped({ outcome: 'already_ended' }), true);
+  for (const outcome of ['failed', 'unknown', 'none']) assert.equal(ev.billingStopped({ outcome }), false, outcome);
+  assert.equal(ev.billingStopped(null), false);
 });
 
 // ---- Access when a subscription ends ------------------------------------------------------
@@ -648,13 +663,4 @@ test("a booked sale's access ends at PayPal's next billing time, or the sale tim
   assert.deepEqual(r, { effectiveUntil: at('2028-01-15T08:00:00Z'), nextBillingAt: null, estimated: true });
   assert.match(lines[1], /PayPal gave no next billing time/);
   assert.ok(!lines.some(l => /@/.test(l)));
-});
-
-test('a billing failure is news for staff only when the failure count moves above zero', () => {
-  assert.equal(ev.billingIssueEscalates({ prev: null, failedCount: 0 }), false);
-  assert.equal(ev.billingIssueEscalates({ prev: null, failedCount: 1 }), true);
-  assert.equal(ev.billingIssueEscalates({ prev: { failed_count: 0, resolved_at: null }, failedCount: 1 }), true);
-  assert.equal(ev.billingIssueEscalates({ prev: { failed_count: 1, resolved_at: null }, failedCount: 1 }), false);
-  assert.equal(ev.billingIssueEscalates({ prev: { failed_count: 2, resolved_at: NOW }, failedCount: 1 }), true, 'a resolved issue failing again');
-  assert.equal(ev.billingIssueEscalates({ prev: { failed_count: 2, resolved_at: NOW }, failedCount: 0 }), false);
 });

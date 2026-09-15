@@ -375,11 +375,13 @@ check('billing.issues', 'payments', { offline: true }, async () => withDb((db) =
 check('roles.parity', 'discord', { deepOnly: true, deepTimeoutMs: 240000 }, async () => {
   if (!process.env.DISCORD_BOT_TOKEN) return skip('no bot token');
   const discord = require('../discord');
+  // Owed by the same rule the shop's role reconcile uses (pqEntitlement.perksLiveSql).
+  const { perksLiveSql } = require('../pqEntitlement');
   const owed = withDb(db => db.prepare(`
     SELECT DISTINCT u.discord_id, p.discord_role_id, p.title
     FROM orders o JOIN users u ON u.steam_id = o.steam_id JOIN products p ON p.id = o.product_id
-    WHERE o.status='completed' AND p.discord_role_id IS NOT NULL AND u.discord_id IS NOT NULL AND u.discord_id != ''
-      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())`).all());
+    WHERE p.discord_role_id IS NOT NULL AND u.discord_id IS NOT NULL AND u.discord_id != ''
+      AND ${perksLiveSql('o', 'p')}`).all({ now: Math.floor(Date.now() / 1000) }));
   const byUser = new Map();
   for (const r of owed) { if (!byUser.has(r.discord_id)) byUser.set(r.discord_id, []); byUser.get(r.discord_id).push(r); }
   let held = 0, missing = 0, left = 0;

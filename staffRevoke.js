@@ -60,16 +60,9 @@ async function refundCaptureForOrder(paypal, order, amountCents) {
   }
 }
 
-// What a refund call that threw means:
-//   failed   PayPal was never asked, or answered with a 4xx and refused
-//   unknown  PayPal was asked and gave no HTTP answer (the client timed out, the
-//            network failed) or a 5xx, so the refund may have gone through
-function refundErrorOutcome(err) {
-  const status = Number(err && err.status) || 0;
-  if (!err || !err.refundAsked) return { outcome: 'failed', status };
-  if (status >= 400 && status < 500) return { outcome: 'failed', status };
-  return { outcome: 'unknown', status };
-}
+// What a refund call that threw means (failed or unknown). The shop's own refunds
+// of payments it cannot honour read it the same way, so it lives in paymentEvents.js.
+const { refundErrorOutcome } = paymentEvents;
 
 function attempt(log, what, fn) {
   try {
@@ -89,7 +82,6 @@ function attempt(log, what, fn) {
 //   sendCard               (specFn) posts a card
 //   sendRefundEmail        ({ order, amountCents }) the buyer's refund confirmation
 //   afterRevoke            (orderId) re-sync the game servers and remove the role
-//   withQueue              (row) adds where a moved holder's queue is, for the card
 //   logger, now
 //
 // The refund amount is what the order charged less any refund already made in
@@ -98,7 +90,7 @@ function attempt(log, what, fn) {
 async function revokeOrder(db, { order, refund = false }, deps = {}) {
   const {
     paypal, tracker, markCancelledLocally = () => {}, sendCard = () => {}, sendRefundEmail = () => {},
-    afterRevoke = () => {}, withQueue = (row) => row, logger = console, now = nowUnix()
+    afterRevoke = () => {}, logger = console, now = nowUnix()
   } = deps;
   const log = logger;
 
@@ -126,7 +118,7 @@ async function revokeOrder(db, { order, refund = false }, deps = {}) {
           // Nothing is changed on a guess. If PayPal did make the refund, its
           // webhook records it once this revoke has ended.
           log.error(`[revoke] order #${order.id}: PayPal did not answer the refund request (${msg.slice(0, 200)}); nothing changed, staff told`);
-          sendCard(() => cards.refundUnknownCard({ order: withQueue(order), amountCents: askedCents }));
+          sendCard(() => cards.refundUnknownCard({ order, amountCents: askedCents }));
           return {
             status: 502,
             body: { error: 'Refund failed: PayPal did not answer in time, so the refund may or may not have gone through. Check the payment in PayPal before trying again.' }
@@ -182,7 +174,7 @@ async function revokeOrder(db, { order, refund = false }, deps = {}) {
     }
 
     sendCard(() => cards.staffRevokeCard({
-      order: withQueue(order),
+      order,
       refunded: !!refundResult,
       refundedCents: shownCents,
       refundId: refundResult ? refundResult.refundId : null,

@@ -219,6 +219,10 @@ test('money in the last 24 hours comes from the shop records, without sandbox or
   refund.run('R4', sandbox, 'CAP-S', 1500, 'USD', 'refund', 'staff', NOW - HOUR);
   refund.run('R5', null, 'SALE-OLD', 1500, 'USD', 'refund', 'webhook', NOW - 30 * HOUR);
   refund.run('V1', firstCycle, 'SALE-H2', 4500, 'USD', 'reversal', 'webhook', NOW - 6 * HOUR);
+  // Payments the shop refused and refunded: never booked, so not refunds of payments in.
+  const refusal = db.prepare("INSERT INTO paypal_refunds (refund_id, order_id, payment_id, amount_cents, currency, kind, source, received_at, test_mode) VALUES (?, NULL, ?, ?, 'USD', 'refund', 'shop', ?, ?)");
+  refusal.run('RF-SALE-R1', 'SALE-R1', 1500, NOW - HOUR, 0);
+  refusal.run('shop:SALE-R2', 'SALE-R2', 1500, NOW - 2 * HOUR, 1); // sandbox
 
   const seen = db.prepare('INSERT INTO reconcile_seen (transaction_id, reported_at) VALUES (?, ?)');
   seen.run('T-A', NOW - 30 * 60);
@@ -235,6 +239,7 @@ test('money in the last 24 hours comes from the shop records, without sandbox or
   assert.deepEqual(m.paymentsIn, { count: 5, newCount: 3, totals: { USD: 5500, EUR: 1250 } });
   assert.deepEqual(m.renewals, { count: 2, totals: { USD: 3000 } });
   assert.deepEqual(m.refundsOut, { count: 3, noAmount: 1, totals: { USD: 2500 } });
+  assert.deepEqual(m.refusedSales, { count: 1, totals: { USD: 1500 } }, 'live only');
   assert.deepEqual(m.reversals, { count: 1, totals: { USD: 4500 } });
   assert.equal(m.unbookedFound, 2);
   assert.deepEqual(m.openDisputes, { count: 2, waitingForShop: 1, totals: { USD: 6000 } });
@@ -245,6 +250,7 @@ test('money in the last 24 hours comes from the shop records, without sandbox or
     'Payments in: 5, $55.00 + 12.50 EUR',
     'Renewals booked (part of those): 2, $30.00',
     'Refunds out: 3, $25.00, 1 with no amount given',
+    'Payments the shop refused, refunded automatically: 1, $15.00',
     'Payments reversed: 1, $45.00',
     'Unbooked payments found by the PayPal check: 2',
     'Open disputes (any age): 2, $60.00, 1 waiting for the shop'
@@ -284,6 +290,14 @@ test('the PayPal check shows on the card, and a failed, stopped or unposted chec
   const stopped = card({ ranAt: NOW - 30 * HOUR, ok: true, skipped: null, error: null, incoming: 1, unbooked: 0, reported: 0, posted: null });
   assert.equal(stopped.kind, 'attention');
   assert.match(fieldOf(stopped, 'warn paypal.reconcile').value, /last ran 30 h ago; its timer is not running/);
+
+  const endedSome = card({ ranAt, ok: true, skipped: null, error: null, incoming: 3, unbooked: 0, reported: 0, posted: null, failing: { ok: true, error: null, checked: 40, failing: 2, ended: 2 } });
+  assert.equal(endedSome.kind, 'info');
+  assert.match(endedSome.description, /PayPal check 07:30 UTC: 3 payments, all booked, 2 unpaid subscriptions ended/);
+
+  const failingStuck = card({ ranAt, ok: true, skipped: null, error: null, incoming: 3, unbooked: 0, reported: 0, posted: null, failing: { ok: false, error: '1 of 40 PayPal subscription lookups failed', checked: 40, failing: 0, ended: 0 } });
+  assert.equal(failingStuck.kind, 'attention');
+  assert.match(fieldOf(failingStuck, 'warn paypal.reconcile').value, /check of failing PayPal subscriptions could not finish, so none was ended: 1 of 40/);
 
   const off = card(null, true);
   assert.equal(off.kind, 'info');

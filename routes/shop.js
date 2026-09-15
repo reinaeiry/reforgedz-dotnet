@@ -5,12 +5,13 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../db');
-const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus } = require('../sync');
+const { syncPurchasesToServers, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus } = require('../sync');
 const { SERVER_IDS, SELLABLE_SERVER_IDS, SERVER_LABELS, isSaveServerId, listSaveServers } = require('../gameServers');
 const discord = require('../discord');
 const consoleIdentity = require('../consoleIdentity');
 const webAuth = require('../webAuth');
 const pqGuards = require('../pqGuards');
+const pqEntitlement = require('../pqEntitlement');
 const { adminActor, staffSetBiUid } = require('../adminAudit');
 const { postCard, buildCard, sendCard } = require('../tools/lib/discordCard');
 const cards = require('../paymentCards');
@@ -25,7 +26,7 @@ const reconcile = require('../tools/reconcile');
 // ---- PayPal setup ----
 const paypal = require('../paypal');
 const { describeNextRestart, RESTART_UTC_HOURS } = require('../restartSchedule');
-const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed } = require('../invoiceMail');
+const { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed, sendPaymentRefused } = require('../invoiceMail');
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 // Resolved on boot by server.js calling registerPayPalWebhooks(); read at
@@ -165,61 +166,39 @@ function perServerStockUsed(productId) {
   return out;
 }
 
-// Per-server stock cap for a server_specific product. Honours the optional
-// stock_limit_overrides JSON map ({serverId: limit}); falls back to the shared
-// stock_limit when a server isn't listed there.
-function effectiveStockLimit(product, serverId) {
-  const raw = product.stock_limit_overrides;
-  if (raw) {
-    let ov = raw;
-    if (typeof raw === 'string') { try { ov = JSON.parse(raw); } catch { ov = null; } }
-    if (ov && ov[serverId] != null) return ov[serverId];
-  }
-  return product.stock_limit;
-}
+// Per-server stock cap for a server_specific product: the optional
+// stock_limit_overrides JSON map ({serverId: limit}), else the shared stock_limit.
+const effectiveStockLimit = pqEntitlement.stockCapFor;
 
-// For priority-queue products the meaningful "used" count is the actual set of
-// GUIDs written into each server's game.admins — i.e. effective purchases PLUS
-// manual grants, deduped — NOT the raw purchase count. Counting that set keeps
-// the per-server cap honest: "40 / 40" means 40 entries in game.admins, so the
-// 50-admin config ceiling can't be blown by manual grants slipping past the cap.
-function pqUsedPerServer() {
-  const sets = buildPriorityQueueGuidsPerServer();
-  const out = {};
-  for (const id of SERVER_IDS) out[id] = sets[id] ? sets[id].size : 0;
-  return out;
-}
-
-// Hard cap on entries in a server's game.admins before Reforger errors on the
-// config. Priority-queue stock is squeezed so that PQ + GMs never exceeds it.
-const ADMIN_CEILING = parseInt(process.env.ADMIN_CEILING || '50', 10);
-
-// Non-PQ admins (GMs + owner) per server, recorded by sync.js on each run.
-function gmCountPerServer() {
-  const out = Object.fromEntries(SERVER_IDS.map(id => [id, 0]));
-  for (const row of db.prepare('SELECT server_id, non_shop_admin_count FROM config_admin_sync_state').all()) {
-    if (row.server_id in out) out[row.server_id] = row.non_shop_admin_count || 0;
-  }
-  return out;
-}
-
-function attachStock(product) {
+// excludeSteamId: the signed-in viewer, whose own checkouts waiting at PayPal are left
+// out of the stock they see, exactly as checkout leaves them out.
+function attachStock(product, { excludeSteamId = null } = {}) {
   if (!product) return product;
   if (product.server_specific) {
     const isPq = !!product.grants_priority_queue;
-    product.per_server_used = isPq ? pqUsedPerServer() : perServerStockUsed(product.id);
-    const gm = isPq ? gmCountPerServer() : {};
     product.per_server_limit = {};      // the configured cap (display denominator)
     product.per_server_available = {};  // how many can still be sold (numerator)
-    for (const id of SERVER_IDS) {
-      const cap = effectiveStockLimit(product, id);
-      product.per_server_limit[id] = cap;
-      if (cap == null) { product.per_server_available[id] = null; continue; }
-      const used = product.per_server_used[id] || 0;
-      // For PQ the real ceiling is min(cap, ADMIN_CEILING - GMs), so PQ + GMs
-      // can never push game.admins past the limit. e.g. cap 40, 15 GMs -> 25/40.
-      const effective = isPq ? Math.min(cap, ADMIN_CEILING - (gm[id] || 0)) : cap;
-      product.per_server_available[id] = Math.max(0, effective - used);
+    if (isPq) {
+      // Priority queue stock is the admin list itself (pqEntitlement.pqSlotsPerServer):
+      // used is the IDs holding priority queue there by the one rule, the real limit
+      // is min(cap, ADMIN_CEILING - game masters) so priority queue plus game masters
+      // never pass the ceiling, and a checkout waiting at PayPal holds its slot for a
+      // while. The checkout refuses on the same numbers.
+      const slots = pqEntitlement.pqSlotsPerServer(db, { product, now: Math.floor(Date.now() / 1000), excludeSteamId });
+      product.per_server_used = {};
+      for (const id of SERVER_IDS) {
+        const s = slots[id];
+        product.per_server_used[id] = s.used;
+        product.per_server_limit[id] = s.cap;
+        product.per_server_available[id] = s.cap == null ? null : s.available;
+      }
+    } else {
+      product.per_server_used = perServerStockUsed(product.id);
+      for (const id of SERVER_IDS) {
+        const cap = effectiveStockLimit(product, id);
+        product.per_server_limit[id] = cap;
+        product.per_server_available[id] = cap == null ? null : Math.max(0, cap - (product.per_server_used[id] || 0));
+      }
     }
     product.stock_used = Object.values(product.per_server_used).reduce((a, b) => a + b, 0);
     product.sold_out = false;
@@ -285,10 +264,11 @@ function reapOrphanUploads() {
 reapOrphanUploads();
 setInterval(reapOrphanUploads, SWEEPER_INTERVAL_MS);
 
-// Whenever a subscription cycle's effective_until just crossed into the past,
-// re-run the purchase sync so the GUID drops out of game.admins. No state
-// change to the order row — sync.js's effective_until check handles the
-// entitlement filter; status stays 'completed' so revenue stats still see it.
+// Whenever a subscription cycle's effective_until just crossed into the past, or
+// a subscription's renewal window just closed (pqEntitlement.RENEWAL_WINDOW_S),
+// re-run the purchase sync so the GUID drops out of game.admins. No state change
+// to the order row: the sync's rule (pqEntitlement.js) handles the entitlement;
+// status stays 'completed' so revenue stats still see it.
 // Starting this at "now" would silently skip any cycle that lapsed while the
 // process was down -- deploys land in that window. Back-date one sweep
 // interval so a restart re-examines the period it missed. The sync and the
@@ -300,9 +280,10 @@ function sweepExpiredEntitlements() {
     SELECT COUNT(*) AS c FROM orders
     WHERE status = 'completed'
       AND effective_until IS NOT NULL
-      AND effective_until <= ?
-      AND effective_until > ?
-  `).get(now, lastEffectiveSweepUnix).c;
+      AND ((effective_until <= @now AND effective_until > @last)
+        OR (paypal_subscription_id IS NOT NULL
+          AND effective_until + @window <= @now AND effective_until + @window > @last))
+  `).get({ now, last: lastEffectiveSweepUnix, window: pqEntitlement.RENEWAL_WINDOW_S }).c;
   lastEffectiveSweepUnix = now;
   if (just > 0) {
     console.log(`[orders] ${just} subscription cycle(s) just lapsed — re-syncing`);
@@ -371,7 +352,11 @@ router.get('/api/shop/products', (req, res) => {
     SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, active
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
-  res.json(products.map(p => attachStock(attachImages(p))));
+  // Stock depends on who is looking (a buyer's own checkout at PayPal holds no slot
+  // against them), so the answer is never shared between viewers.
+  const viewer = req.isAuthenticated && req.isAuthenticated() && req.user ? req.user.steam_id : null;
+  res.set('Cache-Control', 'private, no-cache');
+  res.json(products.map(p => attachStock(attachImages(p), { excludeSteamId: viewer })));
 });
 
 // Payment provider config (PayPal). The redirect flow means the browser
@@ -449,11 +434,8 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     if (live) {
       const labelId = orderServerId || (live.server_specific ? live.server_id : null);
       const label = labelId ? (SERVER_LABELS[labelId] || labelId.toUpperCase()) : 'every server';
-      // A staff move leaves the order naming the old server, with a block there, so
-      // that player is told staff moved it rather than that they have it here.
-      const blocked = pqGuards.blockedOnServer(db, { biUid: req.user.bi_uid, serverId: orderServerId });
       funnel.countStep(db, 'checkout_blocked_duplicate');
-      return res.status(409).json(pqGuards.alreadySubscribedRefusal(live, label, { blocked }));
+      return res.status(409).json(pqGuards.alreadySubscribedRefusal(live, label));
     }
     if (pqGuards.otherAccountLivePq(db, { steamId: req.user.steam_id, biUid: req.user.bi_uid, now })) {
       if (confirmSharedId !== true) {
@@ -466,37 +448,32 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
   }
 
   if (product.server_specific) {
-    const effLimit = effectiveStockLimit(product, serverId);
-    if (effLimit != null) {
-      let used, alreadyHas, limit = effLimit;
-      if (product.grants_priority_queue) {
-        // Gate against the real reserved set (effective purchases + manual
-        // grants, deduped by GUID) so manual grants can't push game.admins past
-        // the cap. The cap is also squeezed by the server's GM count so
-        // PQ + GMs <= ADMIN_CEILING.
-        const set = buildPriorityQueueGuidsPerServer()[serverId] || new Set();
-        used = set.size;
-        // A renewal (this account already holds a live purchase here) takes no new
-        // slot, so it may buy on a full server. Keyed on the account's own orders,
-        // not on the in-game ID: anyone can set their ID to a current holder's, buy
-        // "as a renewal", then change the ID back and take a new slot.
-        alreadyHas = !!db.prepare(`
-          SELECT 1 FROM orders o JOIN products p ON p.id = o.product_id
-          WHERE o.steam_id = ? AND o.status = 'completed' AND p.grants_priority_queue = 1
-            AND (COALESCE(p.server_specific, 0) = 0 OR o.server_id = ?)
-            AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-          LIMIT 1
-        `).get(req.user.steam_id, serverId);
-        const gm = gmCountPerServer()[serverId] || 0;
-        limit = Math.min(effLimit, ADMIN_CEILING - gm);
-      } else {
-        used = perServerStockUsed(product.id)[serverId] || 0;
-        alreadyHas = !!db.prepare(`
+    if (product.grants_priority_queue) {
+      // Priority queue is gated on the admin list itself (pqEntitlement.pqSlotFree):
+      // the IDs holding priority queue there plus checkouts still waiting at PayPal,
+      // against min(cap, ADMIN_CEILING - game masters). A waiting checkout holds its
+      // slot, so two buyers cannot both approve the last one. The buyer's own waiting
+      // checkouts are left out, so an abandoned one cannot lock them out.
+      //
+      // A renewal (this account already holds priority queue here) takes no new slot,
+      // so it may buy on a full server. Keyed on the account's own orders, not on the
+      // in-game ID: anyone can set their ID to a current holder's, buy "as a renewal",
+      // then change the ID back and take a new slot.
+      const now = Math.floor(Date.now() / 1000);
+      const slot = pqEntitlement.pqSlotFree(db, { serverId, now, product, excludeSteamId: req.user.steam_id });
+      if (!slot.free && !pqEntitlement.accountHoldsPq(db, { steamId: req.user.steam_id, serverId, now })) {
+        return res.status(409).json({ error: `Sold out on ${SERVER_LABELS[serverId] || serverId.toUpperCase()}.` });
+      }
+    } else {
+      const effLimit = effectiveStockLimit(product, serverId);
+      if (effLimit != null) {
+        const used = perServerStockUsed(product.id)[serverId] || 0;
+        const alreadyHas = !!db.prepare(`
           SELECT 1 FROM orders WHERE product_id = ? AND server_id = ? AND steam_id = ? AND status = 'completed' LIMIT 1
         `).get(product.id, serverId, req.user.steam_id);
-      }
-      if (used >= limit && !alreadyHas) {
-        return res.status(409).json({ error: `Sold out on ${SERVER_LABELS[serverId] || serverId.toUpperCase()}.` });
+        if (used >= effLimit && !alreadyHas) {
+          return res.status(409).json({ error: `Sold out on ${SERVER_LABELS[serverId] || serverId.toUpperCase()}.` });
+        }
       }
     }
   } else if (product.stock_limit != null) {
@@ -529,6 +506,20 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Minimum charge is $1.00.' });
     }
     amountCents = requested;
+  }
+
+  // A priority queue checkout handed to PayPal holds a slot for a while, so an account
+  // that keeps starting them without finishing is told to come back later
+  // (pqEntitlement.unfinishedPqCheckouts). Sandbox checkouts are not limited.
+  if (product.grants_priority_queue && isRecurring && !useTest) {
+    const started = pqEntitlement.unfinishedPqCheckouts(db, { steamId: req.user.steam_id, now: Math.floor(Date.now() / 1000) });
+    if (started >= pqEntitlement.PQ_CHECKOUTS_PER_DAY) {
+      console.warn(`[pq-guard] ${req.user.steam_id}: ${started} unfinished priority queue checkouts in the last day, another refused`);
+      return res.status(429).json({
+        code: 'too_many_checkouts',
+        error: 'You have started several priority queue checkouts today without finishing one. Try again tomorrow, or open a Shop Support ticket in Discord if something is going wrong at PayPal.'
+      });
+    }
   }
 
   // One live checkout per (buyer, product) — closes the concurrent-request
@@ -565,7 +556,7 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
         customId: orderId,
         brandName: 'ReforgedZ',
         returnUrl: `${BASE_URL}/api/shop/paypal/return-sub?order=${orderId}`,
-        cancelUrl: `${BASE_URL}/shop?cancelled=1`
+        cancelUrl: `${BASE_URL}/api/shop/paypal/cancel-sub?order=${orderId}`
       });
       if (!approveUrl) throw new Error('PayPal did not return a subscription approve URL');
       db.prepare('UPDATE orders SET paypal_subscription_id = ? WHERE id = ?').run(subscriptionId, orderId);
@@ -748,21 +739,6 @@ function getOrderWithContext(orderId) {
   `).get(orderId);
 }
 
-// The row plus where a moved holder's priority queue really is
-// (pqGuards.queueMoveForOrder), for the staff cards. Takes an order row (id) or a
-// billing issue row (order_id). A failed lookup leaves the row as it was, so the
-// card names the order's own server.
-function withQueue(row) {
-  if (!row) return row;
-  const id = row.id != null ? row.id : row.order_id;
-  try {
-    return { ...row, pq_queue: pqGuards.queueMoveForOrder(db, id) };
-  } catch (e) {
-    console.error(`[pq-guard] order #${id}: queue server lookup failed: ${e.message}`);
-    return row;
-  }
-}
-
 // The lines under "What happens next" on the receipt. Queue priority only
 // takes effect when a server restarts, and a role only lands if Discord is
 // linked; until now the buyer was told neither.
@@ -814,12 +790,6 @@ function fulfillOrder(orderId, cap) {
   // Only here, after the row moved: a repeat call for the same payment returned above.
   funnel.countStep(db, 'payment_completed');
 
-  // A new purchase of queue priority must not stay hidden by a block left over
-  // from an earlier move or removal. This runs once per order, on its first
-  // completion; renewal cycles never come through here, so a staff move survives
-  // them. Before the sync below, so that write already goes without the block.
-  if (order.grants_priority_queue && order.bi_uid) clearLeftoverBlocksForOrder(order);
-
   // One card per purchase: a Custom Flag order gets its own card below, with the
   // flag attached. A subscription's first payment and a one-time purchase are
   // different news for staff, so they have different titles.
@@ -870,39 +840,6 @@ function fulfillOrder(orderId, cap) {
     }).catch(() => {});
   }
   return true;
-}
-
-// The servers an order's queue priority covers, with any leftover block there
-// removed (pqGuards.clearLeftoverPqDenies says which blocks count as leftover).
-// Staff are told either way: a block they set is gone, or a block was kept and
-// this purchase stays hidden there until they look. A sandbox order leaves real
-// blocks alone. Never throws: a paid order must complete regardless.
-function clearLeftoverBlocksForOrder(order) {
-  if (order.test_mode) return;
-  const servers = order.server_specific ? (order.server_id ? [order.server_id] : []) : SERVER_IDS;
-  let result;
-  try {
-    result = pqGuards.clearLeftoverPqDenies(db, { guid: order.bi_uid, serverIds: servers, orderId: order.id });
-  } catch (e) {
-    console.error(`[pq-guard] order #${order.id}: could not clear leftover priority queue blocks: ${e.message}`);
-    return;
-  }
-  const { cleared, kept } = result;
-  if (!cleared.length && !kept.length) return;
-  const idHead = `${String(order.bi_uid).slice(0, 8)}...`;
-  if (cleared.length) {
-    console.log(`[pq-guard] order #${order.id}: cleared a leftover priority queue block for in-game ID ${idHead} on ${cleared.map(r => r.server_id).join(', ')}`);
-  }
-  if (kept.length) {
-    console.log(`[pq-guard] order #${order.id}: kept a staff priority queue block for in-game ID ${idHead} on ${kept.map(r => `${r.server_id} (${r.reason})`).join(', ')}`);
-  }
-  let specs = [];
-  try {
-    specs = cards.leftoverBlockCards(order, { cleared, kept });
-  } catch (e) {
-    console.error(`[pq-guard] order #${order.id}: block card not built: ${e.message}`);
-  }
-  for (const spec of specs) sendCard(spec);
 }
 
 // Posts a Custom Flag order to the shop-orders Discord webhook with the
@@ -992,11 +929,25 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
     const sub = await paypal.getSubscription(useTest, order.paypal_subscription_id);
     const status = (sub?.status || '').toUpperCase();
     if (status === 'ACTIVE') {
+      // The same slot check the ACTIVATED webhook makes, whichever of the two arrives
+      // first (paymentEvents.claimActivation). Checked and fulfilled with nothing
+      // awaited in between, so no other activation can take the slot in the gap.
+      const verdict = paymentEvents.claimActivation(db, { orderId });
+      if (verdict.refuse) {
+        if (verdict.claimed) {
+          paymentEvents.reportRefusedActivation(db, { verdict, payerEmail: sub.subscriber?.email_address || null }, refusalEffects())
+            .catch(e => console.error(`[pq-slot] order #${orderId}: refusal not reported: ${e.message}`));
+        }
+        return res.redirect(BASE_URL + '/shop?soldout=1');
+      }
       fulfillOrder(orderId, {
         captureId: sub.id,
         payerEmail: sub.subscriber?.email_address || null,
         feeCents: null
       });
+      // The first billing date from this same lookup, so the new priority queue holds
+      // its slot now rather than when the ACTIVATED webhook lands.
+      pinFirstBillingDate(orderId, sub.billing_info?.next_billing_time, sub.id);
       return res.redirect(BASE_URL + '/shop?success=1&order=' + orderId);
     }
     if (status === 'APPROVED') {
@@ -1008,6 +959,24 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
     console.error('PayPal subscription (return) error:', err.message);
     return res.redirect(BASE_URL + '/shop?error=1');
   }
+});
+
+// A buyer who backs out at PayPal ("Cancel and return") lands here. Their own checkout
+// is cancelled at once, so a priority queue checkout stops holding its slot for other
+// buyers (pqEntitlement's reservation) and they can start again straight away. Only the
+// signed-in buyer's own pending subscription checkout changes; anyone else just goes
+// back to the shop. Should the buyer approve that subscription at PayPal after all,
+// activation still fulfils it (fulfillOrder accepts a cancelled row).
+router.get('/api/shop/paypal/cancel-sub', (req, res) => {
+  const orderId = parseInt(req.query.order, 10);
+  if (orderId > 0 && req.isAuthenticated && req.isAuthenticated() && req.user) {
+    const changed = db.prepare(`
+      UPDATE orders SET status = 'cancelled'
+      WHERE id = ? AND steam_id = ? AND status = 'pending' AND paypal_subscription_id IS NOT NULL
+    `).run(orderId, req.user.steam_id).changes;
+    if (changed) console.log(`[orders] order #${orderId}: the buyer backed out at PayPal, checkout cancelled`);
+  }
+  res.redirect(BASE_URL + '/shop?cancelled=1');
 });
 
 // Get current user's orders
@@ -1022,98 +991,16 @@ router.get('/api/shop/orders', requireAuth, (req, res) => {
   res.json(orders);
 });
 
-// ---- Self-service priority queue move ---------------------------------------
-// "I bought queue priority on EU2, can you put me on EU1?" used to be a ticket.
-// The move itself is the one staff make (grant on the new server, deny on the
-// old, the order row untouched so sales stats stay true); this just lets the
-// holder do it, once per cooldown, only onto a server with room.
-const PQ_MOVE_COOLDOWN_DAYS = 14;
-
-// ⛔ OFF until the defects an adversarial review found on 2026-09-12 are fixed.
-// The move derives its GUID from users.bi_uid, which any signed-in player can
-// set to ANY value (the BattleMetrics check proves the id belongs to a real
-// player, not that it belongs to THIS player, and there is no uniqueness on the
-// column). It then writes deny rows for every server that GUID is present on,
-// so a throwaway account plus one subscription could strip another player's
-// queue priority everywhere, with the 14-day cooldown blocking the undo. Four
-// further defects ride on the same handler: it denies every server rather than
-// the order's, offers dev1 as a destination, mints a permanent grant inside the
-// window where effective_until is still NULL, and charges the cooldown per
-// steam_id so a second subscription is collateral. Nobody had used it (0 rows in
-// priority_queue_moves) so switching it off costs nothing. Staff can still move
-// anyone via /api/shop/admin/priority-queue/switch, which takes an explicit
-// source server and is admin-gated.
-const PQ_SELF_MOVE_ENABLED = false;
-
-function pqMoveState(steamId) {
-  const now = Math.floor(Date.now() / 1000);
-  const last = db.prepare('SELECT moved_at FROM priority_queue_moves WHERE steam_id = ? ORDER BY moved_at DESC LIMIT 1').get(steamId);
-  const nextMoveAt = last ? last.moved_at + PQ_MOVE_COOLDOWN_DAYS * 86400 : null;
-  return { lastMovedAt: last ? last.moved_at : null, nextMoveAt, canMove: !nextMoveAt || nextMoveAt <= now };
-}
-
-// Where a player's queue priority is and where it could go, for the account page.
-function pqSelfServiceInfo(user, order) {
-  const product = attachStock(db.prepare('SELECT * FROM products WHERE id = ?').get(order.product_id));
-  const presence = user.bi_uid ? pqEntryFor(user.bi_uid).presence : Object.fromEntries(SERVER_IDS.map(id => [id, false]));
-  const state = pqMoveState(user.steam_id);
-  return {
-    current: SERVER_IDS.filter(id => presence[id]),
-    options: SERVER_IDS.map(id => ({
-      id, label: SERVER_LABELS[id] || id, current: !!presence[id],
-      available: product && product.per_server_available ? product.per_server_available[id] : null
-    })),
-    canMove: state.canMove && !!user.bi_uid,
-    nextMoveAt: state.nextMoveAt,
-    cooldownDays: PQ_MOVE_COOLDOWN_DAYS,
-    nextRestart: describeNextRestart().text
-  };
-}
-
+// ---- Self-service priority queue move: retired --------------------------------
+// A move is a change to the subscription, made by staff
+// (POST /api/shop/admin/priority-queue/switch). The self-service move wrote grants
+// and blocks and had been switched off since 2026-09-12; its URL answers 410 for
+// one release so an old account page gets a clear answer.
 router.post('/api/shop/priority-queue/move', requireAuth, (req, res) => {
-  if (!PQ_SELF_MOVE_ENABLED) {
-    return res.status(503).json({ error: 'Moving your queue priority yourself is temporarily unavailable. Open a Shop Support ticket in Discord and staff will move it for you.' });
-  }
-  const orderId = parseInt(req.body && req.body.orderId, 10);
-  const to = req.body && req.body.to;
-  const now = Math.floor(Date.now() / 1000);
-  const order = db.prepare(`
-    SELECT o.*, p.grants_priority_queue, p.server_specific, p.title
-    FROM orders o JOIN products p ON p.id = o.product_id
-    WHERE o.id = ? AND o.steam_id = ?
-  `).get(orderId, req.user.steam_id);
-  if (!order) return res.status(404).json({ error: 'Purchase not found.' });
-  if (!order.grants_priority_queue || !order.server_specific) return res.status(400).json({ error: 'This purchase is not tied to a server.' });
-  if (order.status !== 'completed' || !(order.effective_until == null || order.effective_until > now)) {
-    return res.status(400).json({ error: 'This subscription is not active, so there is nothing to move.' });
-  }
-  if (!SERVER_IDS.includes(to)) return res.status(400).json({ error: 'Unknown server.' });
-  const guid = req.user.bi_uid;
-  if (!guid) return res.status(400).json({ error: 'Set your in-game id on this page first.' });
-  const state = pqMoveState(req.user.steam_id);
-  if (!state.canMove) {
-    return res.status(429).json({ error: `You moved recently. You can move again on ${new Date(state.nextMoveAt * 1000).toISOString().slice(0, 10)}.`, nextMoveAt: state.nextMoveAt });
-  }
-  const from = SERVER_IDS.filter(id => pqEntryFor(guid).presence[id]);
-  if (from.includes(to)) return res.status(400).json({ error: `Your queue priority is already on ${SERVER_LABELS[to] || to}.` });
-  const info = pqSelfServiceInfo(req.user, order);
-  const target = info.options.find(o => o.id === to);
-  if (target && target.available != null && target.available <= 0) {
-    return res.status(400).json({ error: `${SERVER_LABELS[to] || to} is full right now. Try another server or check back later.` });
-  }
-
-  const name = req.user.gamertag || playerNameOf(req.user);
-  const by = `self:${req.user.steam_id}`;
-  db.transaction(() => {
-    applyPqGrant(guid, to, name, by);
-    for (const f of from) applyPqDeny(guid, f, name, by);
-    db.prepare('INSERT INTO priority_queue_moves (steam_id, guid, from_server, to_server, moved_at) VALUES (?, ?, ?, ?, unixepoch())')
-      .run(req.user.steam_id, guid, from.join(',') || null, to);
-  })();
-  console.log(`[pq-move] ${req.user.steam_id} moved ${String(guid).slice(0, 8)}... ${from.join(',') || '(none)'} -> ${to}`);
-  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  sendCard(() => cards.playerQueueMoveCard({ name, accountId: req.user.steam_id, guid, from, to, order }));
-  res.json({ ok: true, from, to, nextRestart: describeNextRestart().text, nextMoveAt: now + PQ_MOVE_COOLDOWN_DAYS * 86400 });
+  res.status(410).json({
+    code: 'retired',
+    error: 'Moving your priority queue yourself is no longer offered. Open a Shop Support ticket in Discord and staff will move your subscription to the server you want.'
+  });
 });
 
 // Set own in-game id (the Bohemia identity id the game servers key queue priority
@@ -1196,6 +1083,22 @@ async function setOwnBiUid(req, res) {
       if (seen.found === true) verified = true;
       else console.warn('[bi-uid] BattleMetrics check unavailable (%s); saving %s unverified for %s', seen.error, cleaned, req.user.steam_id);
     }
+  }
+
+  // The new ID takes over this account's priority queue. Where the old ID stays listed
+  // for another account, that adds an admin list entry, and a full server has no room
+  // for one (pqEntitlement.idChangeFullServers).
+  const current = db.prepare('SELECT bi_uid FROM users WHERE steam_id = ?').get(req.user.steam_id);
+  const fullOn = pqEntitlement.idChangeFullServers(db, {
+    steamId: req.user.steam_id, fromBiUid: current ? current.bi_uid : null, toBiUid: cleaned, now: Math.floor(Date.now() / 1000)
+  });
+  if (fullOn.length) {
+    const names = fullOn.map(id => SERVER_LABELS[id] || id.toUpperCase()).join(', ');
+    console.warn(`[bi-uid] ${req.user.steam_id}: ID change refused, it would add a priority queue entry on full ${fullOn.join(', ')}`);
+    return res.status(409).json({
+      code: 'server_full',
+      error: `Your priority queue cannot move to that ID right now: your current ID also has priority queue through another account, so the new ID would need a second place on ${names}, and there is no free slot. Open a Shop Support ticket in Discord and staff will sort it out.`
+    });
   }
 
   // With the ID go the player name BattleMetrics showed (or none) and how it was
@@ -1351,13 +1254,10 @@ router.post('/api/shop/cancel-subscription', requireAuth, async (req, res) => {
 // COALESCE keeps the earliest-known cancellation time rather than
 // clobbering it on repeat calls (customer double-clicking, webhook arriving
 // after a self-heal already ran, etc).
+// The reason a subscription ended is kept too, so 'unpaid' or 'no_slot' written by the
+// shop survives the CANCELLED webhook its own cancel causes (paymentEvents.markSubscriptionEnded).
 function markSubscriptionCancelledLocally(subscriptionId, reason = 'cancelled') {
-  db.prepare(`
-    UPDATE orders SET
-      subscription_cancelled_at = COALESCE(subscription_cancelled_at, unixepoch()),
-      subscription_ended_reason = COALESCE(subscription_ended_reason, ?)
-    WHERE paypal_subscription_id = ?
-  `).run(reason, subscriptionId);
+  paymentEvents.markSubscriptionEnded(db, subscriptionId, reason);
 }
 
 // The reverse, for BILLING.SUBSCRIPTION.RE-ACTIVATED. Nothing ever cleared
@@ -1801,8 +1701,7 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
       afterRevoke: (id) => {
         syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
         tryRemoveDiscordRoleForOrder(id);
-      },
-      withQueue
+      }
     });
   } catch (e) {
     console.error(`[revoke] order #${order.id}: revoke failed: ${e.message}`);
@@ -1910,118 +1809,58 @@ router.get('/api/shop/admin/refund-preview', requireAdmin, async (req, res) => {
 //  Priority Queue management (used by reforgedz admin page)
 // ============================================================
 
-function buildPriorityQueueList() {
-  // Only current holders (expired purchases/manual grants are excluded, matching sync).
-  const orderRows = db.prepare(`
-    SELECT
-      u.bi_uid AS guid,
-      COALESCE(u.gamertag, u.persona) AS display_name,
-      p.server_specific,
-      o.server_id,
-      o.effective_until,
-      o.created_at
-    FROM orders o
-    JOIN users u ON o.steam_id = u.steam_id
-    JOIN products p ON o.product_id = p.id
-    WHERE o.status = 'completed'
-      AND p.grants_priority_queue = 1
-      AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
-      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-  `).all();
-
-  const manualRows = db.prepare(`SELECT guid, server_id, display_name, expires_at, removed, granted_at FROM priority_queue_grants WHERE removed = 1 OR expires_at IS NULL OR expires_at > unixepoch()`).all();
-
+// Every current priority queue holder, one entry per in-game ID, for the admin page.
+// Orders only, by the one rule (pqEntitlement.livePqRows): exactly the IDs the sync
+// writes into game.admins. The entry shape is older than the rule and is kept, so
+// sources is always 'purchase', grantedAt is always null and every expiry is a date.
+// orders lists each live order (a subscription's latest live cycle), so staff can
+// say which one to move when an in-game ID has more than one. It carries only what
+// the move needs: no account id and no PayPal subscription id, which every admin page
+// user with the GM tool would otherwise receive.
+function buildPriorityQueueList(now = Math.floor(Date.now() / 1000)) {
   const byGuid = new Map();
-  const blank = () => Object.fromEntries(SERVER_IDS.map(id => [id, false]));
-  const blankSrc = () => Object.fromEntries(SERVER_IDS.map(id => [id, null]));
-  const blankExp = () => Object.fromEntries(SERVER_IDS.map(id => [id, -Infinity]));
+  const blank = (v) => Object.fromEntries(SERVER_IDS.map(id => [id, v]));
 
-  function ensureEntry(guid, displayName) {
-    let e = byGuid.get(guid);
+  for (const r of pqEntitlement.livePqRows(db, now)) {
+    let e = byGuid.get(r.guid);
     if (!e) {
-      e = { guid, displayName: displayName || '', presence: blank(), sources: blankSrc(), _exp: blankExp(), _purchasedAt: null, _grantedAt: null, _entitle: -Infinity };
-      byGuid.set(guid, e);
-    } else if (!e.displayName && displayName) {
-      e.displayName = displayName;
+      e = { guid: r.guid, displayName: r.name || '', presence: blank(false), sources: blank(null), exp: blank(-Infinity), latest: -Infinity, purchasedAt: null, units: new Map() };
+      byGuid.set(r.guid, e);
+    } else if (!e.displayName && r.name) {
+      e.displayName = r.name;
     }
-    return e;
-  }
-
-  // expiry: null = permanent (always wins). Otherwise keep the LATEST date the
-  // holder keeps access on that server (so they only drop when the last source lapses).
-  // The holder's entitlement regardless of which server it is attached to. Needed
-  // because expiry below is only measured across servers they currently hold — a
-  // holder with every server toggled off would otherwise report no date at all and
-  // render as "Permanent" when they in fact have a dated (or no) entitlement.
-  function noteEntitlement(entry, expiry) {
-    const d = (expiry == null) ? Infinity : Number(expiry);
-    if (d > entry._entitle) entry._entitle = d;
-  }
-
-  function mark(entry, serverId, source, expiry) {
-    if (!SERVER_IDS.includes(serverId)) return;
-    entry.presence[serverId] = true;
-    const cur = entry.sources[serverId];
-    entry.sources[serverId] = cur && cur !== source ? 'both' : source;
-    const d = (expiry == null) ? Infinity : Number(expiry);
-    if (d > entry._exp[serverId]) entry._exp[serverId] = d;
-  }
-
-  for (const r of orderRows) {
-    const e = ensureEntry(r.guid, r.display_name);
-    // Track when they last bought, even for orders that grant no server presence.
-    if (r.created_at != null && (e._purchasedAt == null || r.created_at > e._purchasedAt)) e._purchasedAt = r.created_at;
-    noteEntitlement(e, r.effective_until);
-    if (!r.server_specific) {
-      for (const id of SERVER_IDS) mark(e, id, 'purchase', r.effective_until);
-    } else if (r.server_id) {
-      mark(e, r.server_id, 'purchase', r.effective_until);
+    if (r.created_at != null && (e.purchasedAt == null || r.created_at > e.purchasedAt)) e.purchasedAt = r.created_at;
+    const until = Number(r.effective_until);
+    if (until > e.latest) e.latest = until;
+    for (const id of pqEntitlement.coveredServers(r, SERVER_IDS)) {
+      e.presence[id] = true;
+      e.sources[id] = 'purchase';
+      if (until > e.exp[id]) e.exp[id] = until;
     }
-  }
-
-  for (const r of manualRows) {
-    if (!r.server_id || !SERVER_IDS.includes(r.server_id)) continue;
-    // Deny rows create an entry too. Otherwise turning off a holder's last server
-    // makes them vanish from the list mid-edit, before a new server can be picked.
-    const e = ensureEntry(r.guid, r.display_name);
-    if (r.granted_at != null && (e._grantedAt == null || r.granted_at > e._grantedAt)) e._grantedAt = r.granted_at;
-    if (r.removed) {
-      // Deny: hide this server even if purchased.
-      e.presence[r.server_id] = false;
-      e.sources[r.server_id] = null;
-      e._exp[r.server_id] = -Infinity;
-    } else {
-      noteEntitlement(e, r.expires_at);
-      mark(e, r.server_id, 'manual', r.expires_at);
-    }
-  }
-
-  // Deny rows carry no display name, so a holder left with only denies would read
-  // as "Unknown". Fall back to the account name.
-  const unnamed = Array.from(byGuid.values()).filter(e => !e.displayName).map(e => e.guid);
-  if (unnamed.length) {
-    const holes = unnamed.map(() => '?').join(',');
-    for (const u of db.prepare(`SELECT bi_uid, COALESCE(gamertag, persona) AS name FROM users WHERE bi_uid IN (${holes})`).all(...unnamed)) {
-      const e = byGuid.get(u.bi_uid);
-      if (e && !e.displayName && u.name) e.displayName = u.name;
+    const key = r.paypal_subscription_id ? `sub:${r.paypal_subscription_id}` : `order:${r.order_id}`;
+    const prev = e.units.get(key);
+    if (!prev || until > prev.effectiveUntil || (until === prev.effectiveUntil && r.order_id > prev.id)) {
+      e.units.set(key, {
+        id: r.order_id,
+        serverId: r.server_specific ? r.server_id : null,
+        isSubscription: !!r.paypal_subscription_id,
+        effectiveUntil: until
+      });
     }
   }
 
   const out = Array.from(byGuid.values()).map(e => {
-    const expiry = {};        // per-server: unix ts, or null = permanent / not present
-    let expiresAt = null;     // soonest dated expiry across servers held (null = all permanent)
+    const expiry = {};        // per-server: unix ts, or null = not held there
+    let expiresAt = null;     // soonest expiry across servers held
     let assigned = false;     // holds at least one server
     for (const id of SERVER_IDS) {
       if (!e.presence[id]) { expiry[id] = null; continue; }
       assigned = true;
-      const v = e._exp[id];
-      if (!isFinite(v)) { expiry[id] = null; }
-      else { expiry[id] = v; expiresAt = (expiresAt == null || v < expiresAt) ? v : expiresAt; }
+      expiry[id] = e.exp[id];
+      if (expiresAt == null || e.exp[id] < expiresAt) expiresAt = e.exp[id];
     }
-    // With no server held there is nothing to measure, so report the underlying
-    // entitlement instead — otherwise a dated holder reads as "Permanent".
-    if (!assigned && isFinite(e._entitle)) expiresAt = e._entitle;
-    const hasEntitlement = e._entitle > -Infinity;
+    // An order on a server the shop no longer syncs holds nothing, but still says when it ends.
+    if (!assigned && isFinite(e.latest)) expiresAt = e.latest;
     return {
       guid: e.guid,
       displayName: e.displayName,
@@ -2030,9 +1869,10 @@ function buildPriorityQueueList() {
       expiry,
       expiresAt,
       assigned,
-      hasEntitlement,
-      purchasedAt: e._purchasedAt,
-      grantedAt: e._grantedAt,
+      hasEntitlement: true,
+      purchasedAt: e.purchasedAt,
+      grantedAt: null,
+      orders: Array.from(e.units.values()).sort((a, b) => a.id - b.id)
     };
   });
 
@@ -2041,50 +1881,17 @@ function buildPriorityQueueList() {
   );
 }
 
-function priorityQueueServers() {
-  return SERVER_IDS.map(id => ({ id, label: SERVER_LABELS[id] || id.toUpperCase() }));
-}
-
-// The expiry a newly granted server should inherit. Moving a holder from one
-// server to another used to write a fresh grant with no expiry, silently turning
-// a dated entitlement into a permanent one and losing the removal date.
-// Returns null for permanent — either because an active source has no expiry, or
-// because there is no other source at all (a brand-new manual grant).
-function deriveHolderExpiry(guid) {
-  const rows = db.prepare(`
-    SELECT expires_at AS exp FROM priority_queue_grants
-    WHERE guid = ? AND removed = 0 AND (expires_at IS NULL OR expires_at > unixepoch())
-    UNION ALL
-    SELECT o.effective_until AS exp
-    FROM orders o
-    JOIN users u ON o.steam_id = u.steam_id
-    JOIN products p ON o.product_id = p.id
-    WHERE u.bi_uid = ? AND o.status = 'completed' AND p.grants_priority_queue = 1
-      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-  `).all(guid, guid);
-
-  if (!rows.length) return null;
-  if (rows.some(r => r.exp == null)) return null;   // a permanent source wins
-  return Math.max(...rows.map(r => Number(r.exp)));
-}
-
-// A server move is implemented as a deny row on the purchased server plus a
-// dated grant on the new one. Renewals extend the ORDER's effective_until, so
-// without this the move's grant died on its original date every cycle and the
-// holder silently lost queue access mid-subscription — while still paying.
-// Roll the buyer's dated grants forward with the entitlement. Extend-only:
-// permanents (NULL) and deny rows are never touched, and a date already
-// further out is kept.
-function rollGrantsForward(guid, untilUnix) {
-  if (!guid || !Number.isFinite(untilUnix) || untilUnix <= 0) return 0;
-  const r = db.prepare(`
-    UPDATE priority_queue_grants SET expires_at = ?
-    WHERE guid = ? AND removed = 0 AND expires_at IS NOT NULL AND expires_at < ?
-  `).run(untilUnix, guid, untilUnix);
-  if (r.changes) {
-    console.log(`[orders] rolled ${r.changes} manual grant(s) for ${guid} forward to ${new Date(untilUnix * 1000).toISOString().slice(0, 10)}`);
-  }
-  return r.changes;
+// sellable says whether a server can take a staff move (moveSubscriptionServer moves
+// priority queue only to a server the shop sells), so the admin page offers only those.
+// reserved is the priority queue checkouts waiting at PayPal for the server
+// (pqEntitlement.pqSlotsPerServer): each may become an admin list entry within minutes,
+// so the GM tab counts them before adding a game master.
+function priorityQueueServers(now = Math.floor(Date.now() / 1000)) {
+  const slots = pqEntitlement.pqSlotsPerServer(db, { now });
+  return SERVER_IDS.map(id => ({
+    id, label: SERVER_LABELS[id] || id.toUpperCase(), sellable: SELLABLE_SERVER_IDS.includes(id),
+    reserved: slots[id] ? slots[id].reserved : 0
+  }));
 }
 
 // ============================================================
@@ -2384,219 +2191,77 @@ router.get('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
   });
 });
 
-// Manual add: create or rename a manual grant for a guid (without setting any server yet)
-router.post('/api/shop/admin/priority-queue', requireAdmin, (req, res) => {
-  const { guid: rawGuid, displayName, serverId, expiresAt } = req.body || {};
-  const guid = cleanGuid(rawGuid);
-  if (!guid) return res.status(400).json({ error: 'Invalid GUID format' });
-  const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
-
-  if (serverId !== undefined && serverId !== null && !SERVER_IDS.includes(serverId)) {
-    return res.status(400).json({ error: 'Invalid server ID' });
-  }
-
-  if (serverId) {
-    db.prepare(`
-      INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
-      VALUES (?, ?, ?, 0, ?, unixepoch())
-      ON CONFLICT(guid, server_id) DO UPDATE SET
-        removed = 0,
-        display_name = COALESCE(excluded.display_name, display_name)
-    `).run(guid, serverId, name, req.user && req.user.steam_id ? req.user.steam_id : 'api');
-  } else if (name) {
-    // No serverId given but a name was — propagate the name to any existing rows for this guid
-    db.prepare(`UPDATE priority_queue_grants SET display_name = ? WHERE guid = ? AND (display_name IS NULL OR display_name = '')`).run(name, guid);
-  }
-
-  // Optional expiry. Provide a unix timestamp to set one, or null to make it permanent.
-  // Omit the field entirely to leave any existing expiry untouched.
-  if (expiresAt !== undefined) {
-    const n = (expiresAt === null || expiresAt === '') ? null : Math.round(Number(expiresAt));
-    const expVal = Number.isFinite(n) ? n : null;
-    if (serverId) db.prepare('UPDATE priority_queue_grants SET expires_at = ? WHERE guid = ? AND server_id = ?').run(expVal, guid, serverId);
-    else db.prepare('UPDATE priority_queue_grants SET expires_at = ? WHERE guid = ?').run(expVal, guid);
-  }
-
-  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-
-  const entries = buildPriorityQueueList();
-  const entry = entries.find(e => e.guid === guid) || { guid, displayName: name || '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])), expiry: Object.fromEntries(SERVER_IDS.map(id => [id, null])), expiresAt: null };
-  res.json({ ok: true, entry });
-});
-
-// Grant a holder queue access on a server (clear any deny on it). Seed the
-// expiry for a brand-new row, one that was previously a deny, or one whose date
-// has LAPSED — an expired grant row is dead weight, and keeping its past date
-// made the toggle a silent no-op: the row stayed filtered out of the list, the
-// holder gained no presence, and the admin could not assign a server to someone
-// whose renewal had just paid for one. Only a LIVE grant keeps whatever it has
-// (including a deliberate permanent NULL).
-function applyPqGrant(guid, serverId, name, by) {
-  const existing = db.prepare('SELECT removed, expires_at FROM priority_queue_grants WHERE guid = ? AND server_id = ?').get(guid, serverId);
-  const lapsed = existing && !existing.removed
-    && existing.expires_at != null && existing.expires_at <= Math.floor(Date.now() / 1000);
-  if (!existing) {
-    db.prepare(`
-      INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at, expires_at)
-      VALUES (?, ?, ?, 0, ?, unixepoch(), ?)
-    `).run(guid, serverId, name, by, deriveHolderExpiry(guid));
-  } else if (existing.removed || lapsed) {
-    db.prepare(`
-      UPDATE priority_queue_grants
-      SET removed = 0, display_name = COALESCE(?, display_name), expires_at = ?
-      WHERE guid = ? AND server_id = ?
-    `).run(name, deriveHolderExpiry(guid), guid, serverId);
-  } else {
-    db.prepare(`
-      UPDATE priority_queue_grants SET display_name = COALESCE(?, display_name)
-      WHERE guid = ? AND server_id = ?
-    `).run(name, guid, serverId);
-  }
+// Staff grants, per-server toggles, extensions and grant deletion are retired: the
+// owner's rule is that priority queue comes only from a paid order. A player is
+// moved by changing their order's server (the switch route below) and loses
+// priority queue by a revoke. The old URLs answer 410 for one release, so the admin
+// page gets a clear answer until it drops them.
+function retiredGrantRoute(req, res) {
+  res.status(410).json({
+    code: 'retired',
+    error: 'Staff priority queue grants are retired: priority queue now comes only from a paid order. To put a paying player on another server, move their order. To take priority queue away, revoke the order.'
+  });
 }
 
-// Hide a server for a holder. A deny row (removed=1) keeps a PURCHASE-driven
-// server off too, and turns a plain manual grant off — sync ignores denied
-// rows. The name is kept so a holder whose servers are all off still reads
-// properly in the list.
-function applyPqDeny(guid, serverId, name, by) {
-  db.prepare(`
-    INSERT INTO priority_queue_grants (guid, server_id, display_name, removed, granted_by, granted_at)
-    VALUES (?, ?, ?, 1, ?, unixepoch())
-    ON CONFLICT(guid, server_id) DO UPDATE SET
-      removed = 1,
-      display_name = COALESCE(display_name, excluded.display_name)
-  `).run(guid, serverId, name, by);
-}
+router.post('/api/shop/admin/priority-queue', requireAdmin, retiredGrantRoute);
+router.post('/api/shop/admin/priority-queue/toggle', requireAdmin, retiredGrantRoute);
+router.post('/api/shop/admin/priority-queue/extend', requireAdmin, retiredGrantRoute);
+router.delete('/api/shop/admin/priority-queue/:guid', requireAdmin, retiredGrantRoute);
 
-// Refreshed list entry for a guid (or a stub when no presence remains).
+// Refreshed list entry for a guid (or a stub when it holds priority queue nowhere).
 function pqEntryFor(guid) {
-  const entries = buildPriorityQueueList();
-  return entries.find(e => e.guid === guid) || { guid, displayName: '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])) };
+  const g = String(guid || '').toLowerCase();
+  const entry = buildPriorityQueueList().find(e => String(e.guid).toLowerCase() === g);
+  return entry || { guid, displayName: '', presence: Object.fromEntries(SERVER_IDS.map(id => [id, false])), sources: Object.fromEntries(SERVER_IDS.map(id => [id, null])) };
 }
 
-// Toggle priority queue on/off for a given (guid, serverId).
-// Only affects manual grants. Purchase-derived presence is untouched.
-router.post('/api/shop/admin/priority-queue/toggle', requireAdmin, (req, res) => {
-  const { guid: rawGuid, serverId, present, displayName } = req.body || {};
-  const guid = cleanGuid(rawGuid);
-  if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
-  if (!SERVER_IDS.includes(serverId)) return res.status(400).json({ error: 'Invalid server ID' });
-
-  const by = req.user && req.user.steam_id ? req.user.steam_id : 'api';
-  const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
-
-  if (present) applyPqGrant(guid, serverId, name, by);
-  else applyPqDeny(guid, serverId, name, by);
-
-  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-
-  res.json({ ok: true, entry: pqEntryFor(guid) });
-});
-
-// Move a holder's queue access from one server to another in ONE atomic step —
-// the supported way to honour "I bought priority queue on X, please switch me
-// to Y" for subscriptions. Deliberately grant-layer only: the order row keeps
-// its original server_id (purchase history + per-server sales stats stay
-// truthful), while a deny row hides the purchased server and a dated manual
-// grant provides the new one. Renewals then roll the grant forward with the
-// subscription (rollGrantsForward), so the move survives every billing cycle.
+// Move a paying holder's priority queue to another server. A move is a change to
+// the subscription (pqEntitlement.moveSubscriptionServer): the order's server
+// changes on every row of its subscription, so the paid period carries over and
+// renewals pay for the new server; nothing else is written.
 //
-// Ordering matters: the grant is written BEFORE the deny, because a fresh
-// grant's expiry is seeded from the holder's still-active sources
-// (deriveHolderExpiry). Denying first would drop the old grant out of that
-// derivation and could turn a dated entitlement into an accidental permanent.
-// Both writes commit in one transaction so a crash can't leave the holder
-// stripped of the old server without the new one.
+// Body { guid, from, to } plus optional orderId and reason; from may be left out
+// when orderId says which order. Refused with 409 when the destination has no free
+// slot (destination_full), the order has lapsed or was refunded (not_live), the ID
+// has more than one order to choose from and no orderId (ambiguous), or the ID
+// already holds priority queue there (already_on_destination); 400 for the server
+// it is already on. Recorded in admin_audit, then synced, with one card.
 router.post('/api/shop/admin/priority-queue/switch', requireAdmin, (req, res) => {
-  const { guid: rawGuid, from, to, displayName } = req.body || {};
+  const { guid: rawGuid, from, to, orderId: rawOrderId, reason } = req.body || {};
   const guid = cleanGuid(rawGuid);
   if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
-  if (!SERVER_IDS.includes(to)) return res.status(400).json({ error: 'Invalid destination server' });
-  // from is optional: a holder with no live presence (all lapsed/denied) can
-  // still be moved onto a server — there is simply nothing to deny.
-  if (from !== undefined && from !== null && from !== '' && !SERVER_IDS.includes(from)) {
-    return res.status(400).json({ error: 'Invalid source server' });
+  let orderId = null;
+  if (rawOrderId !== undefined && rawOrderId !== null && rawOrderId !== '') {
+    orderId = Number(rawOrderId);
+    if (!Number.isInteger(orderId) || orderId <= 0) return res.status(400).json({ code: 'bad_request', error: 'Invalid orderId' });
   }
-  const fromId = SERVER_IDS.includes(from) ? from : null;
-  if (fromId === to) return res.status(400).json({ error: 'Source and destination must differ.' });
+  const why = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 500) : null;
+  const actor = adminActor(req);
 
-  const by = req.user && req.user.steam_id ? req.user.steam_id : 'api';
-  const name = (typeof displayName === 'string' ? displayName.trim() : '') || null;
+  let result;
+  try {
+    result = pqEntitlement.moveSubscriptionServer(db, {
+      guid, from: from || null, to, orderId, actor, reason: why, ip: req.ip, now: Math.floor(Date.now() / 1000)
+    });
+  } catch (e) {
+    console.error(`[pq-move] move failed: ${e.message}`);
+    return res.status(500).json({ error: 'Move failed: ' + e.message });
+  }
+  if (!result.ok) {
+    const { ok, status, ...body } = result;
+    return res.status(status).json(body);
+  }
 
-  db.transaction(() => {
-    applyPqGrant(guid, to, name, by);
-    if (fromId) applyPqDeny(guid, fromId, name, by);
-  })();
-  console.log(`[pq-switch] ${by} moved ${String(guid).slice(0, 8)}... ${fromId || '(none)'} -> ${to}`);
-
+  console.log(`[pq-move] ${actor} moved order #${result.orderId} (${result.updated} row(s)) from ${result.from} to ${result.to}`);
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-
-  res.json({ ok: true, from: fromId, to, entry: pqEntryFor(guid) });
-});
-
-// Remove all manual grants for a guid (purchase-driven presence is unaffected)
-router.delete('/api/shop/admin/priority-queue/:guid', requireAdmin, (req, res) => {
-  const guid = cleanGuid(req.params.guid);
-  if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
-  const result = db.prepare('DELETE FROM priority_queue_grants WHERE guid = ?').run(guid);
-  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  res.json({ ok: true, removed: result.changes });
-});
-
-// Extend a holder's priority-queue expiry by N days. Bumps expiring purchase
-// subscriptions (orders.effective_until) and any DATED manual grants for this guid.
-// Permanent grants (NULL expiry) are intentionally left permanent.
-router.post('/api/shop/admin/priority-queue/extend', requireAdmin, (req, res) => {
-  const guid = cleanGuid(req.body && req.body.guid);
-  if (!guid) return res.status(400).json({ error: 'Invalid GUID' });
-
-  const hasUntil = req.body && req.body.until !== undefined && req.body.until !== null && req.body.until !== '';
-  const pqIds = db.prepare('SELECT id FROM products WHERE grants_priority_queue = 1').all().map(r => r.id);
-  const inList = pqIds.length ? pqIds.join(',') : '0';
-  let purchaseChanges = 0;
-  let manualChanges = 0;
-  let until = null;
-
-  if (hasUntil) {
-    // Set the holder's PQ expiry to an absolute date (from the calendar picker).
-    until = Math.round(Number(req.body.until));
-    if (!Number.isFinite(until) || until <= 0) return res.status(400).json({ error: 'invalid until timestamp' });
-    if (pqIds.length) {
-      purchaseChanges = db.prepare(`
-        UPDATE orders SET effective_until = ?
-        WHERE status = 'completed' AND product_id IN (${inList})
-          AND steam_id IN (SELECT steam_id FROM users WHERE bi_uid = ?)
-          AND (effective_until IS NULL OR effective_until > unixepoch())
-      `).run(until, guid).changes;
-    }
-    manualChanges = db.prepare(`
-      UPDATE priority_queue_grants SET expires_at = ?
-      WHERE guid = ? AND removed = 0
-    `).run(until, guid).changes;
-  } else {
-    // Relative bump by N days.
-    const days = Number(req.body && req.body.days);
-    if (!Number.isFinite(days) || days === 0) return res.status(400).json({ error: 'days must be a non-zero number, or pass until' });
-    const secs = Math.round(days * 86400);
-    if (pqIds.length) {
-      purchaseChanges = db.prepare(`
-        UPDATE orders SET effective_until = effective_until + ?
-        WHERE status = 'completed' AND effective_until IS NOT NULL
-          AND product_id IN (${inList})
-          AND steam_id IN (SELECT steam_id FROM users WHERE bi_uid = ?)
-      `).run(secs, guid).changes;
-    }
-    manualChanges = db.prepare(`
-      UPDATE priority_queue_grants SET expires_at = expires_at + ?
-      WHERE guid = ? AND expires_at IS NOT NULL
-    `).run(secs, guid).changes;
-  }
-
-  if (purchaseChanges || manualChanges) {
-    syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  }
-  const entry = buildPriorityQueueList().find(e => e.guid === guid) || null;
-  res.json({ ok: true, until, purchaseChanges, manualChanges, entry });
+  sendCard(() => cards.staffQueueMoveCard({
+    order: getOrderWithContext(result.orderId), from: result.from, to: result.to, orderIds: result.orderIds, reason: why
+  }));
+  res.json({
+    ok: true, from: result.from, to: result.to,
+    orderId: result.orderId, isSubscription: !!result.subscriptionId, orderIds: result.orderIds,
+    entry: pqEntryFor(guid)
+  });
 });
 
 // ============================================================
@@ -3064,7 +2729,7 @@ router.post('/api/shop/set-discord-id', requireAuth, async (req, res) => {
         catch (e) { console.error('[discord] remove on unlink failed:', e.message); }
       }
     }
-    db.prepare('UPDATE users SET discord_id = NULL WHERE steam_id = ?').run(req.user.steam_id);
+    db.prepare('UPDATE users SET discord_id = NULL, discord_linked_via = NULL WHERE steam_id = ?').run(req.user.steam_id);
     req.user.discord_id = null;
     return res.json({ ok: true, discord_id: null });
   }
@@ -3096,7 +2761,10 @@ async function linkDiscordAccount(user, discordId, { source = 'paste', displayNa
   catch (e) { return { ok: false, status: 502, code: 'lookup', error: 'Discord lookup failed: ' + e.message }; }
   if (!member) return { ok: false, status: 404, code: 'notmember', error: "You're not a member of the ReforgedZ Discord. Join first, then come back." };
 
-  db.prepare('UPDATE users SET discord_id = ? WHERE steam_id = ?').run(discordId, user.steam_id);
+  // How it was linked is kept: only a Discord sign-in proves the account is the
+  // player's, so only that link counts as proof of a staff role (sync.js).
+  db.prepare('UPDATE users SET discord_id = ?, discord_linked_via = ? WHERE steam_id = ?')
+    .run(discordId, source === 'oauth' ? 'oauth' : 'paste', user.steam_id);
   user.discord_id = discordId;
 
   // Back-fill any role grants this user is owed.
@@ -3105,15 +2773,14 @@ async function linkDiscordAccount(user, discordId, { source = 'paste', displayNa
   // role the account had EVER bought, including subscriptions that lapsed
   // months ago -- and the reconciler only sweeps when a cycle just lapsed, so
   // the role would stick around indefinitely. Same entitlement rule as
-  // entitledRolePairKeys(): effective_until IS NULL means a one-time purchase,
-  // which never expires.
+  // entitledRolePairKeys() (pqEntitlement.perksLiveSql).
   const owed = db.prepare(`
     SELECT DISTINCT p.discord_role_id AS role_id
     FROM orders o JOIN products p ON o.product_id = p.id
-    WHERE o.steam_id = ? AND o.status = 'completed'
+    WHERE o.steam_id = @steamId
       AND p.discord_role_id IS NOT NULL
-      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-  `).all(user.steam_id);
+      AND ${pqEntitlement.perksLiveSql('o', 'p')}
+  `).all({ steamId: user.steam_id, now: Math.floor(Date.now() / 1000) });
   let assigned = 0;
   for (const r of owed) {
     try { await discord.assignRole(discordId, r.role_id, `discord-link-backfill:${user.steam_id}`); assigned++; }
@@ -3245,7 +2912,9 @@ function tryAssignDiscordRoleForOrder(orderId) {
 // Mirror of the above: remove a role only when the user has no OTHER
 // completed order still granting it (so a user with two active subscriptions
 // to role-granting products doesn't lose the role when one is revoked).
-function tryRemoveDiscordRoleForOrder(orderId) {
+// includeSelf counts the order itself as well: a subscription ended for
+// non-payment keeps its role while the period it already paid for still runs.
+function tryRemoveDiscordRoleForOrder(orderId, { includeSelf = false } = {}) {
   try {
     const row = db.prepare(`
       SELECT o.steam_id, p.discord_role_id AS role_id, u.discord_id AS user_id
@@ -3258,10 +2927,10 @@ function tryRemoveDiscordRoleForOrder(orderId) {
     // because they had bought the same thing a year ago.
     const stillOwed = db.prepare(`
       SELECT 1 FROM orders o JOIN products p ON o.product_id = p.id
-      WHERE o.steam_id = ? AND o.id != ? AND o.status = 'completed' AND p.discord_role_id = ?
-        AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
+      WHERE o.steam_id = @steamId AND (@includeSelf = 1 OR o.id != @orderId) AND p.discord_role_id = @roleId
+        AND ${pqEntitlement.perksLiveSql('o', 'p')}
       LIMIT 1
-    `).get(row.steam_id, orderId, row.role_id);
+    `).get({ steamId: row.steam_id, orderId, roleId: row.role_id, includeSelf: includeSelf ? 1 : 0, now: Math.floor(Date.now() / 1000) });
     if (stillOwed) return;
     discord.removeRole(row.user_id, row.role_id, `order-revoked:${orderId}`)
       .catch(e => console.error('[discord] remove role for order %s failed: %s', orderId, e.message));
@@ -3361,10 +3030,11 @@ router.post('/api/shop/admin/subscriptions/send-migration-emails', requireAdmin,
 // ============================================================
 //  Subscription billing issues
 // ============================================================
-//  PayPal holds a subscription at status ACTIVE while its payments fail, so
-//  a lapse is otherwise silent: effective_until stops advancing, the Discord
-//  role is auto-removed, and the player still sees "active" on PayPal's side.
-//  These helpers make that state durable and visible.
+//  PayPal holds a subscription at status ACTIVE while its payments fail, so a
+//  failure is otherwise silent. The owner's rule (2026-09-15) is no payment, no
+//  priority queue: a failed renewal ends the subscription at once
+//  (paymentEvents.endUnpaidSubscription), and subscription_billing_issues keeps
+//  the record of each one for the Billing Issues tab.
 
 // PayPal money values are decimal strings ("30.0"); we store integer cents.
 function ppValueToCents(v) {
@@ -3373,88 +3043,18 @@ function ppValueToCents(v) {
   return isFinite(n) ? Math.round(n * 100) : 0;
 }
 
-function ppTimeToUnix(t) {
-  if (!t) return null;
-  const u = Math.floor(new Date(t).getTime() / 1000);
-  return isFinite(u) && u > 0 ? u : null;
-}
-
-// Everything the staff alert and the player email need, resolved from the
-// subscription id alone. Returns undefined when the sub isn't one of ours.
+// Everything a card or an email about a subscription needs, from its id alone
+// (paymentEvents.subscriptionContext). undefined when the sub isn't one of ours.
 function getBillingIssueContext(subId) {
-  return db.prepare(`
-    SELECT o.id AS order_id, o.steam_id, o.server_id, o.amount_cents, o.test_mode,
-           o.payer_email, o.effective_until,
-           u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid, u.discord_id,
-           p.title AS product_title, p.currency, p.discord_role_id
-    FROM orders o
-    JOIN users u    ON o.steam_id = u.steam_id
-    JOIN products p ON o.product_id = p.id
-    WHERE o.paypal_subscription_id = ?
-    ORDER BY o.id DESC LIMIT 1
-  `).get(subId);
+  return paymentEvents.subscriptionContext(db, subId);
 }
 
-// Upsert one subscription's failure state. Returns { escalated } so callers
-// only notify when the failure count actually moved -- PayPal retries the
-// same webhook, and the rescan re-reads every subscription, so notifying on
-// every observation would spam the channel.
-function recordBillingIssue(fields) {
-  const {
-    subId, orderId = null, steamId = null, paypalStatus = null,
-    failedCount = 0, outstandingCents = 0, currency = 'usd',
-    lastPaymentAt = null, nextBillingAt = null, source = 'webhook'
-  } = fields;
-  const now = Math.floor(Date.now() / 1000);
-  const prev = db.prepare(
-    'SELECT * FROM subscription_billing_issues WHERE paypal_subscription_id = ?'
-  ).get(subId);
-
-  if (!prev) {
-    db.prepare(`
-      INSERT INTO subscription_billing_issues
-        (paypal_subscription_id, order_id, steam_id, paypal_status, failed_count,
-         outstanding_cents, currency, last_payment_at, next_billing_at,
-         first_seen_at, last_seen_at, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(subId, orderId, steamId, paypalStatus, failedCount, outstandingCents,
-           currency, lastPaymentAt, nextBillingAt, now, now, source);
-    // A count of 0 is not news for staff (paymentEvents.billingIssueEscalates).
-    return { escalated: paymentEvents.billingIssueEscalates({ prev: null, failedCount }), previousCount: 0, prevEmailedAt: null, firstSeenAt: now };
-  }
-
-  // A row that was resolved and is failing again reopens rather than
-  // inserting a second row -- the subscription id is the primary key.
-  db.prepare(`
-    UPDATE subscription_billing_issues SET
-      order_id = COALESCE(?, order_id),
-      steam_id = COALESCE(?, steam_id),
-      paypal_status = ?, failed_count = ?, outstanding_cents = ?, currency = ?,
-      last_payment_at = ?, next_billing_at = ?, last_seen_at = ?,
-      resolved_at = NULL, source = ?
-    WHERE paypal_subscription_id = ?
-  `).run(orderId, steamId, paypalStatus, failedCount, outstandingCents, currency,
-         lastPaymentAt, nextBillingAt, now, source, subId);
-
-  return {
-    escalated: paymentEvents.billingIssueEscalates({ prev, failedCount }),
-    previousCount: prev.failed_count || 0,
-    prevEmailedAt: prev.player_emailed_at || null,
-    firstSeenAt: prev.first_seen_at || now
-  };
-}
-
-// Closes an open issue. Called when a cycle finally bills (recovered) and
-// when PayPal reports the agreement dead (no longer actionable).
+// Closes an open billing record. Called when a cycle bills and when PayPal
+// reports the agreement dead.
 function resolveBillingIssue(subId, reason) {
   if (!subId) return;
   try {
-    const r = db.prepare(`
-      UPDATE subscription_billing_issues
-      SET resolved_at = ?
-      WHERE paypal_subscription_id = ? AND resolved_at IS NULL
-    `).run(Math.floor(Date.now() / 1000), subId);
-    if (r.changes > 0) {
+    if (paymentEvents.resolveBillingIssue(db, subId)) {
       console.log('[billing] issue resolved for %s (%s)', subId, reason || 'recovered');
     }
   } catch (e) {
@@ -3462,189 +3062,68 @@ function resolveBillingIssue(subId, reason) {
   }
 }
 
-// Staff alert into #Payment-Processor. Best-effort: a Discord outage must not
-// break webhook processing, so this never throws.
-async function postBillingIssueAlert(opts) {
+// A card about a subscription ended for non-payment, into #Payment-Processor.
+// Through the "ReforgedZ Payments" webhook like every other card, and posted as
+// the bot when the webhook is unset or broken: a card about lost revenue is worth
+// a second attempt. Best-effort: a Discord outage must not break webhook
+// processing, so this never throws.
+async function postBillingCard(specFn) {
   if (!DISCORD_WEBHOOK_URL && !PAYMENT_PROCESSOR_CHANNEL_ID) return false;
   let body;
   try {
-    body = buildCard(cards.billingFailureCard({ ...opts, ctx: withQueue(opts.ctx) }));
+    body = buildCard(specFn());
   } catch (e) {
-    console.error('[billing] alert not built:', e.message);
+    console.error('[billing] card not built:', e.message);
     return false;
   }
-
-  // Preferred path: the "ReforgedZ Payments" webhook, which already delivers
-  // purchase notifications into this same channel. Keeps one identity for
-  // everything payment-related instead of introducing a second poster.
   if (DISCORD_WEBHOOK_URL) {
     const posted = await postCard(body);
     if (posted.ok) return true;
-    console.error('[billing] webhook alert failed: HTTP %s', posted.status);
+    console.error('[billing] webhook card failed: HTTP %s', posted.status);
   }
-
-  // Fallback: post the same card as the bot. Only reached when the webhook is
-  // unset or broken: a staff alert about lost revenue is worth a second attempt.
   try {
     await discord.postToChannel(PAYMENT_PROCESSOR_CHANNEL_ID, body);
     return true;
   } catch (e) {
-    console.error('[billing] channel alert failed:', e.message);
+    console.error('[billing] channel card failed:', e.message);
     return false;
   }
 }
 
-// One subscription's failure, from either the webhook or the rescan.
-// emailPlayer is false for the rescan so a backfill can't blast historical
-// failures at people weeks after the fact.
-// Owner's rule (2026-08-25): let PayPal retry, but the player keeps their perks
-// for three days from the FIRST failed payment, then loses them until a payment
-// lands. Before this the perks ended on the renewal date itself, i.e. a card
-// that declined once cost someone their queue and role the same morning.
-const BILLING_GRACE_SECONDS = 3 * 86400;
-
-// postAlert false (the rescan) posts no card here and returns the card's facts as
-// `alert`, so the caller can post one card for many subscriptions.
-async function handleBillingFailure(opts) {
-  const { subId, billingInfo, paypalStatus, source, emailPlayer, postAlert = true } = opts;
-  if (!subId) return { escalated: false };
-
-  // PayPal delivers the third PAYMENT.FAILED *after* the SUSPENDED event that
-  // already closed this issue. Re-opening it here posted a second card for a
-  // subscription that was dead, and left it listed as actionable in /billing
-  // and the admin Billing Issues tab. A failure on anything but an ACTIVE
-  // agreement is not something anyone can act on, so record nothing.
-  const status = String(paypalStatus || 'ACTIVE').toUpperCase();
-  if (status !== 'ACTIVE') {
-    resolveBillingIssue(subId, 'payment failed on ' + status + ' agreement');
-    return { escalated: false };
-  }
-
-  // An agreement that never took a payment (the buyer approved it at PayPal
-  // and the first charge bounced) has no entitlement behind it, no player to
-  // warn and nothing for staff to do. If a charge ever lands, ACTIVATED
-  // fulfils the order like any first payment. Tracking these only filled the
-  // channel and /billing with names nobody could act on.
-  // PayPal's own billing_info decides whenever it says anything
-  // (paymentEvents.everPaid): a buyer whose paid order rows were lost still paid,
-  // and still needs telling when a renewal fails.
-  const localPaid = !!db.prepare(
-    "SELECT 1 FROM orders WHERE paypal_subscription_id = ? AND status IN ('completed', 'refunded') LIMIT 1"
-  ).get(subId);
-  const paid = paymentEvents.everPaid({ localPaid, billingInfo });
-  if (!paid.paid) {
-    resolveBillingIssue(subId, 'payment failed on an agreement that never paid');
-    return { escalated: false };
-  }
-  if (!localPaid) {
-    console.warn('[billing] %s: PayPal shows a payment the shop has no paid order for; handled as a paying subscription', subId);
-  }
-
-  const bi = billingInfo || {};
-  let ctx = getBillingIssueContext(subId);
-  const failedCount = bi.failed_payments_count || 0;
-  const outstandingCents = ppValueToCents(bi.outstanding_balance && bi.outstanding_balance.value);
-  const currency = (bi.outstanding_balance && bi.outstanding_balance.currency_code)
-    || (ctx && ctx.currency) || 'usd';
-  const lastPaymentAt = ppTimeToUnix(bi.last_payment && bi.last_payment.time);
-  const nextBillingAt = ppTimeToUnix(bi.next_billing_time);
-
-  const { escalated, prevEmailedAt, firstSeenAt } = recordBillingIssue({
-    subId,
-    orderId: ctx ? ctx.order_id : null,
-    steamId: ctx ? ctx.steam_id : null,
-    paypalStatus: status, failedCount, outstandingCents, currency,
-    lastPaymentAt, nextBillingAt, source
-  });
-
-  // The grace window. Only the cycle that just ended is extended: it has to
-  // have expired within a week of the first failure, so a subscription that
-  // lapsed months ago (the launch cohort the August rescan surfaced, whose
-  // first_seen_at is the rescan date) is left alone. Idempotent — a retry
-  // failing on day 2 finds effective_until already at the grace date.
-  const graceUntil = firstSeenAt + BILLING_GRACE_SECONDS;
-  const ext = db.prepare(`
-    UPDATE orders SET effective_until = ?
-    WHERE paypal_subscription_id = ? AND status = 'completed'
-      AND effective_until IS NOT NULL
-      AND effective_until < ?
-      AND effective_until > ? - 7 * 86400
-  `).run(graceUntil, subId, graceUntil, firstSeenAt);
-  if (ext.changes > 0) {
-    if (ctx && ctx.bi_uid) rollGrantsForward(ctx.bi_uid, graceUntil);
-    console.log('[billing] %s: perks kept until %s (3-day grace after first failed payment)',
-      subId, new Date(graceUntil * 1000).toISOString());
-    syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-    ctx = getBillingIssueContext(subId); // so the email quotes the grace date
-  }
-
-  // Alert staff only when the failure count moved; email the player on that
-  // AND whenever they have never been told. The August rescan ran with
-  // emailPlayers off and later retries did not raise the count, which left a
-  // third of the failing subscribers never having heard from us at all.
-  const needsEmail = !!(emailPlayer && ctx && ctx.payer_email && (escalated || !prevEmailedAt));
-  if (!escalated && !needsEmail) return { escalated: false };
-
-  const now = Math.floor(Date.now() / 1000);
-  let alert = null;
-  if (escalated) {
-    // localPaid false: the card says the shop holds no paid order for it.
-    alert = { subId, ctx, failedCount, outstandingCents, currency, nextBillingAt, lastPaymentAt, source, localPaid };
-    if (postAlert) {
-      const posted = await postBillingIssueAlert(alert);
-      if (posted) {
-        db.prepare('UPDATE subscription_billing_issues SET notified_at = ? WHERE paypal_subscription_id = ?')
-          .run(now, subId);
-      }
-    }
-  }
-
-  if (needsEmail) {
-    try {
-      await sendPaymentFailed({
-        to: ctx.payer_email,
+// Ends one subscription whose renewal PayPal could not take
+// (paymentEvents.endUnpaidSubscription): from the PAYMENT.FAILED webhook, the
+// daily PayPal check (server.js hands this to tools/reconcile.js) and the billing
+// rescan. input: { subscriptionId, billingInfo, paypalStatus, source, now }.
+function endUnpaid(input) {
+  return paymentEvents.endUnpaidSubscription(db, input, {
+    ...paymentEffects(),
+    sendCard: (specFn) => { postBillingCard(specFn); },
+    sendEmail: ({ to, ctx, accessUntil, billingStopped = true }) => {
+      sendPaymentFailed({
+        to,
         displayName: playerNameOf(ctx),
         productTitle: ctx.product_title,
-        amountCents: ctx.amount_cents,
-        currency: ctx.currency,
-        failedCount,
-        accessEndsAtMs: ctx.effective_until ? ctx.effective_until * 1000 : null,
-        nextRetryAtMs: nextBillingAt ? nextBillingAt * 1000 : null
-      });
-      db.prepare('UPDATE subscription_billing_issues SET player_emailed_at = ? WHERE paypal_subscription_id = ?')
-        .run(now, subId);
-    } catch (e) {
-      console.error('[billing] player email failed:', e.message);
+        serverLabel: ctx.server_specific && ctx.server_id ? (SERVER_LABELS[ctx.server_id] || ctx.server_id) : null,
+        priorityQueue: !!ctx.grants_priority_queue,
+        accessEndsAt: accessUntil,
+        billingStopped
+      }).catch(e => console.error('[billing] player email failed:', e.message));
     }
-  }
-  return { escalated, alert };
+  });
 }
 
-// Sweep every subscription we believe is live and reconcile it against
-// PayPal. This is what surfaces failures that predate the webhook handler --
-// PayPal does not replay old events. Sequential on purpose: PayPal rate-limits
-// and this runs detached, so wall-clock does not matter.
-async function rescanBillingIssues(opts) {
-  const { emailPlayers = false } = opts || {};
-  // Live subscriptions, plus every one with a billing issue on record that is not
-  // marked ended (paymentEvents.billingRescanTargets). Not 'pending' rows on their
-  // own: an abandoned checkout reserved a subscription id the buyer never
-  // approved, PayPal never created it and every lookup 404s forever, which made
-  // `errors` permanently non-zero and hid real lookup failures. An issue row only
-  // exists for an agreement PayPal reported on, so those lookups work.
-  const subs = paymentEvents.billingRescanTargets(db);
-
-  const summary = { scanned: 0, failing: 0, newIssues: 0, resolved: 0, errors: 0 };
-  const alerts = [];
-
-  // Open issues the walk below can never reach:
-  //  - the agreement has since ended (cancelled / suspended / expired), so the
-  //    row is history, not a task;
-  //  - the shop holds no order rows for the agreement at all.
-  // Whether an agreement ever took a payment is NOT decided here from our own
-  // rows. Those subscriptions are walked, and handleBillingFailure asks PayPal's
-  // billing_info, because order rows lost for paying buyers made them look as if
-  // they never paid. A failed lookup leaves the issue open.
+// Asks PayPal about every subscription the shop believes is live, the same check as
+// the daily PayPal reconciliation (reconcile.endFailingSubscriptions). By default it
+// only looks: it counts the ACTIVE agreements with failed payments and ends nothing,
+// so a caller that has always treated a rescan as a harmless check (the Discord
+// /billing command) stays one. With end: true (the admin panel's button, after a
+// confirm) it ends each of them the way the webhook does, cancel and player email
+// included, and refuses to end anything when a lookup failed. Open billing records
+// the walk can never reach are resolved first: the agreement has since ended, or the
+// shop holds no order for it. Sequential on purpose: PayPal rate-limits and this runs
+// detached.
+async function rescanBillingIssues({ end = false } = {}) {
+  const summary = { scanned: 0, failing: 0, newIssues: 0, resolved: 0, errors: 0, ended: 0, refused: false, dryRun: !end };
   const unreachable = db.prepare(`
     SELECT b.paypal_subscription_id AS sub_id,
            EXISTS (SELECT 1 FROM orders o WHERE o.paypal_subscription_id = b.paypal_subscription_id
@@ -3658,52 +3137,16 @@ async function rescanBillingIssues(opts) {
     else if (!u.has_orders) { resolveBillingIssue(u.sub_id, 'rescan: no orders for this agreement'); summary.resolved++; }
   }
 
-  for (const row of subs) {
-    summary.scanned++;
-    let sub;
-    try {
-      sub = await paypal.getSubscription(!!row.test_mode, row.sub_id);
-    } catch (e) {
-      summary.errors++;
-      console.error('[billing] rescan lookup failed for %s: %s', row.sub_id, e.message);
-      continue;
-    }
-    const bi = sub && sub.billing_info ? sub.billing_info : {};
-    const failed = bi.failed_payments_count || 0;
-    const status = (sub && sub.status ? sub.status : '').toUpperCase();
-
-    // Only ACTIVE-but-failing is actionable. A CANCELLED/EXPIRED/SUSPENDED
-    // agreement is already dead and its own webhook handled the teardown.
-    if (status === 'ACTIVE' && failed > 0) {
-      summary.failing++;
-      const before = db.prepare(
-        'SELECT failed_count, resolved_at FROM subscription_billing_issues WHERE paypal_subscription_id = ?'
-      ).get(row.sub_id);
-      const res = await handleBillingFailure({
-        subId: row.sub_id, billingInfo: bi, paypalStatus: status,
-        source: 'rescan', emailPlayer: emailPlayers, postAlert: false
-      });
-      if (res.escalated && (!before || before.resolved_at != null)) summary.newIssues++;
-      if (res.alert) alerts.push(res.alert);
-    } else {
-      const open = db.prepare(
-        'SELECT 1 FROM subscription_billing_issues WHERE paypal_subscription_id = ? AND resolved_at IS NULL'
-      ).get(row.sub_id);
-      if (open) {
-        resolveBillingIssue(row.sub_id, 'rescan: ' + (status || 'unknown'));
-        summary.resolved++;
-      }
-    }
-  }
-
-  // One card for the whole rescan. A rescan that re-opens many issues used to post
-  // a card for each, a burst nobody could read.
-  if (alerts.length) {
-    const posted = await sendCard(() => cards.billingRescanSummaryCard({ items: alerts.map(a => ({ ...a, ctx: withQueue(a.ctx) })) }));
-    if (posted && posted.ok) {
-      const at = Math.floor(Date.now() / 1000);
-      const mark = db.prepare('UPDATE subscription_billing_issues SET notified_at = ? WHERE paypal_subscription_id = ?');
-      for (const a of alerts) mark.run(at, a.subId);
+  const out = await reconcile.endFailingSubscriptions({ db, paypal, end: end ? endUnpaid : null, dryRun: !end, source: 'rescan' });
+  summary.scanned = out.checked;
+  summary.failing = out.failing.length;
+  summary.errors = out.lookupErrors.length;
+  summary.ended = out.ended.length;
+  summary.newIssues = out.ended.length;
+  summary.refused = !out.ok;
+  if (out.ok) {
+    for (const n of out.notFailing) {
+      if (paymentEvents.resolveBillingIssue(db, n.subscriptionId)) summary.resolved++;
     }
   }
   return summary;
@@ -3768,13 +3211,16 @@ router.get('/api/shop/admin/billing-issues', requireAdmin, (req, res) => {
 // Kicks the PayPal sweep off in the background and returns immediately --
 // it makes ~100 sequential PayPal calls and cannot finish inside a request.
 // Poll GET /api/shop/admin/billing-issues for progress.
+// Body { end: true } ends the failing subscriptions it finds (rescanBillingIssues);
+// anything else is a check that ends nothing and emails nobody. The old emailPlayers
+// body flag is ignored. emailPlayers in the answer says whether players can be emailed.
 router.post('/api/shop/admin/billing-issues/rescan', requireAdmin, (req, res) => {
-  const emailPlayers = req.body && req.body.emailPlayers === true;
-  const { started, state } = startBillingRescan({ emailPlayers });
+  const end = !!(req.body && req.body.end === true);
+  const { started, state } = startBillingRescan({ end });
   if (!started) {
     return res.status(409).json({ error: 'A rescan is already running', startedAt: state.startedAt });
   }
-  res.json({ ok: true, started: true, emailPlayers });
+  res.json({ ok: true, started: true, end, emailPlayers: end });
 });
 
 // ---- Doctor -----------------------------------------------------------------
@@ -3858,8 +3304,8 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
       orderId: o.id,
       productId: o.product_id,
       grantsPriorityQueue: !!o.grants_priority_queue,
-      // Where the queue priority sits and whether the holder may move it.
-      pq: (PQ_SELF_MOVE_ENABLED && o.grants_priority_queue && o.server_specific && active) ? pqSelfServiceInfo(me, o) : null,
+      // Kept for older pages: the self-service move is retired, so always null.
+      pq: null,
       title: o.title,
       currency: o.currency,
       amountCents: o.amount_cents,
@@ -3989,6 +3435,12 @@ router.get('/api/shop/admin/reminders/preview', requireAdmin, async (req, res) =
 // the shop accounts for, and the ones already reported. Nothing is posted or
 // recorded, and PayPal is asked for no payer details. Single-flight, like the
 // doctor, because it pages through PayPal.
+//
+// ?failing=1 also lists the ACTIVE subscriptions failing at PayPal that the daily run
+// would end now (reconcile.endFailingSubscriptions as a dry run): each is ended unless
+// it never took a payment. Nothing is cancelled, posted or sent. It asks PayPal about
+// every live subscription, so it takes a while; run it before trusting the first
+// daily run on a new deploy.
 let reconcilePreviewInFlight = null;
 router.get('/api/shop/admin/reconcile/preview', requireAdmin, async (req, res) => {
   try {
@@ -3997,11 +3449,21 @@ router.get('/api/shop/admin/reconcile/preview', requireAdmin, async (req, res) =
         .finally(() => { reconcilePreviewInFlight = null; });
     }
     const out = await reconcilePreviewInFlight;
+    let failing = null;
+    if (String(req.query.failing || '') === '1') {
+      const f = await reconcile.endFailingSubscriptions({ db, paypal, dryRun: true });
+      failing = {
+        ok: f.ok, error: f.error, checked: f.checked, skipped: f.skipped,
+        failingAtPayPal: f.failing.map(x => ({ subscriptionId: x.subscriptionId, failedCount: x.failedCount })),
+        lookupErrors: f.lookupErrors
+      };
+    }
     res.status(out.error ? 502 : 200).json({
       enabled: !reconcile.reconcileOff(),
       nextRunAt: reconcile.nextRunAt(),
       lastRun: reconcile.lastReconcileRun(),
-      ...reconcile.previewOf(out)
+      ...reconcile.previewOf(out),
+      ...(failing ? { failing } : {})
     });
   } catch (e) {
     console.error('[reconcile] preview failed:', e.message);
@@ -4015,20 +3477,21 @@ router.get('/api/shop/admin/reconcile/preview', requireAdmin, async (req, res) =
 //  passage of time, not an event. sweepExpiredEntitlements already re-synced
 //  in-game priority queue on lapse; the Discord role was left behind.
 
-// A pair is entitled while any completed order for that role is unexpired.
-// effective_until IS NULL means a one-time purchase (e.g. Supporter), which
-// never lapses -- so those are always entitled.
-function entitledRolePairKeys() {
+// A pair is entitled while any order for that role still gives its perks
+// (pqEntitlement.perksLiveSql). The Priority Queue role follows the one priority
+// queue rule, renewal window included, so a renewer keeps it through the renewal
+// morning and an unpaid or sandbox order never holds it. Any other product counts
+// while completed and unexpired, and one with no end date (e.g. Supporter) never lapses.
+function entitledRolePairKeys(now = Math.floor(Date.now() / 1000)) {
   const rows = db.prepare(`
     SELECT DISTINCT u.discord_id AS user_id, p.discord_role_id AS role_id
     FROM orders o
     JOIN products p ON p.id = o.product_id
     JOIN users u    ON u.steam_id = o.steam_id
-    WHERE o.status = 'completed'
-      AND p.discord_role_id IS NOT NULL
+    WHERE p.discord_role_id IS NOT NULL
       AND u.discord_id IS NOT NULL
-      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-  `).all();
+      AND ${pqEntitlement.perksLiveSql('o', 'p')}
+  `).all({ now });
   return new Set(rows.map(r => r.user_id + ':' + r.role_id));
 }
 
@@ -4109,11 +3572,10 @@ async function healMissingDiscordRoles(opts) {
     FROM orders o
     JOIN products p ON p.id = o.product_id
     JOIN users u    ON u.steam_id = o.steam_id
-    WHERE o.status = 'completed'
-      AND p.discord_role_id IS NOT NULL
+    WHERE p.discord_role_id IS NOT NULL
       AND u.discord_id IS NOT NULL AND u.discord_id != ''
-      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-  `).all();
+      AND ${pqEntitlement.perksLiveSql('o', 'p')}
+  `).all({ now: Math.floor(Date.now() / 1000) });
   const summary = { entitled: rows.length, held: 0, missing: 0, granted: 0, notInGuild: 0, skipped: 0, errors: 0, dryRun, details: [] };
   const byUser = new Map();
   for (const r of rows) {
@@ -4171,6 +3633,16 @@ router.post('/api/shop/admin/role-heal', requireAdmin, async (req, res) => {
 // What the next game.admins sync would add, strip, keep for staff and release,
 // per server, without writing. Read this before trusting a change to the
 // ownership rules in sync.js.
+// Runs the game server sync now. The admin page calls this after a game master is added
+// or removed on the GM tab: priority queue stock subtracts each server's game master
+// count, which the shop learns from its own sync, so a GM change counts within the sync
+// rather than at the next 10-minute pass. Overlapping requests coalesce into one more
+// pass (sync.js), so a burst of GM changes costs little.
+router.post('/api/shop/admin/admins-sync/run', requireAdmin, (req, res) => {
+  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+  res.json({ ok: true, started: true });
+});
+
 router.get('/api/shop/admin/admins-sync/preview', requireAdmin, async (req, res) => {
   try {
     res.json({ servers: await require('../sync').previewAdminsSync() });
@@ -4342,7 +3814,7 @@ function reportRevokedRenewal(subId, resource, { testMode = false } = {}) {
   // The newest order names the product, server and player on the card.
   let context = null;
   try {
-    context = withQueue(getOrderWithContext(orders[orders.length - 1].id)) || null;
+    context = getOrderWithContext(orders[orders.length - 1].id) || null;
   } catch (e) {
     console.error(`[billing] renewal ${resource.id}: order context not loaded: ${e.message}`);
   }
@@ -4360,7 +3832,7 @@ function reportRenewalAfterRefund(subId, resource, { refundedOrderId, newOrderId
   const sandbox = !!original.test_mode;
   console.error(`[billing] renewal ${resource.id} (${money}${sandbox ? ', sandbox' : ''}) on subscription ${subId} came after order #${refundedOrderId} was ${noRefund ? 'revoked without a refund' : 'refunded'}; booked as order #${newOrderId}. Revoke it with a refund if the subscription was meant to end.`);
   sendCard(() => cards.renewalAfterRefundCard({
-    subId, saleId: resource.id, refundedOrderId, newOrderId, original: withQueue({ ...original, id: newOrderId }), amountCents, noRefund, nextCharge
+    subId, saleId: resource.id, refundedOrderId, newOrderId, original: { ...original, id: newOrderId }, amountCents, noRefund, nextCharge
   }));
 }
 
@@ -4382,11 +3854,14 @@ function reportDuplicateSubscription(orderId) {
   }
 }
 
-// The effects the refund and dispute handlers in paymentEvents.js use.
+// The effects the handlers in paymentEvents.js use: PayPal, the order lookup, the
+// Discord role, the game-server sync, the card poster and the refund email.
 function paymentEffects() {
   return {
-    getOrderWithContext: (id) => withQueue(getOrderWithContext(id)),
-    removeRole: tryRemoveDiscordRoleForOrder,
+    paypal,
+    getOrderWithContext: (id) => getOrderWithContext(id),
+    removeRole: (id) => tryRemoveDiscordRoleForOrder(id),
+    removeLapsedRole: (id) => tryRemoveDiscordRoleForOrder(id, { includeSelf: true }),
     sync: () => syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message)),
     sendCard: (specFn) => sendCard(specFn),
     sendRefundEmail: ({ order, amountCents, resource }) => {
@@ -4404,6 +3879,52 @@ function paymentEffects() {
       }).catch(e => console.error('[refund-mail] send failed:', e.message));
     }
   };
+}
+
+// paymentEffects plus the player's email about a payment the shop refused, or a
+// subscription it did not start (paymentEvents.refuseSale, reportRefusedActivation).
+function refusalEffects() {
+  return {
+    ...paymentEffects(),
+    sendEmail: ({ to, ctx, reason, amountCents = null, currency = null, billingStopped = true }) => {
+      sendPaymentRefused({
+        to,
+        displayName: playerNameOf(ctx),
+        productTitle: ctx.product_title,
+        serverLabel: ctx.server_id ? (SERVER_LABELS[ctx.server_id] || ctx.server_id) : null,
+        priorityQueue: !!ctx.grants_priority_queue,
+        amountCents,
+        currency: currency || ctx.currency,
+        reason,
+        billingStopped
+      }).catch(e => console.error('[billing] refused payment email failed:', e.message));
+    }
+  };
+}
+
+// Pins a subscription's first cycle to PayPal's first billing date, so a mid-cycle
+// cancellation still honours the period the buyer paid for and the priority queue
+// holds its slot from now (pqEntitlement.js needs the end date). Only ever on a
+// completed order: writing a future entitlement onto a cancelled row is what
+// produced orders that looked paid-up but granted nothing, because every reader
+// filters on status = 'completed'. Only ever later: a retried ACTIVATED still
+// carries the first billing date, which must not undo a later cycle. Used by the
+// ACTIVATED webhook and the subscription return page, whichever comes first.
+function pinFirstBillingDate(orderId, nextBillingTime, subId = null) {
+  if (!nextBillingTime) return false;
+  const untilUnix = Math.floor(new Date(nextBillingTime).getTime() / 1000);
+  if (!isFinite(untilUnix) || untilUnix <= 0) return false;
+  const current = db.prepare("SELECT effective_until FROM orders WHERE id = ? AND status = 'completed'").get(orderId);
+  if (!current) {
+    console.error(`[paypal] sub ${subId} activated but order ${orderId} is not completed, so its entitlement was NOT set. The buyer has paid; investigate.`);
+    return false;
+  }
+  const dated = db.prepare(
+    "UPDATE orders SET effective_until = ? WHERE id = ? AND status = 'completed' AND (effective_until IS NULL OR effective_until < ?)"
+  ).run(untilUnix, orderId, untilUnix).changes;
+  // fulfillOrder started its sync before the date was stored, so sync again now that it is.
+  if (dated) syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+  return dated > 0;
 }
 
 async function dispatchPayPalEvent(event, resource, orderId, { testMode = false } = {}) {
@@ -4429,7 +3950,7 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
         db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(orderId);
         const order = getOrderWithContext(orderId);
         if (order) {
-          sendCard(() => cards.orderEventCard('payment_declined', withQueue(order)));
+          sendCard(() => cards.orderEventCard('payment_declined', order));
         }
       }
       break;
@@ -4443,6 +3964,17 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
         ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId)
         : (subId ? db.prepare('SELECT * FROM orders WHERE paypal_subscription_id = ?').get(subId) : null);
       if (found) {
+        // A priority queue subscription starts only while its server has a slot for
+        // it (paymentEvents.claimActivation), checked and fulfilled with nothing
+        // awaited in between. A refused one is cancelled at PayPal, and its first
+        // payment is refunded when PayPal sends it.
+        const verdict = paymentEvents.claimActivation(db, { orderId: found.id });
+        if (verdict.refuse) {
+          if (verdict.claimed) {
+            await paymentEvents.reportRefusedActivation(db, { verdict, payerEmail: resource.subscriber?.email_address || null }, refusalEffects());
+          }
+          break;
+        }
         // Don't set a capture_id here — the matching PAYMENT.SALE.COMPLETED
         // event carries the real transaction id and will fill it in. (Older
         // code passed subId as a placeholder, which then caused a duplicate
@@ -4452,32 +3984,9 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
           payerEmail: resource.subscriber?.email_address || null,
           feeCents: null
         });
-        // Pin the entitlement end-date to PayPal's next billing time so a
-        // mid-cycle cancellation still honours the period the buyer paid for.
-        // Only ever on a completed order: writing a future entitlement onto a
-        // cancelled row is what produced orders that looked paid-up but granted
-        // nothing, because every reader filters on status = 'completed'.
-        const nextBilling = resource.billing_info?.next_billing_time;
-        if (nextBilling) {
-          const untilUnix = Math.floor(new Date(nextBilling).getTime() / 1000);
-          if (isFinite(untilUnix) && untilUnix > 0) {
-            // Only ever moves the date later: a retried ACTIVATED still carries the
-            // first billing date, which must not undo a later cycle or extension.
-            const current = db.prepare("SELECT effective_until FROM orders WHERE id = ? AND status = 'completed'").get(found.id);
-            if (current) {
-              db.prepare(
-                "UPDATE orders SET effective_until = ? WHERE id = ? AND status = 'completed' AND (effective_until IS NULL OR effective_until < ?)"
-              ).run(untilUnix, found.id, untilUnix);
-            }
-            if (!current) {
-              console.error(`[paypal] sub ${subId} activated but order ${found.id} is not completed — entitlement NOT set. Buyer has paid; investigate.`);
-            } else {
-              // Keep a moved holder's grant alive from the first cycle too.
-              const buyer = db.prepare('SELECT bi_uid FROM users WHERE steam_id = ?').get(found.steam_id);
-              if (buyer && buyer.bi_uid) rollGrantsForward(buyer.bi_uid, untilUnix);
-            }
-          }
-        }
+        // Pin the entitlement end-date to PayPal's next billing time
+        // (pinFirstBillingDate), then sync, since priority queue needs the date.
+        pinFirstBillingDate(found.id, resource.billing_info?.next_billing_time, subId);
         // Look again now the subscription is paid: two approvals made close together
         // both pass the checkout check. Only on the order's first completion, so a
         // PayPal retry of this event posts nothing twice.
@@ -4491,142 +4000,171 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
       // owning subscription and book a renewal order row so MRR + the
       // buyer's order history both reflect the new cycle.
       const subId = resource.billing_agreement_id;
-      if (subId) {
-        // A cycle billed, so any open failure on this subscription is over.
-        resolveBillingIssue(subId, 'payment_recovered');
-        const original = db.prepare(`
-          SELECT o.*, p.title AS product_title, p.currency,
-                 u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid
-          FROM orders o
-          JOIN products p ON o.product_id = p.id
-          JOIN users u    ON o.steam_id   = u.steam_id
-          WHERE o.paypal_subscription_id = ? AND o.status IN ('completed','pending')
-          ORDER BY o.id ASC LIMIT 1
-        `).get(subId);
-        if (original) {
-          const cycleAmount = resource.amount?.total
-            ? Math.round(parseFloat(resource.amount.total) * 100)
-            : original.amount_cents;
-          const feeCents = resource.transaction_fee?.value != null
-            ? Math.round(parseFloat(resource.transaction_fee.value) * 100) : null;
-          // Idempotency guard — if we've already booked a row for this
-          // transaction id, skip.
-          const existing = db.prepare('SELECT id FROM orders WHERE paypal_capture_id = ?').get(resource.id);
-          if (!existing) {
-            // PAYMENT.SALE.COMPLETED doesn't include next_billing_time, but
-            // the sub does — one extra API call gets us the cycle end so
-            // mid-cycle cancellations honour the paid period. When PayPal gives
-            // none (a failed lookup, or a sale arriving after the agreement ended),
-            // the sale time plus one billing period stands in: a completed row
-            // with no date would never expire (paymentEvents.renewalCycleEnd).
-            const cycleEnd = await paymentEvents.renewalCycleEnd({
-              paypal, testMode: !!original.test_mode, subscriptionId: subId, resource
-            });
-            const effectiveUntil = cycleEnd.effectiveUntil;
-            const nextBillingAt = cycleEnd.nextBillingAt;
-            // First-cycle case: BILLING.SUBSCRIPTION.ACTIVATED already
-            // promoted the buyer's pending order to completed with no
-            // capture id (or a legacy capture_id == subId placeholder). Fill
-            // it in here instead of inserting a duplicate row, but only for a
-            // sale in the first billing cycle (paymentEvents.isFirstCycleSale).
-            // A later sale finding that row unpaid is a renewal whose first sale
-            // never arrived: it gets its own row, card and invoice.
-            const unpaidFirst = paymentEvents.unpaidFirstCycleRow(db, subId);
-            const placeholder = unpaidFirst && paymentEvents.isFirstCycleSale(unpaidFirst, paymentEvents.saleTimeOf(resource))
-              ? unpaidFirst : null;
-            if (unpaidFirst && !placeholder) {
-              console.warn(`[paypal] sale ${resource.id} on ${subId} is outside the first cycle of order #${unpaidFirst.id}, which has no payment booked; booked as a renewal`);
-            }
-            let newOrderId;
-            let refundedBefore = null;
-            if (placeholder) {
-              // effective_until only moves later here, to PayPal's own date; the
-              // stand-in date only fills a row that has none.
-              db.prepare(`
-                UPDATE orders SET
-                  paypal_capture_id = ?,
-                  payer_email = COALESCE(?, payer_email),
-                  fee_cents = ?,
-                  effective_until = CASE WHEN ? IS NOT NULL AND (effective_until IS NULL OR effective_until < ?)
-                                         THEN ?
-                                         WHEN effective_until IS NULL THEN ?
-                                         ELSE effective_until END,
-                  amount_cents = ?
-                WHERE id = ?
-              `).run(
-                resource.id,
-                resource.payer?.email_address || null,
-                feeCents,
-                nextBillingAt, nextBillingAt, nextBillingAt, effectiveUntil,
-                cycleAmount,
-                placeholder.id
-              );
-              newOrderId = placeholder.id;
-            } else {
-              // True renewal cycle — buyer's been on the sub for ≥1 month and
-              // this is a fresh billing. Insert a new row. Asked first, while the
-              // new row is not yet the newest: was the latest cycle revoked?
-              refundedBefore = pqGuards.refundedLatestCycle(db, subId);
-              const ins = db.prepare(`
-                INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
-                                    paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
-                                    effective_until, completed_at, created_at)
-                VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
-              `).run(
-                original.steam_id, original.product_id, original.server_id,
-                cycleAmount, original.test_mode,
-                subId, resource.id, resource.payer?.email_address || original.payer_email || null,
-                feeCents, effectiveUntil
-              );
-              newOrderId = ins.lastInsertRowid;
-              if (refundedBefore) {
-                reportRenewalAfterRefund(subId, resource, {
-                  refundedOrderId: refundedBefore.id, newOrderId, original, amountCents: cycleAmount,
-                  noRefund: !!refundedBefore.noRefund, nextCharge: nextBillingAt
-                });
-              }
-            }
-            // Keep a moved holder's grant alive across the new cycle.
-            if (effectiveUntil && original.bi_uid) {
-              rollGrantsForward(original.bi_uid, effectiveUntil);
-            }
-            // Side effects (Discord notif, invoice, role grant, sync) only
-            // fire on TRUE renewals. The first cycle already went through
-            // fulfillOrder during BILLING.SUBSCRIPTION.ACTIVATED — re-firing
-            // here would mean two notifications and two invoice emails for
-            // a single payment.
-            if (!placeholder) {
-              // The card is about the new cycle's row, so its link and footer
-              // point at that order, not the subscription's first one. A renewal
-              // after a revoked cycle already has its red card, which carries these
-              // facts: one sale, one card.
-              if (!refundedBefore) {
-                sendCard(() => cards.orderEventCard('subscription_renewed',
-                  withQueue({ ...original, id: newOrderId, amount_cents: cycleAmount, paypal_subscription_id: subId }),
-                  { nextCharge: nextBillingAt }));
-              }
-              syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-              tryAssignDiscordRoleForOrder(newOrderId);
-              if (resource.payer?.email_address || original.payer_email) {
-                sendInvoice({
-                  to: resource.payer?.email_address || original.payer_email,
-                  orderId: newOrderId,
-                  captureId: resource.id,
-                  productTitle: original.product_title,
-                  amountCents: cycleAmount,
-                  currency: original.currency,
-                  feeCents,
-                  serverLabel: SERVER_LABELS[original.server_id] || original.server_id,
-                  dateMs: Date.now()
-                }).catch(e => console.error('[invoice] send failed:', e.message));
-              }
-            }
-          }
-        } else {
-          // No completed or pending order: the subscription was revoked, or the
-          // shop has no order for it at all, yet PayPal billed it. Still 200, so
-          // PayPal does not retry.
-          reportRevokedRenewal(subId, resource, { testMode });
+      if (!subId) break;
+      // Idempotency guard: PayPal retrying a sale already booked.
+      const alreadyBooked = () => !!(resource.id && db.prepare('SELECT 1 FROM orders WHERE paypal_capture_id = ?').get(resource.id));
+      if (alreadyBooked()) break;
+      const original = db.prepare(`
+        SELECT o.*, p.title AS product_title, p.currency,
+               u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid
+        FROM orders o
+        JOIN products p ON o.product_id = p.id
+        JOIN users u    ON o.steam_id   = u.steam_id
+        WHERE o.paypal_subscription_id = ? AND o.status IN ('completed','pending')
+        ORDER BY o.id ASC LIMIT 1
+      `).get(subId);
+      const endedByShop = paymentEvents.shopEndedReason(db, subId);
+      if (!original && !endedByShop) {
+        // No completed or pending order: the subscription was revoked, or the
+        // shop has no order for it at all, yet PayPal billed it. One the shop itself
+        // ended gives nothing, so the payment is refunded and the subscription
+        // cancelled (paymentEvents.saleBookingDecision, reason revoked). Anything
+        // else is reported to staff. Still 200, so PayPal does not retry.
+        const early = paymentEvents.saleBookingDecision(db, { subscriptionId: subId, resource, now: Math.floor(Date.now() / 1000) });
+        if (early.book === false && resource.id) {
+          await paymentEvents.refuseSale(db, { subscriptionId: subId, resource, decision: early, testMode }, refusalEffects());
+          break;
+        }
+        reportRevokedRenewal(subId, resource, { testMode });
+        break;
+      }
+      // PAYMENT.SALE.COMPLETED doesn't include next_billing_time, but
+      // the sub does — one extra API call gets us the cycle end so
+      // mid-cycle cancellations honour the paid period. When PayPal gives
+      // none (a failed lookup, or a sale arriving after the agreement ended),
+      // the sale time plus one billing period stands in: a completed row
+      // with no date would never expire (paymentEvents.renewalCycleEnd).
+      const cycleEnd = original && !endedByShop
+        ? await paymentEvents.renewalCycleEnd({ paypal, testMode: !!original.test_mode, subscriptionId: subId, resource })
+        : null;
+      if (alreadyBooked()) break;
+      // Whether the shop can honour this payment (paymentEvents.saleBookingDecision):
+      // a subscription it has not ended, whose payment takes no priority queue slot
+      // from anyone. Asked after the lookup above and before any write, with nothing
+      // awaited in between, so no other payment, activation or checkout can take the
+      // slot between the answer and the booking. A payment it cannot honour is
+      // refunded at once and the subscription cancelled.
+      const verdict = paymentEvents.saleBookingDecision(db, { subscriptionId: subId, resource, now: Math.floor(Date.now() / 1000) });
+      if (verdict.book === false && resource.id) {
+        await paymentEvents.refuseSale(db, { subscriptionId: subId, resource, decision: verdict, testMode }, refusalEffects());
+        break;
+      }
+      if (verdict.book !== true) {
+        reportRevokedRenewal(subId, resource, { testMode });
+        break;
+      }
+      if (!cycleEnd) {
+        // Only when PayPal brought the agreement back while its billing date was
+        // being looked up. Not booked; the daily PayPal check lists the payment.
+        console.error(`[paypal] sale ${resource.id} on ${subId} was not booked: the subscription changed while its billing date was looked up`);
+        break;
+      }
+      // A cycle billed, so any open failure on this subscription is over.
+      resolveBillingIssue(subId, 'payment_recovered');
+      const cycleAmount = resource.amount?.total
+        ? Math.round(parseFloat(resource.amount.total) * 100)
+        : original.amount_cents;
+      const feeCents = resource.transaction_fee?.value != null
+        ? Math.round(parseFloat(resource.transaction_fee.value) * 100) : null;
+      const effectiveUntil = cycleEnd.effectiveUntil;
+      const nextBillingAt = cycleEnd.nextBillingAt;
+      // First-cycle case: BILLING.SUBSCRIPTION.ACTIVATED already
+      // promoted the buyer's pending order to completed with no
+      // capture id (or a legacy capture_id == subId placeholder). Fill
+      // it in here instead of inserting a duplicate row, but only for a
+      // sale in the first billing cycle (paymentEvents.isFirstCycleSale).
+      // A later sale finding that row unpaid is a renewal whose first sale
+      // never arrived: it gets its own row, card and invoice.
+      const unpaidFirst = paymentEvents.unpaidFirstCycleRow(db, subId);
+      const placeholder = unpaidFirst && paymentEvents.isFirstCycleSale(unpaidFirst, paymentEvents.saleTimeOf(resource))
+        ? unpaidFirst : null;
+      if (unpaidFirst && !placeholder) {
+        console.warn(`[paypal] sale ${resource.id} on ${subId} is outside the first cycle of order #${unpaidFirst.id}, which has no payment booked; booked as a renewal`);
+      }
+      let newOrderId;
+      let refundedBefore = null;
+      if (placeholder) {
+        // effective_until only moves later here, to PayPal's own date; the
+        // stand-in date only fills a row that has none.
+        db.prepare(`
+          UPDATE orders SET
+            paypal_capture_id = ?,
+            payer_email = COALESCE(?, payer_email),
+            fee_cents = ?,
+            effective_until = CASE WHEN ? IS NOT NULL AND (effective_until IS NULL OR effective_until < ?)
+                                   THEN ?
+                                   WHEN effective_until IS NULL THEN ?
+                                   ELSE effective_until END,
+            amount_cents = ?
+          WHERE id = ?
+        `).run(
+          resource.id,
+          resource.payer?.email_address || null,
+          feeCents,
+          nextBillingAt, nextBillingAt, nextBillingAt, effectiveUntil,
+          cycleAmount,
+          placeholder.id
+        );
+        newOrderId = placeholder.id;
+        // A first cycle that activated with no billing date gets its date only
+        // here, and priority queue needs one (pqEntitlement.js): sync now rather
+        // than at the next timer.
+        if (placeholder.effective_until == null) {
+          syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+        }
+      } else {
+        // True renewal cycle — buyer's been on the sub for ≥1 month and
+        // this is a fresh billing. Insert a new row. Asked first, while the
+        // new row is not yet the newest: was the latest cycle revoked?
+        refundedBefore = pqGuards.refundedLatestCycle(db, subId);
+        const ins = db.prepare(`
+          INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
+                              paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
+                              effective_until, completed_at, created_at)
+          VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+        `).run(
+          original.steam_id, original.product_id, original.server_id,
+          cycleAmount, original.test_mode,
+          subId, resource.id, resource.payer?.email_address || original.payer_email || null,
+          feeCents, effectiveUntil
+        );
+        newOrderId = ins.lastInsertRowid;
+        if (refundedBefore) {
+          reportRenewalAfterRefund(subId, resource, {
+            refundedOrderId: refundedBefore.id, newOrderId, original, amountCents: cycleAmount,
+            noRefund: !!refundedBefore.noRefund, nextCharge: nextBillingAt
+          });
+        }
+      }
+      // Side effects (Discord notif, invoice, role grant, sync) only
+      // fire on TRUE renewals. The first cycle already went through
+      // fulfillOrder during BILLING.SUBSCRIPTION.ACTIVATED — re-firing
+      // here would mean two notifications and two invoice emails for
+      // a single payment.
+      if (!placeholder) {
+        // The card is about the new cycle's row, so its link and footer
+        // point at that order, not the subscription's first one. A renewal
+        // after a revoked cycle already has its red card, which carries these
+        // facts: one sale, one card.
+        if (!refundedBefore) {
+          sendCard(() => cards.orderEventCard('subscription_renewed',
+            { ...original, id: newOrderId, amount_cents: cycleAmount, paypal_subscription_id: subId },
+            { nextCharge: nextBillingAt }));
+        }
+        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+        tryAssignDiscordRoleForOrder(newOrderId);
+        if (resource.payer?.email_address || original.payer_email) {
+          sendInvoice({
+            to: resource.payer?.email_address || original.payer_email,
+            orderId: newOrderId,
+            captureId: resource.id,
+            productTitle: original.product_title,
+            amountCents: cycleAmount,
+            currency: original.currency,
+            feeCents,
+            serverLabel: SERVER_LABELS[original.server_id] || original.server_id,
+            dateMs: Date.now()
+          }).catch(e => console.error('[invoice] send failed:', e.message));
         }
       }
       break;
@@ -4676,7 +4214,10 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
         console.log(`[paypal] ${subId} ended: order #${access.raised.id} keeps access until ${new Date(access.raised.to * 1000).toISOString()} (the last payment plus one billing period)`);
       }
       if (access.skipped) {
-        console.log(`[paypal] ${subId} ended: its newest cycle was revoked, so access was not extended`);
+        const why = access.skipped === 'ended_by_shop'
+          ? 'the shop had already ended it (payment not received, or no slot for a payment)'
+          : 'its newest cycle was revoked';
+        console.log(`[paypal] ${subId} ended: ${why}, so access was not extended`);
       }
       const until = access.accessUntil;
       // This is the authoritative "PayPal says this billing agreement is
@@ -4711,11 +4252,16 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
       // subscription_ended_reason: the player's own cancel sets that first too,
       // and this webhook is what emails that player.
       const shopCancel = endedReason === 'cancelled' ? paymentEvents.shopCancelFor(db, subId) : null;
+      // A subscription the shop's billing rules ended (payment not received, no slot)
+      // was reported when it ended, even if PayPal refused that cancel and it ends only
+      // now: nothing goes out for it here, cancel, suspension or expiry.
+      const shopEnded = paymentEvents.shopEndedReason(db, subId);
       // Which notices go out (paymentEvents.endedNotices): a staff revoke that
       // returned no money still emails the player, with no promise about access.
-      const notices = paymentEvents.endedNotices({ shopCancel });
-      if (ctx && shopCancel) {
-        console.log(`[paypal] ${subId} cancelled by the shop itself (${shopCancel.source}); that action already reported it, so no card${notices.email ? '' : ' or email'}`);
+      const notices = paymentEvents.endedNotices({ shopCancel, shopEnded });
+      if (ctx && !notices.card) {
+        const by = shopEnded === 'unpaid' || shopEnded === 'no_slot' ? `the shop ended it earlier (${shopEnded})` : `cancelled by the shop itself (${shopCancel.source})`;
+        console.log(`[paypal] ${subId} ${endedReason}: ${by}; that was already reported, so no card${notices.email ? '' : ' or email'}`);
       }
       if (ctx) {
         const bi = resource.billing_info || billingInfo || {};
@@ -4725,7 +4271,7 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
         // shows what the player keeps; "Cancelled via" is PayPal's note on who
         // ended it (paymentCards.subscriptionEndedCard).
         if (notices.card) {
-          sendCard(() => cards.subscriptionEndedCard(endedReason, withQueue(ctx), {
+          sendCard(() => cards.subscriptionEndedCard(endedReason, ctx, {
             accessUntil: until, note: resource.status_change_note || null, failedCount, outstandingCents
           }));
         }
@@ -4775,7 +4321,7 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
             if (r.outcome === 'failed' || r.outcome === 'unknown') {
               // The Suspended card said the shop is closing it; staff must hear it did not.
               console.error(`[paypal] could not close suspended agreement ${subId} (${r.outcome === 'unknown' ? 'no answer from PayPal' : 'refused'}): ${r.error}`);
-              sendCard(() => cards.closeSuspendedFailedCard({ subId, ctx: ctx ? withQueue(ctx) : null, cancel: r }));
+              sendCard(() => cards.closeSuspendedFailedCard({ subId, ctx: ctx || null, cancel: r }));
             } else {
               console.log(`[paypal] suspended agreement ${subId} ${r.outcome === 'cancelled' ? 'closed' : 'was already closed'}`);
             }
@@ -4796,24 +4342,22 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
       const ctx = getBillingIssueContext(subId);
       if (ctx) {
         // No Amount: bringing an agreement back moves no money.
-        sendCard(() => cards.orderEventCard('subscription_reactivated', withQueue(ctx), { subscriptionId: subId, amountCents: null }));
+        sendCard(() => cards.orderEventCard('subscription_reactivated', ctx, { subscriptionId: subId, amountCents: null }));
       }
       break;
     }
 
     case 'BILLING.SUBSCRIPTION.PAYMENT.FAILED': {
-      // Already subscribed with PayPal (see WEBHOOK_EVENTS in paypal.js) but
-      // previously unhandled, so every one of these was dropped on the floor.
-      // PayPal leaves the agreement ACTIVE and retries, which is exactly why
-      // this needs recording: nothing else in the system notices.
-      const subId = resource.id;
-      if (subId) {
-        await handleBillingFailure({
-          subId,
+      // PayPal could not take a renewal. It would leave the agreement ACTIVE and
+      // retry for weeks, so the shop ends the subscription at once: no payment, no
+      // priority queue (paymentEvents.endUnpaidSubscription). A retry of this event,
+      // or a later failure notice, finds it already ended and does nothing.
+      if (resource.id) {
+        await endUnpaid({
+          subscriptionId: resource.id,
           billingInfo: resource.billing_info,
           paypalStatus: (resource.status || 'ACTIVE').toUpperCase(),
-          source: 'webhook',
-          emailPlayer: true
+          source: 'webhook'
         });
       }
       break;
@@ -4859,6 +4403,8 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
 
 module.exports = {
   router, webhookHandler, registerPayPalWebhooks, requireAdmin, healMissingDiscordRoles,
-  // Exposed for tools/ and tests; not routes.
-  pqSelfServiceInfo, purchaseNextSteps, getOrderWithContext, linkDiscordAccount, discordOAuthConfigured
+  // Exposed for tools/ and tests; not routes. endUnpaidSubscription is how the daily
+  // PayPal check ends a failing subscription (server.js hands it to tools/reconcile.js).
+  purchaseNextSteps, getOrderWithContext, linkDiscordAccount, discordOAuthConfigured,
+  endUnpaidSubscription: endUnpaid
 };

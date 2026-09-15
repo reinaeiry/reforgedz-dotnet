@@ -250,6 +250,126 @@ function previewOf(out) {
   };
 }
 
+// ---- Subscriptions still failing at PayPal ------------------------------------------------
+// The safety net for a lost BILLING.SUBSCRIPTION.PAYMENT.FAILED webhook. Every
+// subscription the shop believes is live (paymentEvents.billingRescanTargets) is
+// looked up at PayPal, and each ACTIVE agreement with failed payments is ended the
+// way the webhook ends one: end is paymentEvents.endUnpaidSubscription as
+// routes/shop.js wires it, which leaves alone an agreement that never paid or that
+// the shop already ended. The daily run and the staff billing rescan both use this.
+//
+// It fails closed. If any lookup failed, nothing is ended: an agreement that could
+// not be asked about looks exactly like one that is fine, and a run that acted on
+// the ones that answered would report success while missing the rest. A mode with
+// no PayPal credentials (sandbox, usually) is skipped rather than counted as a
+// failure. Sequential with a short pause, to stay well under PayPal's rate limits.
+const FAILING_PAUSE_MS = 200;
+
+async function endFailingSubscriptions({ db, paypal, end = null, now = nowUnix(), dryRun = false, source = 'reconcile', logger = console, pauseMs = FAILING_PAUSE_MS } = {}) {
+  if (!db) throw new Error('endFailingSubscriptions needs the database handle');
+  if (!paypal) throw new Error('endFailingSubscriptions needs the PayPal client');
+  const out = { ranAt: now, dryRun: !!dryRun, ok: false, error: null, checked: 0, skipped: 0, failing: [], notFailing: [], lookupErrors: [], ended: [] };
+  let targets;
+  try {
+    targets = paymentEvents.billingRescanTargets(db);
+  } catch (e) {
+    out.error = `database: ${errorText(e)}`;
+    logger.error(`[reconcile] could not list subscriptions to check, so none was ended: ${out.error}`);
+    return out;
+  }
+  for (const t of targets) {
+    const testMode = !!t.test_mode;
+    if (typeof paypal.isConfigured === 'function' && !paypal.isConfigured(testMode)) { out.skipped += 1; continue; }
+    if (out.checked && pauseMs > 0) await new Promise(r => setTimeout(r, pauseMs));
+    out.checked += 1;
+    let sub;
+    try {
+      sub = await paypal.getSubscription(testMode, t.sub_id);
+    } catch (e) {
+      out.lookupErrors.push({ subscriptionId: t.sub_id, error: errorText(e) });
+      continue;
+    }
+    const status = String((sub && sub.status) || '').toUpperCase();
+    const billingInfo = (sub && sub.billing_info) || {};
+    const failedCount = Number(billingInfo.failed_payments_count) || 0;
+    if (status === 'ACTIVE' && failedCount > 0) out.failing.push({ subscriptionId: t.sub_id, testMode, billingInfo, failedCount });
+    else out.notFailing.push({ subscriptionId: t.sub_id, status: status || null });
+  }
+  if (out.lookupErrors.length) {
+    out.error = `${out.lookupErrors.length} of ${out.checked} PayPal subscription lookups failed`;
+    logger.error(`[reconcile] ${out.error}, so no failing subscription was ended: ${out.lookupErrors.map(x => x.subscriptionId).join(', ')}`);
+    return out;
+  }
+  out.ok = true;
+  if (dryRun || typeof end !== 'function') return out;
+  for (const f of out.failing) {
+    try {
+      const r = await end({ subscriptionId: f.subscriptionId, billingInfo: f.billingInfo, paypalStatus: 'ACTIVE', testMode: f.testMode, source, now });
+      if (r && r.action === 'ended') out.ended.push(f.subscriptionId);
+    } catch (e) {
+      logger.error(`[reconcile] ending failing subscription ${f.subscriptionId} threw: ${errorText(e)}`);
+    }
+  }
+  if (out.failing.length) {
+    logger.log(`[reconcile] ${out.failing.length} ACTIVE PayPal subscription(s) with failed payments, ${out.ended.length} ended now (the rest were already ended or never paid)`);
+  }
+  return out;
+}
+
+// ---- Subscriptions the shop ended that PayPal may still bill -----------------------------
+// When the shop ends a subscription (payment not received, no slot) it cancels the
+// agreement at PayPal there and then. If PayPal refused or did not answer, the agreement
+// can still take payments. So each daily run looks up every subscription the shop ended
+// that way recently (paymentEvents.shopEndedRecheckTargets) and cancels any PayPal still
+// has ACTIVE or SUSPENDED, marked as the shop's own so PayPal's CANCELLED notice stays
+// quiet. Nothing is posted: staff had the card when it ended, and any payment that
+// still arrives is refunded when it does (paymentEvents.refuseSale).
+async function recheckShopEndedCancels({ db, paypal, now = nowUnix(), logger = console, pauseMs = FAILING_PAUSE_MS } = {}) {
+  if (!db) throw new Error('recheckShopEndedCancels needs the database handle');
+  if (!paypal) throw new Error('recheckShopEndedCancels needs the PayPal client');
+  const out = { ranAt: now, error: null, checked: 0, skipped: 0, cancelled: [], stillOpen: [], lookupErrors: [] };
+  let targets;
+  try {
+    targets = paymentEvents.shopEndedRecheckTargets(db, now);
+  } catch (e) {
+    out.error = `database: ${errorText(e)}`;
+    logger.error(`[reconcile] could not list the subscriptions the shop ended, so none was checked: ${out.error}`);
+    return out;
+  }
+  for (const t of targets) {
+    const testMode = !!t.test_mode;
+    if (typeof paypal.isConfigured === 'function' && !paypal.isConfigured(testMode)) { out.skipped += 1; continue; }
+    if (out.checked && pauseMs > 0) await new Promise(r => setTimeout(r, pauseMs));
+    out.checked += 1;
+    let status;
+    try {
+      const sub = await paypal.getSubscription(testMode, t.sub_id);
+      status = String((sub && sub.status) || '').toUpperCase();
+    } catch (e) {
+      out.lookupErrors.push({ subscriptionId: t.sub_id, error: errorText(e) });
+      continue;
+    }
+    if (status !== 'ACTIVE' && status !== 'SUSPENDED') continue;
+    const unpaid = t.reason === 'unpaid';
+    const cancel = await paymentEvents.cancelAtPayPal({
+      db, paypal, testMode, subscriptionId: t.sub_id,
+      reason: unpaid ? paymentEvents.UNPAID_CANCEL_REASON : paymentEvents.NO_SLOT_CANCEL_REASON,
+      source: unpaid ? 'unpaid' : 'no_slot', now
+    });
+    if (paymentEvents.billingStopped(cancel)) {
+      out.cancelled.push(t.sub_id);
+      logger.log(`[reconcile] ${t.sub_id} was ended by the shop but still ${status} at PayPal; cancelled now`);
+    } else {
+      out.stillOpen.push({ subscriptionId: t.sub_id, outcome: cancel.outcome });
+      logger.error(`[reconcile] ${t.sub_id} was ended by the shop but is still ${status} at PayPal, and the cancel ${cancel.outcome === 'unknown' ? 'got no answer' : 'was refused'}${cancel.error ? ` (${cancel.error})` : ''}: cancel it in PayPal`);
+    }
+  }
+  if (out.lookupErrors.length) {
+    logger.error(`[reconcile] ${out.lookupErrors.length} lookup(s) of subscriptions the shop ended failed; the next run asks again: ${out.lookupErrors.map(x => x.subscriptionId).join(', ')}`);
+  }
+  return out;
+}
+
 // The last scheduled run in this process, for the health card. Previews do not count.
 let lastRun = null;
 function lastReconcileRun() { return lastRun; }
@@ -262,15 +382,44 @@ function summaryOf(out) {
   };
 }
 
+function failingSummaryOf(f) {
+  return { ok: !!f.ok, error: f.error || null, checked: f.checked || 0, failing: (f.failing || []).length, ended: (f.ended || []).length };
+}
+
+// How the daily run ends a failing subscription: routes/shop.js's
+// endUnpaidSubscription, handed in by server.js. Without it only payments are checked.
+let endUnpaid = null;
+
 async function runScheduled() {
-  const out = await runReconcile({ db: require('../db'), paypal: require('../paypal') });
+  const db = require('../db');
+  const paypal = require('../paypal');
+  const out = await runReconcile({ db, paypal });
   lastRun = summaryOf(out);
   if (out.skipped) console.log(`[reconcile] ${out.skipped}, so no payment was checked`);
+  if (endUnpaid && !out.skipped) {
+    let failing;
+    try {
+      failing = await endFailingSubscriptions({ db, paypal, end: endUnpaid });
+    } catch (e) {
+      failing = { ok: false, error: errorText(e) };
+      console.error('[reconcile] failing subscription check threw:', failing.error);
+    }
+    lastRun = { ...lastRun, failing: failingSummaryOf(failing) };
+  }
+  if (!out.skipped) {
+    try {
+      const re = await recheckShopEndedCancels({ db, paypal });
+      lastRun = { ...lastRun, recheck: { checked: re.checked, cancelled: re.cancelled.length, stillOpen: re.stillOpen.length } };
+    } catch (e) {
+      console.error('[reconcile] recheck of subscriptions the shop ended threw:', errorText(e));
+    }
+  }
   return out;
 }
 
 let scheduled = false;
-function scheduleDailyReconcile() {
+function scheduleDailyReconcile({ endUnpaid: ender = null } = {}) {
+  if (typeof ender === 'function') endUnpaid = ender;
   if (scheduled) return;
   scheduled = true;
   if (reconcileOff()) {
@@ -289,5 +438,6 @@ function scheduleDailyReconcile() {
 
 module.exports = {
   runReconcile, scheduleDailyReconcile, lastReconcileRun, reconcileOff, nextRunAt, previewOf,
+  endFailingSubscriptions, recheckShopEndedCancels, FAILING_PAUSE_MS,
   isIncomingPayment, isShopPayment, paymentOf, LOOKBACK_S, SETTLE_S, PAGE_SIZE, MAX_PAGES
 };

@@ -16,6 +16,7 @@
 // (test/reminders.test.js).
 const { SERVER_LABELS, SELLABLE_SERVER_IDS } = require('../gameServers');
 const { DEFAULT_PERSONA } = require('../webAuth');
+const { livePqOrderSql } = require('../pqEntitlement');
 
 const DAILY_UTC = { hour: 15, minute: 0 };
 const HOUR_S = 3600;
@@ -63,35 +64,24 @@ const DUE_SQL = `
   ORDER BY o.effective_until ASC, o.id ASC
 `;
 
-// A failing renewal is its own conversation: PayPal is retrying and the player
-// has had the payment-failed email, so "ends soon, buy again" would contradict it.
-const OPEN_ISSUE_SQL = `
-  SELECT 1 FROM subscription_billing_issues
-  WHERE paypal_subscription_id = ? AND resolved_at IS NULL
-  LIMIT 1
-`;
-
 // Whether the same account keeps queue priority on that server anyway, through
-// another order: a subscription still billing, or any order whose period runs
-// past this one's end (a lifetime one-time purchase included). Test-mode orders
-// count here because the game-server sync counts them too. A subscription not
-// tied to a server covers every server; a one-server order does not cover an
+// another order: one that holds priority queue now by the one rule
+// (pqEntitlement.js, so no sandbox order and no order without an end date) and
+// either still bills, so it renews, or is paid past this one's end. A subscription
+// not tied to a server covers every server; a one-server order does not cover an
 // order for every server.
 const STILL_COVERED_SQL = `
   SELECT 1 FROM orders o2
   JOIN products p2 ON p2.id = o2.product_id
-  WHERE o2.steam_id = ?
-    AND o2.id != ?
-    AND o2.status = 'completed'
-    AND p2.grants_priority_queue = 1
-    AND (? IS NULL OR o2.paypal_subscription_id IS NULL OR o2.paypal_subscription_id != ?)
-    AND (COALESCE(p2.server_specific, 0) = 0 OR (? = 1 AND o2.server_id = ?))
+  WHERE o2.steam_id = @steamId
+    AND o2.id != @orderId
+    AND (@sub IS NULL OR o2.paypal_subscription_id IS NULL OR o2.paypal_subscription_id != @sub)
+    AND (COALESCE(p2.server_specific, 0) = 0 OR (@specific = 1 AND o2.server_id = @serverId))
+    AND ${livePqOrderSql('o2', 'p2')}
     AND (
       (o2.paypal_subscription_id IS NOT NULL
-        AND o2.subscription_cancelled_at IS NULL AND o2.subscription_ended_reason IS NULL
-        AND (o2.effective_until IS NULL OR o2.effective_until > ?))
-      OR o2.effective_until IS NULL
-      OR o2.effective_until > ?
+        AND o2.subscription_cancelled_at IS NULL AND o2.subscription_ended_reason IS NULL)
+      OR o2.effective_until > @endsAt
     )
   LIMIT 1
 `;
@@ -152,14 +142,13 @@ async function runExpiryReminders({ db, now = Math.floor(Date.now() / 1000), sen
   const out = {
     now, windowStart: from, windowEnd: to, dryRun: !!dryRun,
     due: 0, sent: 0, failed: 0,
-    counts: { alreadySent: 0, billingIssue: 0, stillCovered: 0, noEmail: 0, overCap: 0 },
+    counts: { alreadySent: 0, stillCovered: 0, noEmail: 0, overCap: 0 },
     items: [], skipped: []
   };
 
   const rows = db.prepare(DUE_SQL).all(from, to);
   out.due = rows.length;
   const sentBefore = db.prepare('SELECT 1 FROM reminder_sent WHERE order_id = ? AND effective_until = ?');
-  const openIssue = db.prepare(OPEN_ISSUE_SQL);
   const stillCovered = db.prepare(STILL_COVERED_SQL);
   const claim = db.prepare('INSERT OR IGNORE INTO reminder_sent (order_id, effective_until, sent_at) VALUES (?, ?, ?)');
 
@@ -170,10 +159,11 @@ async function runExpiryReminders({ db, now = Math.floor(Date.now() / 1000), sen
 
   for (const row of rows) {
     if (sentBefore.get(row.id, row.effective_until)) { skip(row, 'alreadySent'); continue; }
-    if (row.paypal_subscription_id && openIssue.get(row.paypal_subscription_id)) { skip(row, 'billingIssue'); continue; }
-    const sub = row.paypal_subscription_id || null;
-    const specific = row.server_specific ? 1 : 0;
-    if (stillCovered.get(row.steam_id, row.id, sub, sub, specific, row.server_id, now, row.effective_until)) {
+    const covered = stillCovered.get({
+      steamId: row.steam_id, orderId: row.id, sub: row.paypal_subscription_id || null,
+      specific: row.server_specific ? 1 : 0, serverId: row.server_id, now, endsAt: row.effective_until
+    });
+    if (covered) {
       skip(row, 'stillCovered'); continue;
     }
     const email = payerEmailFor(db, row);
@@ -216,7 +206,7 @@ async function runExpiryReminders({ db, now = Math.floor(Date.now() / 1000), sen
 
   if (!dryRun) {
     const c = out.counts;
-    const line = `[reminders] priority queue ending: ${out.due} due, ${out.sent} sent, ${out.failed} failed; skipped ${c.alreadySent} already sent, ${c.billingIssue} billing issue, ${c.stillCovered} still covered, ${c.noEmail} no email, ${c.overCap} over the cap of ${max}`;
+    const line = `[reminders] priority queue ending: ${out.due} due, ${out.sent} sent, ${out.failed} failed; skipped ${c.alreadySent} already sent, ${c.stillCovered} still covered, ${c.noEmail} no email, ${c.overCap} over the cap of ${max}`;
     if (out.failed || c.overCap) console.error(line);
     else console.log(line);
   }

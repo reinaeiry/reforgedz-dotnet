@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { Client } = require('ssh2');
 const db = require('./db');
+const pqEntitlement = require('./pqEntitlement');
 // listServers() = servers the shop syncs to (eu3 deliberately excluded).
 // listAllServers() = every reachable server, used by the save inspector so a
 // server retired from sale can still have its saves read.
@@ -77,14 +78,22 @@ function sshRun(conn, command, timeoutMs = 30000) {
   });
 }
 
-// Entries written to each server's purchases.json. Expired entitlements are
-// excluded: the game-side mod reads this file, so a lapsed subscription left in
-// it keeps granting its perk forever, and a former buyer who has since been made
-// a GM ends up listed as both. Lifetime purchases (effective_until NULL) stay.
-// Mirrors the filter used by buildPriorityQueueGuidsPerServer below, which the
-// game.admins sync has always applied - only this file was missing it.
-function buildPerServerPurchaseBuckets() {
-  const rows = db.prepare(`
+const nowUnix = () => Math.floor(Date.now() / 1000);
+// Logs name an in-game ID by its first characters only.
+const shortGuid = (g) => `${String(g || '').slice(0, 8)}...`;
+
+// Entries written to each server's purchases.json.
+//
+// Priority queue entries come from the one rule in pqEntitlement.js, the same set
+// the game.admins write below uses. The mod reads these entries to tell a priority
+// queue buyer from a real admin, so an ID in game.admins without its entry here
+// would count as a full admin: the two must never disagree.
+//
+// Every other product (Backer, Supporter) keeps its own rule: an entry while its
+// order is completed and unexpired, and a lifetime purchase (effective_until NULL)
+// stays. Expired entries are left out, or a lapsed perk would last forever.
+function buildPerServerPurchaseBuckets(now = nowUnix()) {
+  const otherRows = db.prepare(`
     SELECT
       COALESCE(u.gamertag, u.persona) AS name,
       u.bi_uid AS guid,
@@ -95,54 +104,22 @@ function buildPerServerPurchaseBuckets() {
     JOIN users u ON o.steam_id = u.steam_id
     JOIN products p ON o.product_id = p.id
     WHERE o.status = 'completed' AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
-      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-  `).all();
-
-  // Manual priority-queue grants need to land in purchases.json too — otherwise
-  // the game-side mod (which reads purchases.json) won't know about them.
-  // Use the canonical title of an active priority-queue-granting product so it
-  // matches whatever the mod expects; fall back to the literal "Priority Queue".
-  const pqProduct = db.prepare(`
-    SELECT title FROM products WHERE grants_priority_queue = 1 AND active = 1 ORDER BY created_at DESC LIMIT 1
-  `).get();
-  const pqItemTitle = (pqProduct && pqProduct.title) || 'Priority Queue';
-
-  const manualGrants = db.prepare(`SELECT guid, server_id, display_name, removed FROM priority_queue_grants WHERE removed = 1 OR expires_at IS NULL OR expires_at > unixepoch()`).all();
+      AND p.grants_priority_queue = 0
+      AND (o.effective_until IS NULL OR o.effective_until > @now)
+  `).all({ now });
+  const pqRows = pqEntitlement.livePqRows(db, now);
 
   const buckets = Object.fromEntries(SERVER_IDS.map(id => [id, []]));
-
-  for (const r of rows) {
+  for (const r of [...otherRows, ...pqRows]) {
     const entry = { name: r.name, guid: r.guid, item: r.item };
-    if (!r.server_specific) {
-      for (const id of SERVER_IDS) buckets[id].push(entry);
-    } else if (r.server_id && buckets[r.server_id]) {
-      buckets[r.server_id].push(entry);
-    }
+    for (const id of pqEntitlement.coveredServers(r, SERVER_IDS)) buckets[id].push(entry);
   }
 
-  const denied = new Set();   // "guid|server" — hidden by a deny row (removed=1)
-  for (const g of manualGrants) {
-    if (!g.guid || !buckets[g.server_id]) continue;
-    if (g.removed) { denied.add(`${g.guid}|${g.server_id}`); continue; }
-    buckets[g.server_id].push({
-      name: g.display_name || '',
-      guid: g.guid,
-      item: pqItemTitle
-    });
-  }
-
-  // Dedupe per bucket on (guid|item) — keeps the first occurrence, so a
-  // purchase entry's `name` (which comes from the user's persona/gamertag)
-  // wins over a manual grant's display_name if both exist for the same guid.
-  //
-  // A deny row means "no priority queue on THIS server" and nothing more, so it
-  // only hides the priority-queue entry. It used to hide every entry for that
-  // (guid, server) — a player whose queue was moved from EU2 to EU1 lost their
-  // lifetime Supporter entry on EU2 along with it.
+  // One entry per (guid, item) on a server: an ID with two live orders for the same
+  // product is listed once.
   for (const id of SERVER_IDS) {
     const seen = new Set();
     buckets[id] = buckets[id].filter(e => {
-      if (e.item === pqItemTitle && denied.has(`${e.guid}|${id}`)) return false;
       const k = `${e.guid}|${e.item}`;
       if (seen.has(k)) return false;
       seen.add(k);
@@ -153,44 +130,10 @@ function buildPerServerPurchaseBuckets() {
   return buckets;
 }
 
-// Build the set of GUIDs that should sit in each server's game.admins
-// array as a result of priority-queue entitlements (purchases or manual grants).
-function buildPriorityQueueGuidsPerServer() {
-  const orderRows = db.prepare(`
-    SELECT
-      u.bi_uid AS guid,
-      p.server_specific,
-      o.server_id
-    FROM orders o
-    JOIN users u ON o.steam_id = u.steam_id
-    JOIN products p ON o.product_id = p.id
-    WHERE o.status = 'completed'
-      AND p.grants_priority_queue = 1
-      AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
-      AND (o.effective_until IS NULL OR o.effective_until > unixepoch())
-  `).all();
-
-  const manualRows = db.prepare(`SELECT guid, server_id, removed FROM priority_queue_grants WHERE removed = 1 OR expires_at IS NULL OR expires_at > unixepoch()`).all();
-
-  const out = Object.fromEntries(SERVER_IDS.map(id => [id, new Set()]));
-
-  for (const r of orderRows) {
-    if (!r.server_specific) {
-      for (const id of SERVER_IDS) out[id].add(r.guid);
-    } else if (r.server_id && out[r.server_id]) {
-      out[r.server_id].add(r.guid);
-    }
-  }
-
-  // Manual layer: grants add, denies (removed=1) remove — so an admin can toggle a
-  // purchase-driven server off, exactly like a manual grant.
-  for (const r of manualRows) {
-    if (!out[r.server_id]) continue;
-    if (r.removed) out[r.server_id].delete(r.guid);
-    else out[r.server_id].add(r.guid);
-  }
-
-  return out;
+// The in-game IDs that should sit in each server's game.admins for priority queue:
+// pqEntitlement.pqGuidsPerServer, the one rule.
+function buildPriorityQueueGuidsPerServer(now = nowUnix()) {
+  return pqEntitlement.pqGuidsPerServer(db, now, SERVER_IDS);
 }
 
 function buildWritePurchasesCmd(server, json) {
@@ -264,63 +207,221 @@ async function casWriteConfig(conn, server, configObj, expectedHash) {
   return 'err';
 }
 
-// Staff whose game.admins entry the shop must never remove, whatever it once
-// claimed. Discord staff roles (Founder, Head/Senior/Global Admin, Systems Dev,
-// the six Gamemaster roles) as the ticket bot's panels name them; overridable
-// with STAFF_DISCORD_ROLE_IDS. Shop admins (ADMIN_STEAM_IDS) are staff too.
-const DEFAULT_STAFF_ROLE_IDS = [
-  '1360329397415972926', '1538968143131578408', '1538972242942107738', '1538973632288530483', '1518411617187135518',
-  '1497062984848248983', '1497064031259984033', '1499237354324492378',
-  '1497061513175765003', '1497062741125627935', '1499237259109601363'
-];
-function staffRoleIds() {
-  const env = (process.env.STAFF_DISCORD_ROLE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
-  return new Set(env.length ? env : DEFAULT_STAFF_ROLE_IDS);
+// ---- Staff, per server -------------------------------------------------------------
+// When the priority queue behind a shop-owned game.admins entry lapses, the entry is
+// removed, unless the player is staff ON THAT SERVER: then the shop only lets go of
+// its claim and the entry stays, as the game master entry it really is.
+//
+// Staff means a shop admin (ADMIN_STEAM_IDS, or the admin role), or a player holding
+// a Discord staff role that covers the server. A role covers servers, not the whole
+// network: a Gamemaster role is staff on its own server only, so a Gamemaster's
+// lapsed priority queue on another server is removed like anyone else's. Otherwise a
+// staff member's unpaid subscription on a server they do not moderate would become
+// free queue priority for good.
+//
+// The role ids are the ticket bot's staff roles. Founder, Head Admin, Senior Admin,
+// Global Admin and Systems Dev moderate every server. The Gamemaster roles are one
+// per server: EU3 is the EU dev server now, which the shop never syncs, and NA3
+// names no server the shop syncs, so neither covers a server here.
+//
+// STAFF_DISCORD_ROLE_IDS replaces the whole map: comma-separated role ids, each
+// optionally followed by a colon and the servers it covers joined with +, for
+// example 111:*,222:eu1,333:na1+na2. A bare role id covers every server.
+const DEFAULT_STAFF_ROLE_SERVERS = Object.freeze({
+  '1360329397415972926': '*',          // Founder
+  '1538968143131578408': '*',          // Head Admin
+  '1538972242942107738': '*',          // Senior Admin
+  '1538973632288530483': '*',          // Global Admin
+  '1518411617187135518': '*',          // Systems Dev
+  '1497061513175765003': ['eu1'],      // Gamemaster EU1
+  '1497062741125627935': ['eu2'],      // Gamemaster EU2
+  '1499237259109601363': ['eu3'],      // Gamemaster EU3 (the EU dev server, never synced)
+  '1497062984848248983': ['na1'],      // Gamemaster NA1
+  '1497064031259984033': ['na2'],      // Gamemaster NA2
+  '1499237354324492378': []            // Gamemaster NA3 (no server the shop syncs)
+});
+const DEFAULT_STAFF_ROLE_IDS = Object.freeze(Object.keys(DEFAULT_STAFF_ROLE_SERVERS));
+
+// Map of role id -> '*' (every server) or a Set of server ids.
+function staffRoleServers(env = process.env) {
+  const raw = String((env && env.STAFF_DISCORD_ROLE_IDS) || '').trim();
+  const out = new Map();
+  if (!raw) {
+    for (const [id, servers] of Object.entries(DEFAULT_STAFF_ROLE_SERVERS)) out.set(id, servers === '*' ? '*' : new Set(servers));
+    return out;
+  }
+  for (const part of raw.split(',').map(s => s.trim()).filter(Boolean)) {
+    const colon = part.indexOf(':');
+    const id = (colon < 0 ? part : part.slice(0, colon)).trim();
+    if (!/^\d{15,25}$/.test(id)) continue;
+    const servers = colon < 0 ? '' : part.slice(colon + 1).trim();
+    out.set(id, !servers || servers === '*'
+      ? '*'
+      : new Set(servers.split('+').map(s => s.trim().toLowerCase()).filter(Boolean)));
+  }
+  return out;
 }
 
-// Which of these GUIDs belong to staff. Only ever called for the handful the
-// sync is about to strip, so the Discord lookups stay cheap. Returns a Map of
-// guid -> reason; a guid missing from it may be stripped.
-async function protectedStaffGuids(guids) {
+// The first held role that covers serverId, or null.
+function staffRoleCovering(heldRoleIds, serverId, roleServers = staffRoleServers()) {
+  for (const raw of heldRoleIds || []) {
+    const cover = roleServers.get(String(raw));
+    if (cover === '*' || (cover && cover.has(serverId))) return String(raw);
+  }
+  return null;
+}
+
+// Whether one account is staff on serverId, from what is known about it. Pure.
+//   user          { steam_id, role, discord_id, discord_linked_via, persona }
+//   heldRoleIds   the member's Discord roles, or null when Discord gave no answer that settles it
+//   notMember     Discord said the account is not in the ReforgedZ Discord
+//   lookupError   the Discord lookup threw
+// Returns { kind: 'staff', why } (release the claim), { kind: 'unknown', why } (keep
+// the claim and ask again next sync), or null (not staff here: strip as a lapse).
+//
+// A Discord role counts only on a Discord account the player linked by signing in with
+// Discord. A pasted Discord user id could be anyone's, so the roles on it prove nothing
+// about the player; links made before the shop recorded how they were made count the
+// same way. A game master stripped for that reason is added back on the GM tab.
+function staffProtection({ user, heldRoleIds = null, notMember = false, lookupError = null, serverId, adminSteamIds = new Set(), roleServers = staffRoleServers() }) {
+  const u = user || {};
+  const name = u.persona || u.steam_id || 'unknown account';
+  if (u.role === 'admin' || adminSteamIds.has(u.steam_id)) return { kind: 'staff', why: `shop admin ${name}` };
+  if (!u.discord_id || u.discord_linked_via !== 'oauth') return null;
+  // Not in the ReforgedZ Discord, so no staff role.
+  if (notMember) return null;
+  // Cannot tell: keep them for now (protectedStaffGuids bounds how long). A lookup
+  // hiccup must not cost a game master their access.
+  if (lookupError) return { kind: 'unknown', why: `${name}: Discord lookup failed (${lookupError}), kept` };
+  if (heldRoleIds === null) return { kind: 'unknown', why: `${name}: Discord gave no answer that settles it, kept for this sync` };
+  const hit = staffRoleCovering(heldRoleIds, serverId, roleServers);
+  return hit ? { kind: 'staff', why: `${name} holds staff role ${hit}, which covers ${serverId}` } : null;
+}
+
+// How long a lapsed claim is kept while Discord gives no answer about the player. Past
+// this the entry is stripped like any other lapse: an answer that never comes must not
+// keep an unpaid entry for good. Counted per server and ID, in memory, so a restart of
+// the shop starts the count again.
+const UNKNOWN_KEEP_S = 24 * 3600;
+const unknownSince = new Map();
+
+// Pure: whether a claim kept on an unknown answer since `since` has run out at `now`.
+function unknownExpired(since, now, keepS = UNKNOWN_KEEP_S) {
+  return Number.isFinite(since) && Number.isFinite(now) && now - since >= keepS;
+}
+
+// Which of these GUIDs belong to staff on serverId. Only ever called for the handful
+// the sync is about to strip, so the Discord lookups stay cheap. Only accounts whose
+// own priority queue orders cover serverId are asked about: the entry is there for
+// them, and another account that merely carries the same in-game ID says nothing about
+// it. Returns a Map of guid -> { kind, why }; a guid missing from it may be stripped.
+async function protectedStaffGuids(guids, serverId, now = nowUnix()) {
   const out = new Map();
+  for (const key of [...unknownSince.keys()]) {
+    if (key.startsWith(`${serverId}|`) && !guids.includes(key.slice(serverId.length + 1))) unknownSince.delete(key);
+  }
   if (!guids.length) return out;
   const adminSteamIds = new Set((process.env.ADMIN_STEAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
-  const staff = staffRoleIds();
-  const rows = db.prepare(`SELECT bi_uid, steam_id, role, discord_id, persona FROM users WHERE bi_uid IN (${guids.map(() => '?').join(',')})`).all(...guids);
+  const roleServers = staffRoleServers();
+  const rows = db.prepare(`
+    SELECT u.bi_uid, u.steam_id, u.role, u.discord_id, u.discord_linked_via, u.persona
+    FROM users u
+    WHERE u.bi_uid IN (${guids.map(() => '?').join(',')})
+      AND EXISTS (
+        SELECT 1 FROM orders o JOIN products p ON p.id = o.product_id
+        WHERE o.steam_id = u.steam_id AND p.grants_priority_queue = 1
+          AND o.status IN ('completed', 'refunded')
+          AND (p.server_specific = 0 OR o.server_id = ?))
+  `).all(...guids, serverId);
   const seen = new Set(rows.map(r => r.bi_uid));
   let discord = null;
   for (const r of rows) {
-    if (r.role === 'admin' || adminSteamIds.has(r.steam_id)) { out.set(r.bi_uid, { kind: 'staff', why: `shop admin ${r.persona}` }); continue; }
-    if (!r.discord_id) {
+    let heldRoleIds = null;
+    let notMember = false;
+    let lookupError = null;
+    const isShopAdmin = r.role === 'admin' || adminSteamIds.has(r.steam_id);
+    if (!isShopAdmin && !r.discord_id) {
       // Staff status is only checkable through Discord, so an unlinked account
       // cannot be protected. Say so loudly rather than letting the strip look
       // like an ordinary lapse.
-      console.warn(`[admins-sync] ${r.bi_uid} (${r.persona}) is about to be stripped and has no Discord linked, so staff status could not be checked`);
+      console.warn(`[admins-sync] ${serverId} ${shortGuid(r.bi_uid)} is about to be stripped and has no Discord linked, so staff status could not be checked`);
       continue;
     }
-    try {
-      discord = discord || require('./discord');
-      const held = await discord.getMemberRoleIds(r.discord_id);
-      if (held === null) {
-        // null means BOTH "not in the guild" and "could not ask" -- discord.js
-        // returns it for any non-ok response, and only 429 is retried, so a
-        // 500 or an expired token arrives here looking like an empty role
-        // list. Flattening it with `|| []` stripped a GM on every Discord
-        // hiccup, which is the exact harm this function exists to prevent.
-        out.set(r.bi_uid, { kind: 'unknown', why: `${r.persona}: Discord returned no member record, kept for this sync` });
-        continue;
+    if (!isShopAdmin && r.discord_linked_via !== 'oauth') {
+      console.warn(`[admins-sync] ${serverId} ${shortGuid(r.bi_uid)} is about to be stripped: its Discord link was not made by signing in with Discord, so it is not proof of a staff role. A game master is added back on the GM tab.`);
+      continue;
+    }
+    if (!isShopAdmin) {
+      try {
+        discord = discord || require('./discord');
+        const member = await discord.memberRoles(r.discord_id);
+        if (member.state === 'member') heldRoleIds = member.roles;
+        else if (member.state === 'not_member') notMember = true;
+        else lookupError = `HTTP ${member.status}`;
+      } catch (e) {
+        lookupError = e.message;
       }
-      const hit = held.find(id => staff.has(String(id)));
-      if (hit) out.set(r.bi_uid, { kind: 'staff', why: `${r.persona} holds staff role ${hit}` });
-    } catch (e) {
-      // Cannot tell: keep them. A lookup hiccup must not cost a GM their access.
-      out.set(r.bi_uid, { kind: 'unknown', why: `${r.persona}: Discord lookup failed (${e.message}), kept` });
+    }
+    let p = staffProtection({ user: r, heldRoleIds, notMember, lookupError, serverId, adminSteamIds, roleServers });
+    const key = `${serverId}|${r.bi_uid}`;
+    if (p && p.kind === 'unknown') {
+      if (!unknownSince.has(key)) unknownSince.set(key, now);
+      if (unknownExpired(unknownSince.get(key), now)) {
+        console.error(`[admins-sync] ${serverId} ${shortGuid(r.bi_uid)}: Discord has given no usable answer about this player for ${UNKNOWN_KEEP_S / 3600} hours, so the lapsed entry is stripped`);
+        p = null;
+      }
+    } else {
+      unknownSince.delete(key);
+    }
+    if (p) {
+      const prev = out.get(r.bi_uid);
+      if (!prev || prev.kind !== 'staff') out.set(r.bi_uid, p);
+      continue;
+    }
+    if (Array.isArray(heldRoleIds) && heldRoleIds.some(id => roleServers.has(String(id)))) {
+      console.log(`[admins-sync] ${serverId} ${shortGuid(r.bi_uid)} holds a staff role for other servers only, so the lapsed priority queue is stripped here`);
     }
   }
   for (const g of guids) {
-    if (!seen.has(g)) console.warn(`[admins-sync] ${g} is about to be stripped and matches no users row, so staff status could not be checked`);
+    if (!seen.has(g)) console.warn(`[admins-sync] ${serverId} ${shortGuid(g)} is about to be stripped and matches no account that bought priority queue for ${serverId}, so staff status was not checked`);
   }
   return out;
+}
+
+// ---- The admin list's ceiling -----------------------------------------------------
+// The last guard on the size of a server's game.admins. Checkout, stock and the staff
+// move keep priority queue plus game masters under ADMIN_CEILING, but a game master
+// added on the admin page, or a payment booked while a server was full, can still
+// push a list over. The sync never removes a paid player or a game master to fit:
+// it posts one red card, and again only when the planned list grows or
+// CEILING_REPEAT_S later while it stays over.
+const CEILING_REPEAT_S = 12 * 3600;
+const ceilingAlerts = new Map();
+
+// Pure. prev is the last alert for this server ({ planned, at }) or null. Returns
+// whether to alert now, and the state to keep (null once back under the limit).
+function ceilingAlert(prev, { planned, ceiling, now }) {
+  if (!(planned > ceiling)) return { alert: false, next: null };
+  if (!prev || planned > prev.planned || now - prev.at >= CEILING_REPEAT_S) {
+    return { alert: true, next: { planned, at: now } };
+  }
+  return { alert: false, next: { planned, at: prev.at } };
+}
+
+function checkAdminCeiling(serverId, { planned, current, shopOwned, now = nowUnix(), ceiling = pqEntitlement.adminCeiling() }) {
+  const { alert, next } = ceilingAlert(ceilingAlerts.get(serverId) || null, { planned, ceiling, now });
+  if (next) ceilingAlerts.set(serverId, next); else ceilingAlerts.delete(serverId);
+  if (!alert) return false;
+  console.error(`[admins-sync] ${serverId} game.admins would hold ${planned} entries, over the limit of ${ceiling}; nothing removed, staff told`);
+  try {
+    const { sendCard } = require('./tools/lib/discordCard');
+    const cards = require('./paymentCards');
+    sendCard(() => cards.adminCeilingCard({ serverId, planned, ceiling, current, shopOwned, others: planned - shopOwned }))
+      .catch(e => console.error(`[admins-sync] ${serverId} ceiling card not sent: ${e.message}`));
+  } catch (e) {
+    console.error(`[admins-sync] ${serverId} ceiling card not sent: ${e.message}`);
+  }
+  return true;
 }
 
 // Work out the next game.admins for one server. Pure, so the preview endpoint
@@ -411,11 +512,19 @@ async function patchServerAdmins(conn, server, desiredGuids) {
         updated_at = excluded.updated_at
     `).run(server.id, nonShopAdminCount);
 
-    // Only the GUIDs about to be stripped need the staff check.
+    // Only the GUIDs about to be stripped need the staff check, and only for this server.
     const stripCandidates = [...previouslyOwned].filter(g => !desiredGuids.has(g) && currentAdmins.includes(g));
-    const protectedGuids = await protectedStaffGuids(stripCandidates);
+    const protectedGuids = await protectedStaffGuids(stripCandidates, server.id);
     const plan = planAdmins({ currentAdmins, previouslyOwned, desiredGuids, protectedGuids });
-    for (const [g, p] of protectedGuids) console.log(`[admins-sync] ${server.id} kept ${g} (${p.kind}): ${p.why}`);
+    for (const [g, p] of protectedGuids) console.log(`[admins-sync] ${server.id} kept ${shortGuid(g)} (${p.kind}): ${p.why}`);
+
+    // Over the ceiling is reported, never fixed by dropping someone. Checked before
+    // the no-op return, since a list can already be over with nothing to change.
+    checkAdminCeiling(server.id, {
+      planned: plan.newAdmins.length,
+      current: currentAdmins.length,
+      shopOwned: plan.newAdmins.filter(g => plan.newOwned.has(g)).length
+    });
 
     // No-op if nothing actually changed.
     const sameSet = plan.newAdmins.length === currentAdmins.length
@@ -452,8 +561,8 @@ async function patchServerAdmins(conn, server, desiredGuids) {
         updated_at = excluded.updated_at
     `).run(server.id, JSON.stringify([...plan.newOwned]));
 
-    for (const g of plan.strip) console.log(`[admins-sync] ${server.id} stripped ${g} (priority queue lapsed)`);
-    for (const g of plan.released) console.log(`[admins-sync] ${server.id} released claim on ${g}`);
+    for (const g of plan.strip) console.log(`[admins-sync] ${server.id} stripped ${shortGuid(g)} (priority queue lapsed)`);
+    for (const g of plan.released) console.log(`[admins-sync] ${server.id} released claim on ${shortGuid(g)}`);
     console.log(`[admins-sync] ${server.id} game.admins ${currentAdmins.length} -> ${plan.newAdmins.length} (+${plan.add.length} -${plan.strip.length}, shop-owned: ${plan.newOwned.size})`);
     return;
   }
@@ -470,6 +579,7 @@ async function previewAdminsSync() {
   const entryHost = servers.find(s => s.region === 'eu') || servers[0];
   if (!entryHost) throw new Error('No game servers configured');
   const pqGuids = buildPriorityQueueGuidsPerServer();
+  const ceiling = pqEntitlement.adminCeiling();
   const conn = await sshOpen(privateKey, entryHost.host, entryHost.port, entryHost.user);
   const out = [];
   try {
@@ -480,11 +590,14 @@ async function previewAdminsSync() {
       try { read = await readConfigWithHash(conn, server); } catch (e) { out.push({ server: server.id, error: e.message }); continue; }
       const currentAdmins = read && Array.isArray(read.config.game && read.config.game.admins) ? read.config.game.admins : [];
       const stripCandidates = [...previouslyOwned].filter(g => !desiredGuids.has(g) && currentAdmins.includes(g));
-      const protectedGuids = await protectedStaffGuids(stripCandidates);
+      const protectedGuids = await protectedStaffGuids(stripCandidates, server.id);
       const plan = planAdmins({ currentAdmins, previouslyOwned, desiredGuids, protectedGuids });
       out.push({
         server: server.id,
         currentAdmins: currentAdmins.length,
+        plannedAdmins: plan.newAdmins.length,
+        ceiling,
+        overCeiling: plan.newAdmins.length > ceiling,
         desired: desiredGuids.size,
         ownedBefore: previouslyOwned.size,
         ownedAfter: plan.newOwned.size,
@@ -1372,4 +1485,7 @@ module.exports = {
   // there is exactly one way the shop talks to a game host.
   sshOpen, sshRun, getPrivateKey, wrapForRegion, hostKeyFingerprint, PINNED_FINGERPRINTS, SSH_STRICT,
   buildPerServerPurchaseBuckets, planAdmins, previewAdminsSync, protectedStaffGuids,
+  // Pure pieces of the admins sync, for test/syncAdmins.test.js.
+  DEFAULT_STAFF_ROLE_SERVERS, DEFAULT_STAFF_ROLE_IDS, staffRoleServers, staffRoleCovering, staffProtection,
+  unknownExpired, UNKNOWN_KEEP_S, ceilingAlert, CEILING_REPEAT_S,
   syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };

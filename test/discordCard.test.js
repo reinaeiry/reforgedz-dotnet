@@ -268,14 +268,15 @@ test('no card built from realistic rows carries an email address or a full in-ga
     for (const event of Object.keys(cards.ORDER_EVENTS)) {
       specs.push(cards.orderEventCard(event, row, { accessUntil: UNTIL, nextCharge: UNTIL, fields: [{ name: 'Cancelled via', value: 'Cancelled by customer' }] }));
     }
-    specs.push(cards.billingFailureCard({ subId: 'I-TEST0000CARD1', ctx: row, failedCount: 2, outstandingCents: 3000, currency: 'USD', nextBillingAt: UNTIL, lastPaymentAt: UNTIL - 86400 * 30, source: 'webhook' }));
-    specs.push(cards.billingFailureCard({ subId: 'I-TEST0000CARD1', ctx: row, failedCount: 1, source: 'rescan' }));
+    specs.push(cards.unpaidEndedCard({ ctx: row, subscriptionId: 'I-TEST0000CARD1', cancel: { outcome: 'cancelled' }, failedCount: 2, outstandingCents: 3000, currency: 'USD', accessUntil: UNTIL, source: 'webhook' }));
+    specs.push(cards.unpaidEndedCard({ ctx: row, cancel: { outcome: 'failed', status: 422 }, failedCount: 1, source: 'reconcile' }));
+    specs.push(cards.refusedPaymentCard({ ctx: row, subscriptionId: 'I-TEST0000CARD1', saleId: '1JU08902781691411', amountCents: 1500, currency: 'USD', reason: 'no_slot', serverId: 'eu1', slot: { limit: 24, used: 24, reserved: 0 }, refund: { outcome: 'refunded', refundId: '5RF00000000000000', refundStatus: 'COMPLETED' }, cancel: { outcome: 'cancelled' } }));
+    specs.push(cards.refusedPaymentCard({ ctx: row, saleId: '1JU08902781691411', amountCents: 1500, reason: 'ended_unpaid', refund: { outcome: 'failed', status: 422 }, cancel: { outcome: 'already_ended' } }));
+    specs.push(cards.refusedPaymentCard({ ctx: row, saleId: '1JU08902781691411', amountCents: 1500, reason: 'revoked', refund: { outcome: 'refunded' }, cancel: { outcome: 'failed', status: 400 } }));
+    specs.push(cards.refusedActivationCard({ order: row, serverId: 'eu1', slot: { limit: 24, used: 24, reserved: 1 }, cancel: { outcome: 'cancelled' } }));
     specs.push(cards.customFlagCard({ orderId: row.id, order: { ...row, product_title: 'Custom Flag' }, customFields: { playerName: 'TestPlayer', inGameName: 'Nat', guid: 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D', discordId: '123456789012345678' }, imageName: '1757000000000-abcdef012345.png' }));
-    specs.push(...cards.leftoverBlockCards(row, {
-      cleared: [{ server_id: 'eu1', granted_by: '76561198000000009', granted_at: UNTIL - 86400 }],
-      kept: [{ server_id: 'eu2', reason: 'moved', granted_by: 'self:76561198000000001', granted_at: UNTIL - 86400 }]
-    }));
-    specs.push(cards.playerQueueMoveCard({ name: 'TestPlayer', accountId: row.steam_id, guid: row.bi_uid, from: ['eu2'], to: 'eu1', order: { ...row, title: 'Priority Queue' } }));
+    specs.push(cards.staffQueueMoveCard({ order: row, from: 'eu2', to: 'eu1', orderIds: [700, row.id], reason: 'Player asked in a ticket' }));
+    specs.push(cards.adminCeilingCard({ serverId: row.server_id || 'eu1', planned: 51, ceiling: 50, current: 50, shopOwned: 36, others: 15 }));
     specs.push(cards.revokedRenewalCard({ subId: 'I-TEST0000CARD1', saleId: '1JU08902781691411', orders: [{ id: 1, status: 'refunded', steam_id: row.steam_id, test_mode: 0 }], amountCents: 1500, currency: 'USD', context: row }));
     specs.push(cards.revokedRenewalCard({ subId: 'I-TEST0000CARD1', saleId: '1JU08902781691411', orders: [], amountCents: null }));
     specs.push(cards.renewalAfterRefundCard({ subId: 'I-TEST0000CARD1', saleId: '1JU08902781691411', refundedOrderId: 700, newOrderId: 721, original: row, amountCents: 1500 }));
@@ -338,11 +339,12 @@ test('order cards name the player, account, in-game ID and status in plain words
   assert.equal(webFields['In-game ID'], 'Not set yet');
   assert.equal(webFields.Subscription, undefined);
 
-  const billing = embedOf(dc.buildCard(cards.billingFailureCard({ subId: 'I-X', ctx: { ...STEAM_ROW, id: undefined }, failedCount: 1, outstandingCents: 1500 })));
+  const billing = embedOf(dc.buildCard(cards.unpaidEndedCard({ ctx: { ...STEAM_ROW, id: undefined }, cancel: { outcome: 'cancelled' }, failedCount: 1, outstandingCents: 1500, accessUntil: UNTIL, now: UNTIL - 86400 })));
   const bf = Object.fromEntries(billing.fields.map(x => [x.name, x.value]));
-  assert.equal(billing.footer.text, 'Order #721', 'getBillingIssueContext rows carry order_id');
-  assert.equal(bf['Next charge'], 'None scheduled');
+  assert.equal(billing.footer.text, 'Order #721', 'subscriptionContext rows carry order_id');
+  assert.equal(billing.title, 'Subscription ended, payment not received · Priority Queue · EU1 (Chernarus)');
   assert.equal(bf.Outstanding, '$15.00');
+  assert.equal(bf['PayPal subscription'], 'Cancelled at PayPal');
   assert.ok(!Object.keys(bf).some(k => /email/i.test(k)));
 
   assert.throws(() => cards.orderEventCard('order_teleported', STEAM_ROW), TypeError);

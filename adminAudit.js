@@ -43,10 +43,7 @@ function recordAdminAudit(db, { actor, action, target = null, before = null, aft
 // way the player's own box checks it, the all-zero placeholder is refused, and the
 // change is recorded with the reason staff gave.
 //
-// Two things it deliberately does not do:
-//  - Move priority_queue_grants to the new ID. Grants and blocks are keyed on the
-//    ID alone, with no owning account, and one ID can sit on more than one
-//    account, so moving them for one account could move another account's queue.
+// One thing it deliberately does not do:
 //  - Refuse an ID another account holds. A player with a Steam and a console account
 //    legitimately carries one ID on both. Staff are shown which accounts and must
 //    confirm. /refund refuses an ID found on more than one account, so saying yes

@@ -17,7 +17,6 @@ console.log = () => {};
 const db = require('../db');
 Object.assign(console, quiet);
 const guards = require('../pqGuards');
-const { SERVER_IDS } = require('../gameServers');
 
 test.after(() => {
   try { db.close(); } catch { /* already closed */ }
@@ -58,11 +57,9 @@ function order(steamId, productId, {
   `).run(steamId, productId, serverId, status, testMode, sub, until, cancelledAt, endedReason, NOW - DAY, completedAt).lastInsertRowid;
 }
 
-// A grant (removed 0) or a staff block (removed 1).
+// A retired staff grant (removed 0) or block (removed 1): the table is kept, and
+// nothing may count its rows.
 const addGrant = db.prepare('INSERT INTO priority_queue_grants (guid, server_id, removed, granted_by, granted_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)');
-const grantRows = (...guids) => db.prepare(
-  `SELECT guid, server_id, removed FROM priority_queue_grants WHERE guid IN (${guids.map(() => '?').join(',')}) ORDER BY guid, server_id`
-).all(...guids);
 
 const own = (steamId, extra = {}) => guards.ownLiveSubscription(db, { steamId, serverId: 'eu1', testMode: false, now: NOW, ...extra });
 
@@ -87,7 +84,7 @@ test('a live auto-renewing subscription on the same server blocks, and reports w
   assert.equal(row.id, id);
   assert.equal(row.effective_until, NOW + 5 * DAY);
   assert.equal(row.server_id, 'eu1');
-  assert.equal(row.payment_problem, 0);
+  assert.equal(Object.prototype.hasOwnProperty.call(row, 'payment_problem'), false, 'a failing renewal ends the subscription, so there is no payment problem to report');
 });
 
 test('cancelled, ended, expired, other-mode and other-server subscriptions do not block', () => {
@@ -155,7 +152,7 @@ test('a subscription not tied to a server covers every server; just activated (n
   assert.equal(row.effective_until, null);
 });
 
-test('no end date counts only just after activation; an excluded subscription is left out; an open billing issue is marked', () => {
+test('no end date counts only just after activation; an excluded subscription is left out', () => {
   const stale = user();
   order(stale, PQ_EU, { until: null, completedAt: NOW - guards.ACTIVATION_GAP_S - 60 });
   assert.equal(own(stale), null, 'a date lookup that never came back: the account page calls it lapsed and offers Start again');
@@ -168,17 +165,9 @@ test('no end date counts only just after activation; an excluded subscription is
   order(excluded, PQ_EU, { sub: 'I-EXCL' });
   assert.equal(own(excluded, { excludeSubscriptionId: 'I-EXCL' }), null);
   assert.ok(own(excluded, { excludeSubscriptionId: 'I-OTHER' }));
-
-  const failing = user();
-  order(failing, PQ_EU, { sub: 'I-FAILING', until: NOW + 2 * DAY });
-  db.prepare('INSERT INTO subscription_billing_issues (paypal_subscription_id, first_seen_at, last_seen_at) VALUES (?, ?, ?)')
-    .run('I-FAILING', NOW - DAY, NOW - DAY);
-  assert.equal(own(failing).payment_problem, 1, 'in its grace days');
-  db.prepare('UPDATE subscription_billing_issues SET resolved_at = ? WHERE paypal_subscription_id = ?').run(NOW, 'I-FAILING');
-  assert.equal(own(failing).payment_problem, 0, 'a resolved issue is over');
 });
 
-test('the refusal names the server and the renewal day, a payment problem, or a staff move', () => {
+test('the refusal names the server and the renewal day, and never talks of a staff move or a payment problem', () => {
   const at = Date.UTC(2027, 9, 12, 15, 30) / 1000;
   const body = guards.alreadySubscribedRefusal({ effective_until: at }, 'EU1 (Chernarus)');
   assert.deepEqual(body, {
@@ -190,37 +179,21 @@ test('the refusal names the server and the renewal day, a payment problem, or a 
   assert.equal(early.renewsAt, null);
   assert.match(early.error, /on NA2 \(Faircroft\) that renews automatically\./);
 
-  const failing = guards.alreadySubscribedRefusal({ effective_until: at, payment_problem: 1 }, 'EU1 (Chernarus)');
-  assert.deepEqual(failing, {
+  // A staff move now changes the order's server, and a failing renewal ends the
+  // subscription, so neither has its own refusal: whatever an old caller passes,
+  // the answer is the plain one.
+  const old = guards.alreadySubscribedRefusal({ effective_until: at, payment_problem: 1 }, 'EU2 (Faircroft)', { blocked: true });
+  assert.deepEqual(old, {
     code: 'already_subscribed',
-    error: 'Your priority queue subscription on EU1 (Chernarus) has a payment problem. Update your payment method on PayPal, or cancel it on your account page, then buy again.',
-    renewsAt: null
-  });
-
-  const moved = guards.alreadySubscribedRefusal({ effective_until: at, payment_problem: 1 }, 'EU2 (Faircroft)', { blocked: true });
-  assert.deepEqual(moved, {
-    code: 'already_subscribed',
-    error: 'Staff changed where your priority queue subscription applies, so it is not active on EU2 (Faircroft). To change it, open a Shop Support ticket.',
+    error: 'You already have priority queue on EU2 (Faircroft) that renews on 12 October. Manage it on your account page.',
     renewsAt: at
   });
 
-  for (const b of [body, early, failing, moved, guards.sharedIdRefusal()]) {
+  for (const b of [body, early, old, guards.sharedIdRefusal()]) {
     assert.doesNotMatch(b.error, /—|–|dayz/i);
+    assert.doesNotMatch(b.error, /staff|payment problem/i);
   }
-  assert.doesNotMatch(failing.error, /renews/);
   assert.equal(guards.dayMonth(Date.UTC(2026, 0, 1) / 1000), '1 January');
-});
-
-test('a staff block on the server is found for the ID, case-insensitively; a grant, another server or another ID is not', () => {
-  const g = guidN(400);
-  addGrant.run(g, 'eu2', 1, 'staff', NOW, null);
-  addGrant.run(g, 'eu1', 0, 'staff', NOW, NOW + DAY);
-  assert.equal(guards.blockedOnServer(db, { biUid: ` ${g.toUpperCase()} `, serverId: 'eu2' }), true);
-  assert.equal(guards.blockedOnServer(db, { biUid: g, serverId: 'eu1' }), false, 'a grant');
-  assert.equal(guards.blockedOnServer(db, { biUid: g, serverId: 'na1' }), false);
-  assert.equal(guards.blockedOnServer(db, { biUid: guidN(401), serverId: 'eu2' }), false);
-  assert.equal(guards.blockedOnServer(db, { biUid: null, serverId: 'eu2' }), false);
-  assert.equal(guards.blockedOnServer(db, { biUid: g, serverId: null }), false);
 });
 
 // ---- Another account --------------------------------------------------------
@@ -238,7 +211,7 @@ test('another account with a live paid order on the same ID is found whatever se
   assert.equal(guards.otherAccountLivePq(db, { steamId: buyer, biUid: null, now: NOW }), false);
 });
 
-test('grants, sandbox, expired and refunded orders on another account do not count; an all-server order does', () => {
+test('grants, sandbox, expired, undated and refunded orders on another account do not count; a dated all-server order does', () => {
   const g = guidN(200);
   const buyer = user({ biUid: g });
   const ask = () => guards.otherAccountLivePq(db, { steamId: buyer, biUid: g, now: NOW });
@@ -248,7 +221,8 @@ test('grants, sandbox, expired and refunded orders on another account do not cou
   assert.equal(ask(), false, 'a manual grant alone');
 
   order(other, PQ_EU, { testMode: 1 });
-  order(other, PQ_EU, { until: NOW - 1 });
+  order(other, PQ_EU, { sub: null, until: NOW - 1 });
+  order(other, PQ_EU, { until: NOW - 1, cancelledAt: NOW - DAY, endedReason: 'cancelled' });
   order(other, PQ_EU, { status: 'refunded' });
   order(other, PQ_EU, { status: 'pending' });
   order(other, ROLE_SUB, { serverId: null });
@@ -256,7 +230,10 @@ test('grants, sandbox, expired and refunded orders on another account do not cou
 
   const third = user({ biUid: g });
   order(third, PQ_GLOBAL, { serverId: null, until: null });
+  assert.equal(ask(), false, 'an order with no end date is not paid priority queue');
+  order(third, PQ_GLOBAL, { serverId: null, sub: null, until: NOW + DAY });
   assert.equal(ask(), true);
+  assert.equal(guards.otherAccountLivePq(db, { steamId: buyer, biUid: g, now: NOW + DAY }), false, 'its paid period is over and it is not a subscription');
 });
 
 // ---- Duplicate found when a subscription activates ----------------------------
@@ -278,89 +255,6 @@ test('a subscription that activates beside another live one for the same server 
   const oneTime = order(lone, PQ_EU, { sub: null });
   assert.equal(guards.duplicateLiveSubscription(db, { orderId: oneTime, now: NOW }), null, 'a one-time order is not a subscription');
   assert.equal(guards.duplicateLiveSubscription(db, { orderId: 999999, now: NOW }), null);
-});
-
-// ---- Leftover blocks --------------------------------------------------------
-
-test('a true leftover block is cleared only for that ID on the servers the purchase covers', () => {
-  const g = guidN(300);
-  const other = guidN(301);
-  addGrant.run(g, 'eu1', 1, 'staff-a', NOW - 9 * DAY, null);
-  addGrant.run(g, 'eu2', 1, 'staff-b', NOW - 8 * DAY, null);
-  addGrant.run(other, 'eu1', 1, 'staff-d', NOW - 6 * DAY, null);
-  addGrant.run(other, 'na1', 0, 'staff-e', NOW - 6 * DAY, null);
-
-  const out = guards.clearLeftoverPqDenies(db, { guid: g.toUpperCase(), serverIds: ['eu1', 'na1'], orderId: 1, now: NOW });
-  assert.deepEqual(out, { cleared: [{ guid: g, server_id: 'eu1', granted_by: 'staff-a', granted_at: NOW - 9 * DAY }], kept: [] },
-    'another ID\'s grant is not a move for this one');
-  assert.deepEqual(grantRows(g, other), [
-    { guid: g, server_id: 'eu2', removed: 1 },
-    { guid: other, server_id: 'eu1', removed: 1 },
-    { guid: other, server_id: 'na1', removed: 0 },
-  ]);
-
-  const none = { cleared: [], kept: [] };
-  assert.deepEqual(guards.clearLeftoverPqDenies(db, { guid: g, serverIds: ['eu1'], now: NOW }), none, 'nothing left there');
-  assert.deepEqual(guards.clearLeftoverPqDenies(db, { guid: g, serverIds: [], now: NOW }), none);
-  assert.deepEqual(guards.clearLeftoverPqDenies(db, { guid: '', serverIds: SERVER_IDS, now: NOW }), none);
-  assert.equal(grantRows(g, other).length, 3);
-
-  const all = guards.clearLeftoverPqDenies(db, { guid: g, serverIds: SERVER_IDS, now: NOW });
-  assert.deepEqual(all.cleared.map(r => r.server_id), ['eu2'], 'an order for every server clears every leftover block for that ID');
-  assert.deepEqual(grantRows(g, other), [
-    { guid: other, server_id: 'eu1', removed: 1 },
-    { guid: other, server_id: 'na1', removed: 0 },
-  ]);
-});
-
-test('a staff move keeps its block when the player buys the old server again, whether its grant is live, lapsed or permanent', () => {
-  for (const [n, expires] of [[310, NOW + 20 * DAY], [311, NOW - 20 * DAY], [312, null]]) {
-    const g = guidN(n);
-    addGrant.run(g, 'eu1', 0, 'staff', NOW - 30 * DAY, expires); // the server they were moved to
-    addGrant.run(g, 'eu2', 1, 'staff', NOW - 30 * DAY, null);    // the server they bought first
-    const buyer = user({ biUid: g });
-    const bought = order(buyer, PQ_EU, { serverId: 'eu2' });
-
-    const out = guards.clearLeftoverPqDenies(db, { guid: g, serverIds: ['eu2'], orderId: bought, now: NOW });
-    assert.deepEqual(out.cleared, [], String(expires));
-    assert.deepEqual(out.kept.map(r => [r.server_id, r.reason, r.granted_by]), [['eu2', 'moved', 'staff']]);
-    const all = guards.clearLeftoverPqDenies(db, { guid: g, serverIds: SERVER_IDS, orderId: bought, now: NOW });
-    assert.deepEqual(all.kept.map(r => r.server_id), ['eu2'], 'an order for every server keeps it too');
-    assert.deepEqual(grantRows(g), [
-      { guid: g, server_id: 'eu1', removed: 0 },
-      { guid: g, server_id: 'eu2', removed: 1 },
-    ]);
-  }
-});
-
-test('a block with another live order behind it stays, on any account and in test mode; dead orders and the purchase itself do not count', () => {
-  const g = guidN(320);
-  addGrant.run(g, 'eu1', 1, 'staff', NOW - 5 * DAY, null);
-  const holder = user({ biUid: g });
-  const buyer = user({ biUid: g.toUpperCase() });
-  const bought = order(buyer, PQ_EU, { sub: null });
-  const ask = () => guards.clearLeftoverPqDenies(db, { guid: g, serverIds: ['eu1'], orderId: bought, now: NOW });
-
-  const sandbox = order(holder, PQ_EU, { sub: null, testMode: 1 });
-  assert.deepEqual(ask().kept.map(r => [r.server_id, r.reason]), [['eu1', 'other_order']], 'a test-mode order counts, as it does in the sync');
-  db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(sandbox);
-  order(holder, PQ_GLOBAL, { serverId: null, sub: null, until: null });
-  assert.deepEqual(ask().kept.map(r => r.reason), ['other_order'], 'a lifetime order for every server');
-  assert.equal(grantRows(g).length, 1);
-
-  const d = guidN(321);
-  addGrant.run(d, 'eu1', 1, 'staff', NOW - 5 * DAY, null);
-  const dHolder = user({ biUid: d });
-  order(dHolder, PQ_EU, { sub: null, until: NOW - DAY });
-  order(dHolder, PQ_EU, { status: 'refunded' });
-  order(dHolder, PQ_EU, { serverId: 'eu2' });
-  order(dHolder, ROLE_SUB, { serverId: null });
-  const dBuyer = user({ biUid: d });
-  const dBought = order(dBuyer, PQ_EU);
-  const out = guards.clearLeftoverPqDenies(db, { guid: d, serverIds: ['eu1'], orderId: dBought, now: NOW });
-  assert.deepEqual(out.cleared.map(r => r.server_id), ['eu1'],
-    'expired, refunded, other-server and non priority queue orders, and the purchase itself, leave it a leftover');
-  assert.deepEqual(out.kept, []);
 });
 
 // ---- Renewals on revoked subscriptions ---------------------------------------
@@ -420,23 +314,10 @@ test('a renewal after the newest paid cycle was refunded is flagged, even with a
   assert.equal(guards.recordRevokedRenewal(db, { saleId: 'SALE-RV-X', subscriptionId: revoked, now: NOW }), null);
 });
 
-// ---- Where a moved holder's queue is ----------------------------------------
+// ---- Retired machinery -----------------------------------------------------------
 
-test("a moved holder's order resolves to the server their queue is on, and nothing else does", () => {
-  const g = guidN(700);
-  const buyer = user({ biUid: g });
-  const moved = order(buyer, PQ_EU, { serverId: 'eu2' });
-  addGrant.run(g, 'eu2', 1, 'staff', NOW - 5 * DAY, null);
-  addGrant.run(g.toUpperCase(), 'eu1', 0, 'staff', NOW - 5 * DAY, NOW + 10 * DAY);
-  assert.deepEqual(guards.queueMoveForOrder(db, moved, NOW), { boughtFor: 'eu2', queueOn: 'eu1' });
-  assert.deepEqual(guards.queueMoveForOrder(db, moved, NOW + 11 * DAY), { boughtFor: 'eu2', queueOn: null }, 'the grant has lapsed: blocked, and on no server');
-
-  const notMoved = order(buyer, PQ_EU, { serverId: 'eu1' });
-  assert.equal(guards.queueMoveForOrder(db, notMoved, NOW), null, 'no block on the server it was bought for');
-  assert.equal(guards.queueMoveForOrder(db, order(buyer, PQ_GLOBAL, { serverId: 'eu2' }), NOW), null, 'not tied to one server');
-  assert.equal(guards.queueMoveForOrder(db, order(buyer, ROLE_SUB, { serverId: 'eu2' }), NOW), null, 'no priority queue');
-  const other = user({ biUid: guidN(701) });
-  assert.equal(guards.queueMoveForOrder(db, order(other, PQ_EU, { serverId: 'eu2' }), NOW), null, 'another in-game ID');
-  assert.equal(guards.queueMoveForOrder(db, 999999, NOW), null);
-  assert.equal(guards.queueMoveForOrder(db, null, NOW), null);
+test('the grant, block and move helpers are gone from the guards', () => {
+  for (const gone of ['blockedOnServer', 'clearLeftoverPqDenies', 'queueMoveForOrder']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(guards, gone), false, gone);
+  }
 });

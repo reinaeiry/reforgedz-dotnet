@@ -145,6 +145,13 @@ if (!productHasColumn('stock_limit_overrides')) {
 if (!userHasColumn('discord_id')) {
   db.exec("ALTER TABLE users ADD COLUMN discord_id TEXT");
 }
+// How the Discord account was linked: 'oauth' (the player signed in with Discord, so
+// it is theirs) or 'paste' (a typed user id, which could be anyone's). NULL for links
+// made before this column. Only an 'oauth' link is trusted as proof of a staff role
+// (sync.js staffProtection).
+if (!userHasColumn('discord_linked_via')) {
+  db.exec("ALTER TABLE users ADD COLUMN discord_linked_via TEXT");
+}
 // Console lock generation. rz_console_locked is a signed proof that this browser
 // originally linked the console account, and it lives for a year. Before this
 // column nothing could revoke one: a staff re-link gave the real owner a fresh
@@ -800,6 +807,11 @@ db.exec(`
     received_at      INTEGER NOT NULL
   );
 `);
+// Sandbox or live, for a refund row with no order to take it from: a payment the shop
+// refused and refunded (paymentEvents.refuseSale). The health card counts live money only.
+if (!db.prepare("PRAGMA table_info(paypal_refunds)").all().some(c => c.name === 'test_mode')) {
+  db.exec("ALTER TABLE paypal_refunds ADD COLUMN test_mode INTEGER NOT NULL DEFAULT 0");
+}
 
 // When staff revoked an order WITHOUT returning money. A revoke stores status
 // 'refunded' either way, because every entitlement reader treats that status as

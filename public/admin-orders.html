@@ -611,11 +611,12 @@
 
         <div id="billingTab" style="display:none">
           <p class="billing-note">
-            PayPal keeps a subscription at status <strong>ACTIVE</strong> while its payments
-            fail, so these players still see &ldquo;active&rdquo; on their side while their
-            access has already stopped and their Discord role has been removed. New failures
-            land here automatically; <strong>Rescan PayPal</strong> pulls in any that predate
-            failure tracking.
+            A priority queue renewal payment that fails ends the subscription at once: the shop
+            cancels it at PayPal, ends its access and emails the player. Other subscriptions (Backer,
+            Supporter) stay listed here while PayPal retries. Tick <strong>Show resolved</strong> for
+            the history. <strong>Rescan PayPal</strong> runs the same check as the daily PayPal check:
+            it cancels every active priority queue subscription with failed payments and emails each
+            player. The Discord /billing rescan only checks and ends nothing.
           </p>
 
           <div class="billing-actions">
@@ -1009,7 +1010,7 @@
       `;
 
       if (!issues.length) {
-        body.innerHTML = '<tr><td colspan="9" class="empty-state">No billing issues. Run a rescan to check PayPal for older failures.</td></tr>';
+        body.innerHTML = '<tr><td colspan="9" class="empty-state">No open billing issues. A failed priority queue renewal ends its subscription at once, so only other subscriptions PayPal is still retrying appear here. Tick Show resolved for the history.</td></tr>';
         return;
       }
 
@@ -1065,21 +1066,28 @@
         status.textContent = 'Last rescan failed: ' + rescan.error;
       } else if (rescan.summary) {
         const s = rescan.summary;
-        status.textContent = `Last rescan: ${s.scanned} checked, ${s.failing} failing, ${s.newIssues} new, ${s.resolved} resolved`
-          + (s.errors ? `, ${s.errors} lookup error(s)` : '');
+        status.textContent = s.dryRun
+          ? `Last check (nothing ended): ${s.scanned} checked, ${s.failing} failing at PayPal, ${s.resolved} resolved`
+            + (s.errors ? `, ${s.errors} lookup error(s)` : '')
+          : `Last rescan: ${s.scanned} checked, ${s.failing} failing, ${s.ended || 0} ended, ${s.resolved} resolved`
+            + (s.errors ? `, ${s.errors} lookup error(s)` : '')
+            + (s.refused ? '. Nothing was ended because a PayPal lookup failed' : '');
       } else {
         status.textContent = '';
       }
     }
 
     async function rescanBilling() {
+      // The rescan ends subscriptions rather than only listing them, so say so first.
+      if (!confirm('Rescan PayPal now?\n\nEvery active priority queue subscription with a failed payment will be cancelled at PayPal, its access ended and its player emailed. If any PayPal lookup fails, nothing is ended.')) return;
       const btn = document.getElementById('billingRescanBtn');
       btn.disabled = true;
       try {
+        // end: true is what lets the rescan end subscriptions; without it the shop only checks.
         const res = await fetch('/api/shop/admin/billing-issues/rescan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({})
+          body: JSON.stringify({ end: true })
         });
         if (res.status === 409) {
           document.getElementById('billingRescanStatus').textContent = 'A rescan is already running.';

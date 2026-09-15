@@ -31,30 +31,11 @@ function orderIdOf(row) {
 
 const code = (s) => '`' + String(s) + '`';
 
-// A holder staff moved to another server (pqGuards.queueMoveForOrder, put on the
-// row as pq_queue by the call site). The order keeps naming the server it was
-// bought for, so a card must name where the queue really is.
-function queueMoveOf(row) {
-  const m = row && row.pq_queue;
-  return m && m.boughtFor ? m : null;
-}
-
-// The server a card's title names: where the queue is now, else the order's own.
+// The server a card's title names: the order's own. A staff move changes the
+// order's server on every row of its subscription, so the order always names the
+// server its priority queue is on.
 function cardServer(row) {
-  const m = queueMoveOf(row);
-  return m && m.queueOn ? m.queueOn : (row ? row.server_id : null);
-}
-
-function queueFields(row) {
-  const m = queueMoveOf(row);
-  if (!m) return [];
-  return [{
-    name: 'Queue on',
-    value: m.queueOn
-      ? `${serverLabel(m.queueOn)} (bought for ${serverLabel(m.boughtFor)})`
-      : `No server: staff blocked ${serverLabel(m.boughtFor)}, where it was bought`,
-    inline: false
-  }];
+  return row ? row.server_id : null;
 }
 
 // Who the order belongs to: the same four fields on every order card.
@@ -114,7 +95,6 @@ function orderEventCard(event, row, opts = {}) {
     nextCharge,
     fields: [
       ...playerFields(r),
-      ...queueFields(r),
       { name: 'Status', value: ev.status, inline: true },
       ...(sub ? [{ name: 'Subscription', value: code(sub), inline: true }] : []),
       ...fields
@@ -122,39 +102,148 @@ function orderEventCard(event, row, opts = {}) {
   };
 }
 
-// PayPal could not take a renewal. ctx is getBillingIssueContext's row.
-// localPaid false: PayPal shows a payment but the shop holds no paid order for
-// the subscription, so nothing was ever granted for it.
-function billingFailureCard({ subId, ctx, failedCount, outstandingCents, currency, nextBillingAt, lastPaymentAt, source, localPaid = true }) {
+// ---- Subscriptions the shop ended, and payments it refused (paymentEvents.js) --------
+
+// What cancelAtPayPal's result reads as on a card, and the sentence a card adds
+// when the cancel did not go through.
+function cancelWords(cancel) {
+  const c = cancel || { outcome: 'none' };
+  if (c.outcome === 'failed') return `Cancel failed${c.status ? ` (HTTP ${c.status})` : ''}`;
+  if (c.outcome === 'unknown') return 'No answer from PayPal: check it there';
+  return { cancelled: 'Cancelled at PayPal', already_ended: 'Already ended at PayPal' }[c.outcome] || 'Not cancelled';
+}
+function cancelSentence(cancel) {
+  const c = cancel || {};
+  if (c.outcome === 'failed') return ` PayPal refused to cancel the subscription${c.status ? ` (HTTP ${c.status})` : ''}, so it can still bill: cancel it in PayPal.`;
+  if (c.outcome === 'unknown') return ' PayPal did not answer the request to cancel the subscription, so it may still be active: check it in PayPal.';
+  return '';
+}
+function slotWords(slot) {
+  if (!slot || !Number.isFinite(slot.limit)) return null;
+  return `${slot.used} of ${slot.limit} taken${slot.reserved ? `, ${slot.reserved} more waiting at PayPal` : ''}`;
+}
+
+// The shop ended a subscription because PayPal could not take a renewal
+// (paymentEvents.endUnpaidSubscription). ctx is paymentEvents.subscriptionContext's
+// row (it carries order_id); cancel is cancelAtPayPal's result; source is webhook,
+// reconcile (the daily PayPal check) or rescan. Blue and silent when the cancel went
+// through, since nothing is left to do; red when PayPal refused it, amber when PayPal
+// did not answer.
+function unpaidEndedCard({ ctx, subscriptionId = null, cancel = null, failedCount = 0, outstandingCents = 0, currency = null, accessUntil = null, source = 'webhook', now = Math.floor(Date.now() / 1000) }) {
   const c = ctx || {};
-  const platform = c.platform || 'steam';
+  const sub = subscriptionId || c.paypal_subscription_id || null;
+  const outcome = cancel ? cancel.outcome : 'none';
+  const dated = !!discordDate(accessUntil);
+  let description = 'PayPal could not take the renewal payment, so the shop ended the subscription at once.';
+  if (c.grants_priority_queue) description += ' No payment, no priority queue: nobody keeps a slot they have not paid for.';
+  description += !dated ? ' No paid access is left.'
+    : Number(accessUntil) > now ? ' The player keeps access until the date shown, the end of what they already paid for.'
+      : ' Their paid access ended on the date shown.';
+  if (source === 'reconcile') description += ' Found by the daily PayPal check: PayPal\'s own notice of the failure never arrived.';
+  else if (source === 'rescan') description += ' Found by a billing rescan.';
+  description += cancelSentence(cancel);
   const fields = [
-    { name: 'Player', value: playerName(c) || 'Unknown', inline: true },
-    { name: 'Platform', value: PLATFORM_LABELS[platform] || platform, inline: true },
-    { name: 'Discord', value: c.discord_id ? `<@${c.discord_id}>` : 'Not linked', inline: true },
-    { name: 'Failed payments', value: String(failedCount || 0), inline: true },
-    { name: 'Outstanding', value: money(outstandingCents || 0, currency || c.currency), inline: true },
-    { name: 'Last payment', value: discordDate(lastPaymentAt) || 'Never', inline: true }
+    ...playerFields(c),
+    { name: 'Status', value: 'Ended, payment not received', inline: true },
+    ...(sub ? [{ name: 'Subscription', value: code(sub), inline: true }, { name: 'PayPal subscription', value: cancelWords(cancel), inline: true }] : []),
+    ...(Number(failedCount) > 0 ? [{ name: 'Failed payments', value: String(failedCount), inline: true }] : []),
+    ...(Number(outstandingCents) > 0 ? [{ name: 'Outstanding', value: money(outstandingCents, currency || c.currency), inline: true }] : []),
+    ...(!dated ? [{ name: 'Access until', value: 'No paid access left', inline: true }] : [])
   ];
-  if (!discordDate(c.effective_until)) fields.push({ name: 'Access until', value: 'Not known', inline: true });
-  if (!discordDate(nextBillingAt)) fields.push({ name: 'Next charge', value: 'None scheduled', inline: true });
-  fields.push({ name: 'Subscription', value: code(subId), inline: true });
-  if (c.discord_role_id) fields.push({ name: 'Role affected', value: `<@&${c.discord_role_id}>`, inline: true });
-  if (!localPaid) fields.push({ name: 'Paid order in the shop', value: 'None, so nothing was granted for this subscription', inline: false });
-  fields.push(...queueFields(c));
   return {
-    kind: 'attention',
-    what: 'Subscription payment failed',
+    kind: outcome === 'failed' ? 'action' : outcome === 'unknown' ? 'attention' : 'ended',
+    what: 'Subscription ended, payment not received',
     product: c.product_title,
     server: cardServer(c),
     orderId: orderIdOf(c),
     testMode: !!c.test_mode,
-    description: source === 'rescan'
-      ? 'Found by a rescan of PayPal. This failure happened before failures were tracked.'
-      : 'PayPal could not take the payment. The subscription still shows ACTIVE to the player.',
-    accessUntil: c.effective_until,
-    nextCharge: nextBillingAt,
+    description,
+    accessUntil: dated ? accessUntil : null,
     fields
+  };
+}
+
+// A payment the shop could not honour, refunded and its subscription cancelled
+// (paymentEvents.refuseSale). reason: no_slot, ended_unpaid, ended_no_slot or revoked;
+// firstPayment: a no_slot payment that would have started the subscription. refund
+// is paymentEvents.refundPayment's result, cancel is cancelAtPayPal's, slot is
+// { limit, used, reserved } for no_slot. ctx is the subscription's newest order, or
+// null. Purple when the money went back and the subscription is cancelled; red when
+// PayPal refused the refund or the cancel; amber when PayPal did not answer one.
+function refusedPaymentCard({ ctx = null, subscriptionId = null, saleId = null, amountCents = null, currency = null, reason = 'no_slot', firstPayment = false, serverId = null, slot = null, refund = null, cancel = null, testMode = false }) {
+  const c = ctx || {};
+  const sub = subscriptionId || c.paypal_subscription_id || null;
+  const got = money(amountCents, currency || c.currency);
+  const paid = got ? `PayPal took ${got}` : 'PayPal took a payment';
+  const where = serverLabel(serverId || c.server_id) || 'its server';
+  const why = {
+    no_slot: firstPayment
+      ? `${paid}, the first payment of this subscription, after ${where} had filled up, so the shop could not start it.`
+      : `${paid} after this subscription's paid period and renewal window had ended, and ${where} has no free priority queue slot now, so the shop could not honour it.`,
+    ended_unpaid: `${paid} on a subscription the shop had already ended because a renewal payment failed.`,
+    ended_no_slot: `${paid} on a subscription the shop had already ended because ${where} had no free slot for it.`,
+    revoked: `${paid} on a subscription whose orders had all been revoked or refunded and which the shop had already ended, so it gave nothing.`
+  }[reason] || `${paid} that the shop could not honour.`;
+  const r = refund || { outcome: 'failed' };
+  let refundText;
+  if (r.outcome === 'refunded') {
+    const pending = r.refundStatus && String(r.refundStatus).toUpperCase() !== 'COMPLETED';
+    refundText = pending
+      ? ' The shop asked PayPal to refund it in full and PayPal has not finished the refund yet. Nothing was granted.'
+      : ' It was refunded in full automatically and nothing was granted.';
+  } else if (r.outcome === 'unknown') {
+    refundText = ' PayPal did not answer the refund request, so the money may or may not have gone back: check the payment in PayPal before refunding it by hand. Nothing was granted.';
+  } else {
+    refundText = ` PayPal refused the automatic refund${r.status ? ` (HTTP ${r.status})` : ''}, so the buyer still has not had the money back: refund it in PayPal. Nothing was granted.`;
+  }
+  const bad = r.outcome === 'failed' || (cancel && cancel.outcome === 'failed');
+  const unsure = r.outcome === 'unknown' || (cancel && cancel.outcome === 'unknown');
+  const tail = reason === 'no_slot' ? 'server full' : 'subscription had ended';
+  const what = r.outcome === 'refunded' ? `Payment refunded, ${tail}` : r.outcome === 'unknown' ? `Refund state unknown, ${tail}` : `Refund failed, ${tail}`;
+  const fields = [
+    ...(ctx ? playerFields(c) : []),
+    ...(saleId ? [{ name: 'Sale', value: code(saleId), inline: true }] : []),
+    ...(sub ? [{ name: 'Subscription', value: code(sub), inline: true }, { name: 'PayPal subscription', value: cancelWords(cancel), inline: true }] : []),
+    ...(r.refundId ? [{ name: 'Refund id', value: code(r.refundId), inline: true }] : []),
+    ...(r.outcome === 'refunded' && r.refundStatus && String(r.refundStatus).toUpperCase() !== 'COMPLETED' ? [{ name: 'Refund at PayPal', value: words(r.refundStatus), inline: true }] : []),
+    ...(slotWords(slot) ? [{ name: 'Priority queue slots', value: slotWords(slot), inline: true }] : [])
+  ];
+  return {
+    kind: bad ? 'action' : unsure ? 'attention' : 'refund_out',
+    what,
+    product: c.product_title,
+    server: cardServer(ctx ? c : null) || serverId,
+    orderId: ctx ? orderIdOf(c) : null,
+    testMode: ctx ? !!c.test_mode : !!testMode,
+    description: why + refundText + cancelSentence(cancel),
+    amountCents: Number.isFinite(amountCents) ? amountCents : null,
+    currency: currency || c.currency,
+    fields
+  };
+}
+
+// A priority queue subscription that activated at PayPal when its server had no slot
+// for it (paymentEvents.claimActivation): not started, cancelled at PayPal. order is
+// the checkout order with its user and product. Blue and silent when the cancel went
+// through: if PayPal takes the first payment, its refund posts its own card.
+function refusedActivationCard({ order, serverId = null, slot = null, cancel = null }) {
+  const o = order || {};
+  const outcome = cancel ? cancel.outcome : 'none';
+  const where = serverLabel(serverId || o.server_id) || 'its server';
+  return {
+    kind: outcome === 'failed' ? 'action' : outcome === 'unknown' ? 'attention' : 'ended',
+    what: 'Subscription not started, server full',
+    product: o.product_title,
+    server: cardServer(o),
+    orderId: orderIdOf(o),
+    testMode: !!o.test_mode,
+    description: `${where} had no free priority queue slot when this subscription activated at PayPal (it filled while the buyer was approving), so the shop did not start it and nothing was granted. If PayPal takes the first payment, it is refunded automatically.${cancelSentence(cancel)}`,
+    fields: [
+      ...playerFields(o),
+      { name: 'Status', value: 'Not started', inline: true },
+      ...(o.paypal_subscription_id ? [{ name: 'Subscription', value: code(o.paypal_subscription_id), inline: true }, { name: 'PayPal subscription', value: cancelWords(cancel), inline: true }] : []),
+      ...(slotWords(slot) ? [{ name: 'Priority queue slots', value: slotWords(slot), inline: true }] : [])
+    ]
   };
 }
 
@@ -184,66 +273,55 @@ function customFlagCard({ orderId, order, customFields, imageName = null }) {
   };
 }
 
-// What pqGuards.clearLeftoverPqDenies did for a new priority queue order: zero,
-// one or two cards (blocks removed, blocks kept).
-function leftoverBlockCards(order, { cleared = [], kept = [] } = {}) {
+// Staff moved a paid priority queue order to another server
+// (pqEntitlement.moveSubscriptionServer). order is the live cycle with its user and
+// product, read after the move; orderIds every row that changed.
+function staffQueueMoveCard({ order, from, to, orderIds = [], reason = null }) {
   const o = order || {};
-  const setBy = (r) => `by ${r.granted_by || 'unknown'}${discordDate(r.granted_at) ? `, ${discordDate(r.granted_at)}` : ''}`;
-  const base = {
-    kind: 'attention',
-    product: o.product_title,
-    server: o.server_specific ? o.server_id : null,
-    orderId: orderIdOf(o),
-    testMode: !!o.test_mode
-  };
-  const who = [
-    { name: 'Player', value: playerName(o) || o.steam_id || 'Unknown', inline: true },
-    { name: 'Account', value: o.steam_id || 'Unknown', inline: true },
-    { name: 'In-game ID', value: o.bi_uid ? shortId(o.bi_uid) : 'Not set yet', inline: true }
+  const sub = o.paypal_subscription_id || null;
+  const fromLabel = serverLabel(from) || 'an unknown server';
+  const toLabel = serverLabel(to) || 'an unknown server';
+  const fields = [
+    ...playerFields(o),
+    { name: 'Moved', value: `${fromLabel} to ${toLabel}`, inline: false },
+    { name: orderIds.length === 1 ? 'Order changed' : 'Orders changed', value: orderIds.map(id => `#${id}`).join(', ') || 'None', inline: false },
+    ...(sub ? [{ name: 'Subscription', value: code(sub), inline: true }] : []),
+    ...(reason ? [{ name: 'Reason', value: String(reason), inline: false }] : [])
   ];
-  const cards = [];
-  if (cleared.length) {
-    cards.push({
-      ...base,
-      what: 'Leftover priority queue block cleared',
-      description: `A new purchase covers ${cleared.map(r => serverLabel(r.server_id)).join(', ')}, where an earlier block was hiding this player's priority queue. The block was removed so the purchase works.`,
-      fields: [...who, { name: 'Block was set', value: cleared.map(r => `${serverLabel(r.server_id)}: ${setBy(r)}`).join('\n'), inline: false }],
-      footerExtra: 'Takes effect at the next restart of each server'
-    });
-  }
-  if (kept.length) {
-    const why = {
-      moved: 'part of a server move (this in-game ID has a staff grant on another server)',
-      other_order: 'set on purpose (another live order for this in-game ID covers that server)'
-    };
-    cards.push({
-      ...base,
-      what: 'Purchase hidden by a staff block',
-      description: `A new purchase covers ${kept.map(r => serverLabel(r.server_id)).join(', ')}, where a staff block hides this player's priority queue. The block was kept, so this purchase gives no priority queue there until staff remove the block or refund the order.`,
-      fields: [...who, { name: 'Block kept', value: kept.map(r => `${serverLabel(r.server_id)}: ${why[r.reason] || r.reason}, ${setBy(r)}`).join('\n'), inline: false }],
-      footerExtra: 'Check with the player which server they meant to buy'
-    });
-  }
-  return cards;
-}
-
-// A player moved their own priority queue from the account page.
-function playerQueueMoveCard({ name, accountId, guid, from = [], to, order }) {
-  const o = order || {};
   return {
     kind: 'info',
-    what: 'Priority queue moved by the player',
-    product: o.title || o.product_title,
+    what: 'Priority queue moved by staff',
+    product: o.product_title,
     server: to,
     orderId: orderIdOf(o),
     testMode: !!o.test_mode,
-    description: `${name || accountId} moved their queue priority from ${from.map(serverLabel).join(', ') || 'nowhere'} to ${serverLabel(to)}.`,
-    fields: [
-      { name: 'Player', value: name || 'Unknown', inline: true },
-      { name: 'Account', value: accountId || 'Unknown', inline: true },
-      { name: 'In-game ID', value: guid ? shortId(guid) : 'Not set yet', inline: true }
-    ],
-    footerExtra: "Self-service from the account page; takes effect at each server's next restart"
+    byStaff: true,
+    accessUntil: o.effective_until,
+    description: sub
+      ? `Staff moved this subscription from ${fromLabel} to ${toLabel}. Every cycle of it now names ${toLabel}, so its renewals pay for ${toLabel}. The paid period is unchanged.`
+      : `Staff moved this order from ${fromLabel} to ${toLabel}. The paid period is unchanged.`,
+    fields,
+    footerExtra: "Takes effect at each server's next restart"
+  };
+}
+
+// The sync found a server's game.admins would be longer than the limit (sync.js
+// checkAdminCeiling). Nothing was removed. Counts only, no in-game IDs.
+function adminCeilingCard({ serverId, planned, ceiling, current = null, shopOwned = null, others = null }) {
+  const fields = [
+    { name: 'Entries after this sync', value: String(planned), inline: true },
+    { name: 'Limit', value: String(ceiling), inline: true },
+    ...(Number.isFinite(current) ? [{ name: 'Entries before', value: String(current), inline: true }] : []),
+    ...(Number.isFinite(shopOwned) ? [{ name: 'Priority queue, from the shop', value: String(shopOwned), inline: true }] : []),
+    ...(Number.isFinite(others) ? [{ name: 'Game masters and others', value: String(others), inline: true }] : [])
+  ];
+  return {
+    kind: 'action',
+    what: 'Admin list over the limit',
+    server: serverId,
+    description: `This server's admin list has ${planned} entries, over the limit of ${ceiling}. Nothing was removed: the shop never drops a paying player or a game master to make room. Free a place by removing a game master on the GM tab, or by revoking a priority queue order for this server. The shop stops selling this server until it is back under the limit.`,
+    fields,
+    footerExtra: 'Entitlement sync. Posted again if the list grows, or twice a day while it stays over.'
   };
 }
 
@@ -267,8 +345,7 @@ function revokedRenewalCard({ subId, saleId, orders = [], amountCents = null, cu
     { name: 'Player', value: playerName(c) || 'Unknown', inline: true },
     { name: 'Account', value: accounts.join(', ') || 'Unknown', inline: true },
     { name: 'Subscription', value: code(subId), inline: true },
-    { name: 'Sale', value: code(saleId), inline: true },
-    ...queueFields(c)
+    { name: 'Sale', value: code(saleId), inline: true }
   ];
   if (!Number.isFinite(amountCents)) fields.push({ name: 'Amount', value: 'Not given by PayPal', inline: true });
   return {
@@ -299,8 +376,7 @@ function renewalAfterRefundCard({ subId, saleId, refundedOrderId, newOrderId, or
     { name: 'Player', value: playerName(o) || o.steam_id || 'Unknown', inline: true },
     { name: 'Account', value: o.steam_id || 'Unknown', inline: true },
     { name: 'Subscription', value: code(subId), inline: true },
-    { name: 'Sale', value: code(saleId), inline: true },
-    ...queueFields(o)
+    { name: 'Sale', value: code(saleId), inline: true }
   ];
   if (!Number.isFinite(amountCents)) fields.push({ name: 'Amount', value: 'Not given by PayPal', inline: true });
   return {
@@ -414,7 +490,6 @@ function staffRevokeCard({
   }
   const fields = [
     ...playerFields(o),
-    ...queueFields(o),
     { name: 'Status', value: refunded ? (pending ? 'Refund pending' : 'Refunded') : 'Revoked', inline: true }
   ];
   if (sub) {
@@ -464,7 +539,6 @@ function refundUnknownCard({ order, amountCents = null }) {
     currency: o.currency,
     fields: [
       ...playerFields(o),
-      ...queueFields(o),
       { name: 'Status', value: words(o.status) || 'Completed', inline: true },
       ...(o.paypal_subscription_id ? [{ name: 'Subscription', value: code(o.paypal_subscription_id), inline: true }] : []),
       ...(o.paypal_capture_id ? [{ name: 'Payment', value: code(o.paypal_capture_id), inline: true }] : [])
@@ -493,7 +567,7 @@ function refundEventCard({ plan, order = null, testMode = false }) {
     amountCents: Number.isFinite(p.amountCents) ? p.amountCents : null,
     currency: p.currency || o.currency
   };
-  const who = order ? [...playerFields(o), ...queueFields(o)] : [];
+  const who = order ? playerFields(o) : [];
   const status = (value) => ({ name: 'Status', value, inline: true });
   switch (p.action) {
     case 'refunded':
@@ -568,7 +642,7 @@ function refundFailedCard({ plan, order = null, testMode = false }) {
     amountCents: Number.isFinite(p.amountCents) ? p.amountCents : null,
     currency: p.currency || o.currency,
     fields: [
-      ...(order ? [...playerFields(o), ...queueFields(o), { name: 'Status', value: words(o.status) || 'Unknown', inline: true }] : [{ name: 'Order', value: 'No order matches the refunded payment', inline: false }]),
+      ...(order ? [...playerFields(o), { name: 'Status', value: words(o.status) || 'Unknown', inline: true }] : [{ name: 'Order', value: 'No order matches the refunded payment', inline: false }]),
       ...(o.paypal_subscription_id ? [{ name: 'Subscription', value: code(o.paypal_subscription_id), inline: true }] : []),
       ...(p.paymentId ? [{ name: 'Payment', value: code(p.paymentId), inline: true }] : []),
       ...(p.refundId ? [{ name: 'Refund id', value: code(p.refundId), inline: true }] : [])
@@ -577,15 +651,16 @@ function refundFailedCard({ plan, order = null, testMode = false }) {
 }
 
 // A PayPal dispute (paymentEvents.applyDisputeEvent). card is opened, status_changed
-// or resolved; result (resolved only) is lost, won or unclear. Nothing on the order
-// changes automatically, and every card says so.
-function disputeCard({ card, dispute, previous = null, order = null, result = null, testMode = false }) {
+// or resolved; result (resolved only) is lost, won or unclear. Only a lost dispute
+// changes the order (paymentEvents.revokeForLostDispute): revoke is that result, and
+// every other card says nothing changed.
+function disputeCard({ card, dispute, previous = null, order = null, result = null, revoke = null, testMode = false }) {
   const d = dispute || {};
   const o = order || {};
   const amount = money(d.amountCents, d.currency || o.currency);
   const reason = DISPUTE_REASONS[d.reason] || words(d.reason) || 'Not given';
   const fields = [
-    ...(order ? [...playerFields(o), ...queueFields(o)] : []),
+    ...(order ? playerFields(o) : []),
     { name: 'Dispute', value: code(d.disputeId), inline: true },
     { name: 'Reason', value: reason, inline: true },
     ...(d.stage ? [{ name: 'Stage', value: words(d.stage), inline: true }] : []),
@@ -624,9 +699,19 @@ function disputeCard({ card, dispute, previous = null, order = null, result = nu
     const withOutcome = [...fields, { name: 'Outcome', value: outcome, inline: true }];
     if (result === 'lost') {
       const lost = money(d.amountRefundedCents, d.currency || o.currency) || amount || 'the disputed amount';
+      if (revoke && revoke.revoked) {
+        return {
+          ...base, kind: 'refund_out', what: 'Dispute lost',
+          description: `PayPal closed this dispute in the buyer's favour, so the shop lost ${lost}. The order is now refunded and its perks were removed automatically.${o.paypal_subscription_id ? ' Its subscription was not cancelled: if PayPal bills it again, cancel it in PayPal.' : ''}`,
+          fields: [...withOutcome, { name: 'Status', value: 'Refunded', inline: true }]
+        };
+      }
+      const rest = revoke && revoke.reason === 'not_completed'
+        ? ` The order was already ${(words(revoke.status) || 'closed').toLowerCase()}, so nothing on it changed.`
+        : ` ${unchanged} Decide whether the order should keep its perks.`;
       return {
         ...base, kind: 'action', what: 'Dispute lost',
-        description: `PayPal closed this dispute in the buyer's favour, so the shop lost ${lost}. ${unchanged} Decide whether the order should keep its perks.`,
+        description: `PayPal closed this dispute in the buyer's favour, so the shop lost ${lost}.${rest}`,
         fields: withOutcome
       };
     }
@@ -717,43 +802,9 @@ function closeSuspendedFailedCard({ subId, ctx = null, cancel = null }) {
       ? 'PayPal suspended this agreement and the shop asked PayPal to close it, but PayPal did not answer. It may still be open: check it in PayPal and cancel it there if it is.'
       : `PayPal suspended this agreement and refused to close it${r.status ? ` (HTTP ${r.status})` : ''}, so PayPal could still revive and bill it. Cancel it in PayPal.`,
     fields: [
-      ...(ctx ? [...playerFields(c), ...queueFields(c)] : []),
+      ...(ctx ? playerFields(c) : []),
       { name: 'Subscription', value: code(subId), inline: true }
     ]
-  };
-}
-
-// One card for a manual billing rescan (routes/shop.js rescanBillingIssues), so a
-// rescan that finds many failing subscriptions posts once instead of once each.
-// items: [{ subId, ctx, failedCount, outstandingCents, currency, localPaid }].
-const RESCAN_LIST_MAX = 20;
-function billingRescanSummaryCard({ items = [] }) {
-  const list = Array.isArray(items) ? items : [];
-  const lines = list.slice(0, RESCAN_LIST_MAX).map((x) => {
-    const c = x.ctx || {};
-    const id = orderIdOf(c);
-    const bits = [
-      id ? `order #${id}` : 'no order',
-      playerName(c) || null,
-      [c.product_title, serverLabel(cardServer(c))].filter(Boolean).join(' on ') || null,
-      `${x.failedCount || 0} failed payment${x.failedCount === 1 ? '' : 's'}`,
-      Number(x.outstandingCents) > 0 ? `${money(x.outstandingCents, x.currency || c.currency)} outstanding` : null,
-      x.localPaid === false ? 'no paid order in the shop, nothing granted' : null
-    ].filter(Boolean);
-    return `${code(x.subId)} ${bits.join(', ')}`;
-  });
-  if (list.length > RESCAN_LIST_MAX) lines.push(`...and ${list.length - RESCAN_LIST_MAX} more. The Billing Issues tab on the admin page lists every one.`);
-  return {
-    kind: 'attention',
-    what: list.length === 1 ? 'Billing rescan: 1 failing subscription' : `Billing rescan: ${list.length} failing subscriptions`,
-    testMode: list.length > 0 && list.every(x => x.ctx && x.ctx.test_mode),
-    description: [
-      'A rescan of PayPal found these subscriptions failing to renew, newly or again. Each one is on the Billing Issues tab.',
-      '',
-      ...lines
-    ].join('\n'),
-    fields: [{ name: 'Subscriptions', value: String(list.length), inline: true }],
-    footerExtra: 'Manual billing rescan'
   };
 }
 
@@ -849,10 +900,11 @@ function unbookedPaymentsCard({ payments = [], windowStart = null, windowEnd = n
 
 module.exports = {
   PLATFORM_LABELS, ORDER_EVENTS, DISPUTE_REASONS, PAYMENT_CODE_WORDS, playerName, playerFields, orderIdOf, words,
-  queueFields, cardServer, orderStateWords,
-  orderEventCard, billingFailureCard, customFlagCard, leftoverBlockCards, playerQueueMoveCard,
+  cardServer, orderStateWords,
+  orderEventCard, customFlagCard, staffQueueMoveCard, adminCeilingCard,
+  unpaidEndedCard, refusedPaymentCard, refusedActivationCard,
   revokedRenewalCard, renewalAfterRefundCard, duplicateSubscriptionCard,
   staffRevokeCard, refundUnknownCard, refundEventCard, refundFailedCard, disputeCard, unmatchedSaleCard,
-  subscriptionEndedCard, closeSuspendedFailedCard, billingRescanSummaryCard, RESCAN_LIST_MAX,
+  subscriptionEndedCard, closeSuspendedFailedCard,
   unbookedPaymentsCard, UNBOOKED_LIST_MAX
 };

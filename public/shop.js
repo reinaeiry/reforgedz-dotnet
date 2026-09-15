@@ -1834,9 +1834,21 @@ async function findOwnOrder(orderId) {
   }
 }
 
+// A priority queue subscription the shop did not start because its server filled up
+// while the buyer was approving at PayPal (routes/shop.js return-sub, soldout=1).
+function showSoldOutAlert() {
+  alertCancelled.textContent = 'That server filled up while you were at PayPal, so your subscription was not started. If PayPal takes a payment for it, it is refunded in full automatically.';
+  alertCancelled.style.display = 'block';
+}
+
 async function checkAlerts() {
   const params = new URLSearchParams(window.location.search);
   const orderId = params.get('order');
+  if (params.get('soldout') === '1') {
+    showSoldOutAlert();
+    window.history.replaceState({}, '', '/shop');
+    return;
+  }
   if (params.get('processing') === '1') {
     // The agreement is approved at PayPal but the activation webhook has not
     // landed yet. Usually seconds; poll the order before giving up on it.
@@ -1849,6 +1861,12 @@ async function checkAlerts() {
       if (order && order.status === 'completed') {
         await showNextSteps(order);
         loadOrders();
+        return;
+      }
+      // The server filled while the buyer was at PayPal, so the shop did not start it.
+      if (order && order.status === 'cancelled') {
+        alertSuccess.style.display = 'none';
+        showSoldOutAlert();
         return;
       }
     }

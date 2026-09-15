@@ -212,30 +212,6 @@
     .sub-actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .sub-actions .link-action, .sub-actions .sub-fix-btn { margin-top: 0; }
 
-    /* ---- self-service queue move ---- */
-    .sub-move {
-      margin-top: 12px;
-      padding: 10px 12px;
-      border-radius: 6px;
-      background: var(--surface-2, rgba(255,255,255,0.03));
-      border: 1px solid var(--border);
-      font-size: 0.82rem;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 10px;
-      align-items: center;
-    }
-    .sub-move select {
-      padding: 6px 10px;
-      background: var(--bg-dark);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: 0.8rem;
-      font-family: var(--body);
-    }
-    .sub-move .hint { flex-basis: 100%; font-size: 0.74rem; color: var(--text-ghost); line-height: 1.5; }
-
     /* ---- history ---- */
     .history-table { width: 100%; overflow-x: auto; }
     .history-table table { width: 100%; border-collapse: collapse; }
@@ -870,7 +846,9 @@
           lapsed: '<span class="sub-pill pill-lapsed">Lapsed</span>',
           cancelled: '<span class="sub-pill pill-cancelled">Cancelled</span>',
           suspended: '<span class="sub-pill pill-suspended">Stopped by PayPal</span>',
-          expired: '<span class="sub-pill pill-expired">Expired</span>'
+          expired: '<span class="sub-pill pill-expired">Expired</span>',
+          unpaid: '<span class="sub-pill pill-cancelled">Ended, payment not received</span>',
+          no_slot: '<span class="sub-pill pill-cancelled">Ended, server full</span>'
         }[s.state] || '';
 
         const stillPaidUp = !!(s.effectiveUntil && s.effectiveUntil * 1000 > Date.now());
@@ -916,37 +894,31 @@
               This subscription is no longer active${s.effectiveUntil ? ` &mdash; your access ended on <strong>${dateStr(s.effectiveUntil)}</strong>` : ''}.
               You can start it again from the <a href="/shop">shop</a>.
             </div>`;
+        } else if (s.state === 'unpaid' || s.state === 'no_slot') {
+          // Ended by the shop: a renewal payment did not go through, or a payment came
+          // after the paid period when the server had no free slot (it is refunded).
+          // Neither text promises that billing has stopped: the shop's cancel at PayPal
+          // can fail, and what holds either way is that any further payment is refunded.
+          const perks = s.effectiveUntil ? (stillPaidUp
+            ? ` You keep your perks until <strong>${dateStr(s.effectiveUntil)}</strong>, the end of the period you already paid for.`
+            : ` Your perks ended on <strong>${dateStr(s.effectiveUntil)}</strong>.`) : '';
+          alert = `
+            <div class="sub-alert" style="background:rgba(107,114,128,0.1);border-left-color:#6b7280">
+              <strong>${s.state === 'unpaid'
+                ? 'Your renewal payment did not go through, so this subscription has ended.'
+                : 'Your renewal payment came after your paid period ended and your server had no free slot, so this subscription has ended and we are refunding that payment.'}</strong>
+              If PayPal takes any further payment for it, we refund it automatically.${perks}
+              ${s.grantsPriorityQueue
+                ? 'You can buy it again from the <a href="/shop">shop</a> when a slot is free on your server.'
+                : 'You can buy it again from the <a href="/shop">shop</a>.'}
+            </div>`;
         }
 
         const canCancel = s.state === 'active' || s.state === 'payment_failing';
-        const ended = ['suspended', 'cancelled', 'expired', 'lapsed'].includes(s.state) && !stillPaidUp;
+        const ended = ['suspended', 'cancelled', 'expired', 'lapsed', 'unpaid', 'no_slot'].includes(s.state) && !stillPaidUp;
         const startAgain = ended && s.productId
           ? `<a class="sub-fix-btn" href="/shop?buy=${encodeURIComponent(s.productId)}${s.serverId ? '&server=' + encodeURIComponent(s.serverId) : ''}">Start again</a>`
           : '';
-
-        // Queue priority lives on one server; moving it used to take a ticket.
-        let move = '';
-        if (s.pq && s.state === 'active') {
-          const cur = s.pq.current.map(id => String(id).toUpperCase()).join(', ');
-          if (s.pq.canMove) {
-            const opts = s.pq.options.filter(o => !o.current).map(o =>
-              `<option value="${esc(o.id)}"${o.available === 0 ? ' disabled' : ''}>${esc(o.label)}${o.available === 0 ? ' (full)' : ''}</option>`).join('');
-            move = `
-              <div class="sub-move">
-                <span>Queue priority is on <strong>${esc(cur || 'no server yet')}</strong>.</span>
-                <label for="moveTo-${s.orderId}" style="font-size:0.78rem;color:var(--text-ghost)">Move to</label>
-                <select id="moveTo-${s.orderId}">${opts}</select>
-                <button class="link-action" style="margin-top:0" onclick="moveQueue(${s.orderId}, this)">Move</button>
-                <span class="hint">Takes effect at each server's next scheduled restart (every 4 hours; next ${esc(s.pq.nextRestart)}). You can move once every ${s.pq.cooldownDays} days.</span>
-              </div>`;
-          } else {
-            move = `
-              <div class="sub-move">
-                <span>Queue priority is on <strong>${esc(cur || 'no server yet')}</strong>.</span>
-                <span class="hint">${s.pq.nextMoveAt ? `You moved recently; you can move it again on ${dateStr(s.pq.nextMoveAt)}.` : 'Set your in-game id above to be able to move it.'}</span>
-              </div>`;
-          }
-        }
 
         return `
           <div class="sub-card state-${esc(s.state)}">
@@ -961,39 +933,9 @@
               ${pill}
             </div>
             ${alert}
-            ${move}
             ${canCancel || startAgain ? `<div class="sub-actions">${startAgain}${canCancel ? `<button class="link-action" onclick="cancelSub(${s.orderId}, this)">Cancel subscription</button>` : ''}</div>` : ''}
           </div>`;
       }).join('');
-    }
-
-    async function moveQueue(orderId, btn) {
-      const sel = document.getElementById('moveTo-' + orderId);
-      const to = sel && sel.value;
-      if (!to) return;
-      const label = sel.options[sel.selectedIndex].text;
-      if (!confirm(`Move your queue priority to ${label}? It leaves your current server at its next restart and starts on ${label} at its next restart. You can move again in 14 days.`)) return;
-      btn.disabled = true;
-      btn.textContent = 'Moving…';
-      try {
-        const res = await fetch('/api/shop/priority-queue/move', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId, to })
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          alert(j.error || 'Could not move. Please open a ticket in Discord.');
-          btn.disabled = false;
-          btn.textContent = 'Move';
-          return;
-        }
-        await load();
-      } catch (e) {
-        alert('Could not move: ' + e.message);
-        btn.disabled = false;
-        btn.textContent = 'Move';
-      }
     }
 
     async function cancelSub(orderId, btn) {

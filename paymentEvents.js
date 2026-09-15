@@ -1,15 +1,20 @@
 // PayPal money events the shop has to get exactly right: refunds, reversals,
 // disputes, payments with no order behind them, how long access lasts when a
-// subscription ends, and the cancellations the shop makes itself.
+// subscription ends, and the cancellations the shop makes itself. Also the
+// owner's billing rules (2026-09-15): a renewal that is not paid ends the
+// subscription at once, a payment the shop cannot honour is refunded, a
+// subscription only starts while its server has a slot, and a lost dispute takes
+// the order's perks away.
 //
 // Every function takes the database handle (and any PayPal or Discord side
 // effect) as a parameter and nothing runs on require. routes/shop.js starts
 // timers and writes on load, so logic kept there cannot be tested; kept here, the
 // tests drive it against a throwaway copy of the real schema
-// (test/paymentEvents.test.js). routes/shop.js and tools/closeSuspendedSubscriptions.js
-// wire it in.
+// (test/paymentEvents.test.js, test/billingLifecycle.test.js). routes/shop.js,
+// tools/reconcile.js and tools/closeSuspendedSubscriptions.js wire it in.
 
 const pqGuards = require('./pqGuards');
+const pqEntitlement = require('./pqEntitlement');
 const cards = require('./paymentCards');
 
 const DAY = 86400;
@@ -118,13 +123,15 @@ function findOrderForPayment(db, { paymentIds = [], customId = null, subscriptio
 // by themselves. Staff answer them in PayPal and decide what happens to the perks.
 const STAFF_REFUND_WINDOW_S = 7 * DAY;
 
-function recordRefund(db, { refundId, orderId = null, paymentId = null, amountCents = null, currency = null, kind = 'refund', source = 'webhook', now = nowUnix() }) {
+// testMode matters only for a row with no order (a payment the shop refused): a row
+// with an order takes its mode from the order.
+function recordRefund(db, { refundId, orderId = null, paymentId = null, amountCents = null, currency = null, kind = 'refund', source = 'webhook', testMode = false, now = nowUnix() }) {
   if (!refundId) return false;
   return db.prepare(`
-    INSERT OR IGNORE INTO paypal_refunds (refund_id, order_id, payment_id, amount_cents, currency, kind, source, received_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO paypal_refunds (refund_id, order_id, payment_id, amount_cents, currency, kind, source, received_at, test_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(String(refundId), orderId == null ? null : orderId, paymentId == null ? null : String(paymentId),
-    Number.isFinite(amountCents) ? amountCents : null, currency || null, kind, source, now).changes > 0;
+    Number.isFinite(amountCents) ? amountCents : null, currency || null, kind, source, now, testMode ? 1 : 0).changes > 0;
 }
 
 function refundedSoFar(db, orderId) {
@@ -156,6 +163,52 @@ function staffRefundCovers(db, { orderId, amountCents = null, now = nowUnix() })
 
 function refundKindOf(eventType) {
   return /\.REVERSED$/.test(String(eventType || '')) ? 'reversal' : 'refund';
+}
+
+// ---- Refunds the shop makes itself ------------------------------------------------------
+// A payment the shop cannot honour is refunded at once (refuseSale). Its row in
+// paypal_refunds (source 'shop', no order, the refused payment's id) is written
+// before PayPal is asked, so a retry of the sale event refunds nothing twice and the
+// refund webhook that follows is a duplicate: the refusal already reported it.
+
+// What a refund call that threw means:
+//   failed   PayPal was never asked, or answered with a 4xx and refused
+//   unknown  PayPal was asked and gave no HTTP answer (the client timed out, the
+//            network failed) or a 5xx, so the refund may have gone through
+function refundErrorOutcome(err) {
+  const status = Number(err && err.status) || 0;
+  if (!err || !err.refundAsked) return { outcome: 'failed', status };
+  if (status >= 400 && status < 500) return { outcome: 'failed', status };
+  return { outcome: 'unknown', status };
+}
+
+// The shop's own refund of a payment, if it made one.
+function shopRefundOfPayment(db, paymentId) {
+  if (!paymentId) return null;
+  return db.prepare("SELECT * FROM paypal_refunds WHERE payment_id = ? AND source = 'shop' AND kind = 'refund' LIMIT 1").get(String(paymentId)) || null;
+}
+
+// Refunds one PayPal payment (a subscription sale or a capture) in full, or by
+// amountCents. Never throws. outcome: refunded | failed | unknown (refundErrorOutcome).
+async function refundPayment({ paypal, testMode = false, paymentId, amountCents = null, currency = 'USD' }) {
+  try {
+    const r = await paypal.refundCapture(!!testMode, paymentId, {
+      amountCents: Number.isFinite(amountCents) ? amountCents : undefined,
+      currency: currency || 'USD'
+    });
+    return {
+      outcome: 'refunded', status: null,
+      refundId: r && r.refundId ? String(r.refundId) : null,
+      refundedCents: r && Number.isFinite(r.refundedCents) && r.refundedCents > 0 ? r.refundedCents : amountCents,
+      refundStatus: r && r.status ? String(r.status) : null,
+      error: null
+    };
+  } catch (e) {
+    const err = e && typeof e === 'object' ? e : new Error(String(e));
+    err.refundAsked = true;
+    const { outcome, status } = refundErrorOutcome(err);
+    return { outcome, status, refundId: null, refundedCents: null, refundStatus: null, error: String(err.message || err).slice(0, 200) };
+  }
 }
 
 // Records one refund or reversal event and makes the order change the rules above
@@ -192,6 +245,9 @@ function applyRefundEvent(db, { eventType, event = null, resource = {}, customId
   };
   if (!plan.refundId) { plan.action = 'ignored'; return plan; }
   if (db.prepare('SELECT 1 FROM paypal_refunds WHERE refund_id = ?').get(plan.refundId)) { plan.action = 'duplicate'; return plan; }
+  // The echo of a refund the shop made when it refused a payment (refuseSale), which
+  // can land before the refund's own id is stored against the payment.
+  if (kind === 'refund' && shopRefundOfPayment(db, plan.paymentId)) { plan.action = 'duplicate'; return plan; }
 
   const match = findOrderForPayment(db, { paymentIds: paymentIdsOf(r), customId, subscriptionId: r.billing_agreement_id });
   plan.order = match.order;
@@ -359,8 +415,9 @@ async function handleRefundFailure(db, input, effects = {}) {
 // ---- Disputes ------------------------------------------------------------------------------
 // CUSTOMER.DISPUTE.* events are recorded in paypal_disputes, one row per dispute,
 // and staff get a card when one opens, when its status moves and when it closes.
-// Nothing changes on the order or its perks: what a lost dispute should cost the
-// player is the owner's policy, not something to guess in code.
+// Only a dispute the shop lost changes the order: the owner's rule is that money
+// back with the buyer takes the order's perks away (revokeForLostDispute). An open
+// dispute, or a reversal hold, changes nothing.
 function disputeOf(resource) {
   const r = resource || {};
   const txs = Array.isArray(r.disputed_transactions) ? r.disputed_transactions : [];
@@ -450,7 +507,11 @@ function applyDisputeEvent(db, { eventType, resource, now = nowUnix() }) {
   return out;
 }
 
-// applyDisputeEvent plus its card. effects: getOrderWithContext(id), sendCard(specFn), logger.
+// applyDisputeEvent plus what follows it. A dispute that closed with the money back
+// with the buyer takes the order's perks away (revokeForLostDispute), and the Discord
+// role and the game servers follow; every other dispute event only posts its card.
+// Once per dispute: applyDisputeEvent reports a resolution only the first time.
+// effects: getOrderWithContext(id), removeRole(orderId), sync(), sendCard(specFn), logger.
 async function handleDisputeEvent(db, input, effects = {}) {
   const log = effects.logger || console;
   const out = applyDisputeEvent(db, input);
@@ -461,13 +522,22 @@ async function handleDisputeEvent(db, input, effects = {}) {
     log.log(`[dispute] ${d.disputeId} ${input.eventType}: status ${d.status || 'not given'} on ${on}; nothing new to report`);
     return out;
   }
+  out.revoke = null;
+  if (out.card === 'resolved' && out.result === 'lost' && out.order) {
+    out.revoke = revokeForLostDispute(db, { order: out.order, disputeId: d.disputeId, now: input.now });
+    if (out.revoke.revoked) {
+      attempt(log, 'role removal', () => effects.removeRole && effects.removeRole(out.order.id));
+      attempt(log, 'sync', () => effects.sync && effects.sync());
+    }
+  }
   const loud = out.card === 'opened' || out.result === 'lost';
-  log[loud ? 'error' : 'log'](`[dispute] ${d.disputeId} ${out.card}${out.result ? ` (${out.result})` : ''} on ${on}; order not changed`);
+  const change = out.revoke && out.revoke.revoked ? 'order revoked and its perks removed' : 'order not changed';
+  log[loud ? 'error' : 'log'](`[dispute] ${d.disputeId} ${out.card}${out.result ? ` (${out.result})` : ''} on ${on}; ${change}`);
   if (effects.sendCard) {
     const context = out.order && effects.getOrderWithContext
       ? attempt(log, 'order lookup', () => effects.getOrderWithContext(out.order.id)) : null;
     effects.sendCard(() => cards.disputeCard({
-      card: out.card, dispute: d, previous: out.previous, order: context || out.order, result: out.result, testMode: !!input.testMode
+      card: out.card, dispute: d, previous: out.previous, order: context || out.order, result: out.result, revoke: out.revoke, testMode: !!input.testMode
     }));
   }
   return out;
@@ -504,7 +574,11 @@ function recordUnmatchedSale(db, { saleId, subscriptionId, amountCents = null, c
 // staff_revoke_no_refund is a staff revoke that returned no money: its CANCELLED
 // webhook still emails the player (endedNotices), because no refund confirmation
 // told them billing stopped.
-const SHOP_CANCEL_SOURCES = Object.freeze(['staff_revoke', 'staff_revoke_no_refund', 'auto_close_suspended', 'hard_delete', 'close_suspended_tool']);
+// unpaid and no_slot are the shop's billing rules ending a subscription
+// (endUnpaidSubscription, refuseSale, reportRefusedActivation), and revoked is a
+// payment refused on a subscription the shop had already taken back (refuseSale).
+// Each of those posts its own card and email, so PayPal's CANCELLED webhook adds nothing.
+const SHOP_CANCEL_SOURCES = Object.freeze(['staff_revoke', 'staff_revoke_no_refund', 'auto_close_suspended', 'hard_delete', 'close_suspended_tool', 'unpaid', 'no_slot', 'revoked']);
 // PayPal retries a webhook for up to three days; a marker older than this is not
 // about the CANCELLED event arriving now.
 const SHOP_CANCEL_WINDOW_S = 14 * DAY;
@@ -588,6 +662,12 @@ async function cancelAtPayPal({ db, paypal, testMode, subscriptionId, reason, so
   }
 }
 
+// Whether a cancelAtPayPal result means PayPal cannot bill the subscription again, which
+// is the only case a player may be told "PayPal will not charge you for it again".
+function billingStopped(cancel) {
+  return !!cancel && (cancel.outcome === 'cancelled' || cancel.outcome === 'already_ended');
+}
+
 // Which notices a BILLING.SUBSCRIPTION.* ended event sends, given the shop's own
 // cancel marker (shopCancelFor, read for a cancel only):
 //   card         the ended card for staff
@@ -598,7 +678,16 @@ async function cancelAtPayPal({ db, paypal, testMode, subscriptionId, reason, so
 // is no refund confirmation, and the cancellation email is the only word the
 // player gets that billing stopped. That revoke took the paid period away, so the
 // email makes no promise about access the player no longer has.
-function endedNotices({ shopCancel = null } = {}) {
+//
+// shopEnded is shopEndedReason for the subscription. A subscription the shop's billing
+// rules ended ('unpaid', 'no_slot') was reported when it ended, whatever came of the
+// cancel at PayPal, so a later CANCELLED or SUSPENDED event sends nothing either. The
+// cancel marker alone cannot say that: it is taken back when PayPal refuses the cancel,
+// and staff cancelling by hand afterwards would otherwise email the player a second,
+// different story. Only the shop ever writes those two reasons, so a player's own
+// cancel is never silenced by this.
+function endedNotices({ shopCancel = null, shopEnded = null } = {}) {
+  if (shopEnded === 'unpaid' || shopEnded === 'no_slot') return { card: false, email: false, claimAccess: false };
   if (!shopCancel) return { card: true, email: true, claimAccess: true };
   if (shopCancel.source === 'staff_revoke_no_refund') return { card: false, email: true, claimAccess: false };
   return { card: false, email: false, claimAccess: false };
@@ -687,9 +776,14 @@ function applyPaidThroughFloor(db, { subscriptionId, floor = null, lastPaymentAt
   if (!subscriptionId) return out;
   const sub = String(subscriptionId);
   const hasFloor = Number.isFinite(floor) && floor > 0;
-  const latestRefunded = hasFloor ? pqGuards.refundedLatestCycle(db, sub) : null;
-  if (latestRefunded) out.skipped = 'latest_cycle_refunded';
-  const usable = hasFloor && !latestRefunded ? floor : null;
+  // A subscription the shop ended (payment not received, or no slot for a payment)
+  // keeps exactly what it had: PayPal's last payment may be one the shop refused and
+  // refunded, and raising a cycle to it would give that slot back for free.
+  const shopEnded = hasFloor ? shopEndedReason(db, sub) : null;
+  const latestRefunded = hasFloor && !shopEnded ? pqGuards.refundedLatestCycle(db, sub) : null;
+  if (shopEnded) out.skipped = 'ended_by_shop';
+  else if (latestRefunded) out.skipped = 'latest_cycle_refunded';
+  const usable = hasFloor && !shopEnded && !latestRefunded ? floor : null;
 
   db.transaction(() => {
     const undated = db.prepare(`
@@ -809,15 +903,449 @@ function everPaid({ localPaid = false, billingInfo = null } = {}) {
   return { paid: pp, basis: 'paypal' };
 }
 
-// Whether a billing failure is news for staff. prev is the issue row before this
-// observation (or null). A failure count of 0 is PayPal's snapshot taken before
-// the count moved, which carried nothing for staff to act on; the next event with
-// a count escalates, because the count then moves above the stored 0.
-function billingIssueEscalates({ prev = null, failedCount = 0 } = {}) {
-  const n = Number(failedCount) || 0;
-  if (n <= 0) return false;
-  if (!prev || prev.resolved_at != null) return true;
-  return n > (Number(prev.failed_count) || 0);
+// ---- Billing issue records ----------------------------------------------------------------
+// subscription_billing_issues keeps one row per subscription whose renewal failed:
+// when it was seen, how many payments had failed and what was owed. A failure ends
+// the subscription at once (endUnpaidSubscription), so a row is written and resolved
+// in the same step and stays as the history staff read on the Billing Issues tab.
+function recordBillingIssue(db, { subscriptionId, orderId = null, steamId = null, paypalStatus = null, failedCount = 0, outstandingCents = 0, currency = 'usd', lastPaymentAt = null, nextBillingAt = null, source = 'webhook', now = nowUnix() }) {
+  db.prepare(`
+    INSERT INTO subscription_billing_issues
+      (paypal_subscription_id, order_id, steam_id, paypal_status, failed_count, outstanding_cents, currency,
+       last_payment_at, next_billing_at, first_seen_at, last_seen_at, source)
+    VALUES (@sub, @orderId, @steamId, @status, @failed, @owed, @currency, @lastPaid, @nextBill, @now, @now, @source)
+    ON CONFLICT(paypal_subscription_id) DO UPDATE SET
+      order_id = COALESCE(excluded.order_id, order_id),
+      steam_id = COALESCE(excluded.steam_id, steam_id),
+      paypal_status = excluded.paypal_status, failed_count = excluded.failed_count,
+      outstanding_cents = excluded.outstanding_cents, currency = excluded.currency,
+      last_payment_at = excluded.last_payment_at, next_billing_at = excluded.next_billing_at,
+      last_seen_at = excluded.last_seen_at, resolved_at = NULL, source = excluded.source
+  `).run({
+    sub: String(subscriptionId), orderId, steamId, status: paypalStatus, failed: Number(failedCount) || 0,
+    owed: Number(outstandingCents) || 0, currency: String(currency || 'usd'), lastPaid: lastPaymentAt,
+    nextBill: nextBillingAt, now, source: String(source || 'webhook')
+  });
+}
+
+// Closes an open record. True when one was open.
+function resolveBillingIssue(db, subscriptionId, now = nowUnix()) {
+  if (!subscriptionId) return false;
+  return db.prepare('UPDATE subscription_billing_issues SET resolved_at = ? WHERE paypal_subscription_id = ? AND resolved_at IS NULL')
+    .run(now, String(subscriptionId)).changes > 0;
+}
+
+// ---- A subscription marked ended -------------------------------------------------------------
+// Every order row of a subscription (one per billing cycle) carries the end, or an
+// older cycle would surface as "the latest cancellable order". The earliest time and
+// the first reason are kept, so a repeat, or PayPal's CANCELLED webhook after the
+// shop's own cancel, never overwrites why it ended. Reasons:
+//   cancelled | suspended | expired   PayPal ended it, or the player cancelled
+//   unpaid                            the shop ended it: a renewal payment failed
+//   no_slot                           the shop ended it: its server had no slot for a payment
+function markSubscriptionEnded(db, subscriptionId, reason = 'cancelled', now = nowUnix()) {
+  if (!subscriptionId) return 0;
+  return db.prepare(`
+    UPDATE orders SET
+      subscription_cancelled_at = COALESCE(subscription_cancelled_at, @now),
+      subscription_ended_reason = COALESCE(subscription_ended_reason, @reason)
+    WHERE paypal_subscription_id = @sub
+  `).run({ now, reason: String(reason || 'cancelled'), sub: String(subscriptionId) }).changes;
+}
+
+// 'unpaid' or 'no_slot' when the shop itself ended the subscription, else null.
+function shopEndedReason(db, subscriptionId) {
+  if (!subscriptionId) return null;
+  const row = db.prepare(`
+    SELECT subscription_ended_reason AS reason FROM orders
+    WHERE paypal_subscription_id = ? AND subscription_ended_reason IN ('unpaid', 'no_slot')
+    ORDER BY id DESC LIMIT 1
+  `).get(String(subscriptionId));
+  return row ? row.reason : null;
+}
+
+// The subscription's newest order with its user and product, which is what a card
+// and an email about the subscription need. undefined when the shop has no order for it.
+function subscriptionContext(db, subscriptionId) {
+  if (!subscriptionId) return undefined;
+  return db.prepare(`
+    SELECT o.id AS order_id, o.steam_id, o.server_id, o.amount_cents, o.test_mode, o.status,
+           o.payer_email, o.effective_until, o.paypal_subscription_id,
+           u.persona, u.platform, u.gamertag, u.bm_player_id, u.bi_uid, u.discord_id,
+           p.title AS product_title, p.currency, p.discord_role_id, p.grants_priority_queue, p.server_specific
+    FROM orders o
+    JOIN users u    ON o.steam_id = u.steam_id
+    JOIN products p ON o.product_id = p.id
+    WHERE o.paypal_subscription_id = ?
+    ORDER BY o.id DESC LIMIT 1
+  `).get(String(subscriptionId));
+}
+
+function subscriptionAccessUntil(db, subscriptionId) {
+  const r = db.prepare("SELECT MAX(effective_until) AS u FROM orders WHERE paypal_subscription_id = ? AND status = 'completed'").get(String(subscriptionId));
+  return r && r.u ? r.u : null;
+}
+
+// ---- No payment, no subscription -------------------------------------------------------------
+// The owner's rule (2026-09-15): "If we haven't received funds on time they should
+// not have priority queue preventing a new person from getting it." When PayPal
+// cannot take a renewal (BILLING.SUBSCRIPTION.PAYMENT.FAILED, or the daily PayPal
+// check finding an ACTIVE agreement with failed payments), the shop ends the
+// subscription at once: no grace days, and PayPal is not left retrying, since a
+// retry weeks later would charge the player, owed amount and all, for a slot that
+// may have been sold since.
+//
+// Only priority queue works this way, because only priority queue holds a slot
+// someone else could buy. Backer and Supporter give a Discord role and nothing else
+// (the owner's rule), so a failed payment on one is recorded as an open billing issue
+// and left to PayPal's own retries; its role goes when its paid period runs out, and
+// PayPal's suspension, if it comes, is reported as before.
+//
+// Only an ACTIVE agreement that took a payment at some point is ended. A failure on
+// an agreement PayPal already ended is history, and one that never paid has nothing
+// behind it.
+//
+// The decision and the local end are one synchronous step, so a PayPal retry of the
+// event, or the daily check meeting the same agreement, finds it ended and does
+// nothing: one cancel, one card, one email per subscription. Returns { action, ... }:
+//   ignored        no subscription id
+//   not_active     PayPal's agreement is not ACTIVE (any open record resolved)
+//   no_orders      the shop holds no order for it (any open record resolved)
+//   never_paid     it never took a payment (any open record resolved)
+//   already_ended  the shop already marks it ended
+//   not_priority_queue  not a priority queue product: recorded as an open issue only
+//   ended          recorded, marked ended 'unpaid' and resolved just now
+function claimUnpaidEnd(db, { subscriptionId, billingInfo = null, paypalStatus = 'ACTIVE', source = 'webhook', now = nowUnix() } = {}) {
+  const out = { action: null, subscriptionId: subscriptionId ? String(subscriptionId) : null, ctx: null, failedCount: 0, outstandingCents: 0, currency: 'usd' };
+  if (!out.subscriptionId) { out.action = 'ignored'; return out; }
+  const sub = out.subscriptionId;
+  const bi = billingInfo && typeof billingInfo === 'object' ? billingInfo : {};
+  const owed = moneyOf(bi.outstanding_balance);
+  out.failedCount = Number(bi.failed_payments_count) || 0;
+  out.outstandingCents = owed ? owed.cents : 0;
+  db.transaction(() => {
+    const status = String(paypalStatus || 'ACTIVE').toUpperCase();
+    if (status !== 'ACTIVE') { resolveBillingIssue(db, sub, now); out.action = 'not_active'; return; }
+    const ctx = subscriptionContext(db, sub);
+    if (!ctx) { resolveBillingIssue(db, sub, now); out.action = 'no_orders'; return; }
+    out.ctx = ctx;
+    out.currency = (owed && owed.currency) || ctx.currency || 'usd';
+    const localPaid = !!db.prepare("SELECT 1 FROM orders WHERE paypal_subscription_id = ? AND status IN ('completed', 'refunded') LIMIT 1").get(sub);
+    if (!everPaid({ localPaid, billingInfo: bi }).paid) { resolveBillingIssue(db, sub, now); out.action = 'never_paid'; return; }
+    if (db.prepare('SELECT 1 FROM orders WHERE paypal_subscription_id = ? AND subscription_cancelled_at IS NOT NULL LIMIT 1').get(sub)) {
+      resolveBillingIssue(db, sub, now);
+      out.action = 'already_ended';
+      return;
+    }
+    recordBillingIssue(db, {
+      subscriptionId: sub, orderId: ctx.order_id, steamId: ctx.steam_id, paypalStatus: status,
+      failedCount: out.failedCount, outstandingCents: out.outstandingCents, currency: out.currency,
+      lastPaymentAt: unixOf(bi.last_payment && bi.last_payment.time), nextBillingAt: unixOf(bi.next_billing_time), source, now
+    });
+    if (!ctx.grants_priority_queue) { out.action = 'not_priority_queue'; return; }
+    markSubscriptionEnded(db, sub, 'unpaid', now);
+    resolveBillingIssue(db, sub, now);
+    out.action = 'ended';
+  })();
+  return out;
+}
+
+const UNPAID_CANCEL_REASON = 'Renewal payment not received';
+
+// claimUnpaidEnd plus what follows an end: the cancel at PayPal (marked 'unpaid', so
+// its CANCELLED webhook stays quiet), the game servers and the Discord role, one card
+// and one email. effects (all optional except paypal):
+//   paypal                  cancelSubscription
+//   sync()                  re-sync the game servers
+//   removeLapsedRole(id)    remove the order's role unless something still gives it
+//   sendCard(specFn)        post a card
+//   sendEmail({ to, ctx, accessUntil })   the player's "your subscription has ended" email
+//   logger
+async function endUnpaidSubscription(db, input = {}, effects = {}) {
+  const log = effects.logger || console;
+  const now = Number.isFinite(input.now) ? input.now : nowUnix();
+  const source = input.source || 'webhook';
+  const plan = claimUnpaidEnd(db, { ...input, source, now });
+  const sub = plan.subscriptionId;
+  if (plan.action !== 'ended') {
+    if (plan.action === 'not_priority_queue') {
+      log.log(`[billing] payment failure on ${sub} (${source}): not priority queue, recorded and left to PayPal's retries`);
+    } else if (plan.action !== 'ignored' && plan.action !== 'already_ended') {
+      log.log(`[billing] payment failure on ${sub} (${source}): ${plan.action.replace(/_/g, ' ')}, nothing to end`);
+    }
+    return plan;
+  }
+  const ctx = plan.ctx;
+  plan.cancel = await cancelAtPayPal({ db, paypal: effects.paypal, testMode: !!ctx.test_mode, subscriptionId: sub, reason: UNPAID_CANCEL_REASON, source: 'unpaid', now });
+  plan.accessUntil = subscriptionAccessUntil(db, sub);
+  const bad = plan.cancel.outcome === 'failed' || plan.cancel.outcome === 'unknown';
+  log[bad ? 'error' : 'log'](`[billing] ${sub} ended for non-payment (order #${ctx.order_id}, ${source}); cancel at PayPal: ${plan.cancel.outcome}${plan.cancel.error ? ` (${plan.cancel.error})` : ''}`);
+  attempt(log, 'sync', () => effects.sync && effects.sync());
+  attempt(log, 'role removal', () => effects.removeLapsedRole && effects.removeLapsedRole(ctx.order_id));
+  if (effects.sendCard) {
+    effects.sendCard(() => cards.unpaidEndedCard({
+      ctx, subscriptionId: sub, cancel: plan.cancel, failedCount: plan.failedCount, outstandingCents: plan.outstandingCents,
+      currency: plan.currency, accessUntil: plan.accessUntil, source, now
+    }));
+  }
+  let emailed = false;
+  if (effects.sendEmail && ctx.payer_email) {
+    emailed = attempt(log, 'player email', () => { effects.sendEmail({ to: ctx.payer_email, ctx, accessUntil: plan.accessUntil, billingStopped: billingStopped(plan.cancel) }); return true; }) === true;
+  }
+  attempt(log, 'recording the notices', () => db.prepare('UPDATE subscription_billing_issues SET notified_at = ?, player_emailed_at = COALESCE(?, player_emailed_at) WHERE paypal_subscription_id = ?')
+    .run(now, emailed ? now : null, sub));
+  plan.emailed = emailed;
+  return plan;
+}
+
+// ---- A slot for a priority queue payment -------------------------------------------------------
+// A priority queue payment is honoured only when it takes no slot from anyone: the
+// player still holds priority queue on the order's server (a renewal inside its
+// window, pqEntitlement.RENEWAL_WINDOW_S), or the server has a free slot. Sandbox
+// orders and other products never hold a slot, so they always pass.
+//
+// row: an order with its product's grants_priority_queue and server_specific. "Still
+// holds priority queue" is asked of the order's ACCOUNT, as checkout asks it: anyone
+// can set their in-game ID to a holder's, pass as a renewal, and change it back. The
+// buyer's own checkouts waiting at PayPal are left out of the reservations, since they
+// are this payment; before ({ createdAt, id }) counts only checkouts started earlier
+// than it (pqEntitlement.pqSlotsPerServer). Returns null when every server the order
+// covers is fine, else { serverId, slot } for the first full one.
+function missingSlot(db, { row, now = nowUnix(), before = null }) {
+  if (!row || !row.grants_priority_queue || row.test_mode) return null;
+  for (const serverId of pqEntitlement.coveredServers(row)) {
+    if (pqEntitlement.accountHoldsPq(db, { steamId: row.steam_id, serverId, now })) continue;
+    const slot = pqEntitlement.pqSlotFree(db, { serverId, now, productId: row.product_id, excludeSteamId: row.steam_id, excludeOrderId: row.id, reservedBefore: before });
+    if (!slot.free) return { serverId, slot: { limit: slot.limit, used: slot.used, reserved: slot.reserved } };
+  }
+  return null;
+}
+
+const ORDER_FOR_SLOT_SQL = `
+  SELECT o.*, p.grants_priority_queue, p.server_specific, u.bi_uid
+  FROM orders o JOIN products p ON p.id = o.product_id LEFT JOIN users u ON u.steam_id = o.steam_id`;
+
+// ---- A subscription activating on a full server ---------------------------------------------
+// Two buyers can approve the last slot at PayPal within the same minutes. Checkout
+// holds a slot for each waiting checkout (pqEntitlement.CHECKOUT_RESERVATION_S), and
+// activation checks again: a priority queue subscription that activates when its
+// server has no slot for it is not fulfilled. It is marked ended 'no_slot' and its
+// checkout row cancelled right here, in the same synchronous step the caller then
+// fulfils in, so nothing can take the slot between the check and the fulfilment.
+// The caller cancels it at PayPal and reports it (reportRefusedActivation); the first
+// payment, when PayPal sends it, is refunded (refuseSale).
+//
+// Returns { refuse: false, reason } to go ahead (no_order, already_done, ok), or
+// { refuse: true, claimed, reason, order, serverId, slot }. claimed is true only for
+// the call that refused it: a retry, or the return page and the webhook both
+// arriving, finds it already ended and reports nothing again.
+function claimActivation(db, { orderId, now = nowUnix() } = {}) {
+  return db.transaction(() => {
+    const order = db.prepare(`${ORDER_FOR_SLOT_SQL} WHERE o.id = ?`).get(Number(orderId));
+    if (!order) return { refuse: false, reason: 'no_order' };
+    if (order.status === 'completed' || order.status === 'refunded') return { refuse: false, reason: 'already_done' };
+    if (!order.paypal_subscription_id) return { refuse: false, reason: 'ok' };
+    const ended = shopEndedReason(db, order.paypal_subscription_id);
+    if (ended) return { refuse: true, claimed: false, reason: `ended_${ended}`, order };
+    // Only checkouts started before this one count against it: of two buyers racing
+    // for the last slot the earlier gets it, whichever approves first.
+    const missing = missingSlot(db, { row: order, now, before: { createdAt: order.created_at, id: order.id } });
+    if (!missing) return { refuse: false, reason: 'ok' };
+    markSubscriptionEnded(db, order.paypal_subscription_id, 'no_slot', now);
+    db.prepare("UPDATE orders SET status = 'cancelled' WHERE paypal_subscription_id = ? AND status = 'pending'").run(order.paypal_subscription_id);
+    return { refuse: true, claimed: true, reason: 'no_slot', order, serverId: missing.serverId, slot: missing.slot };
+  })();
+}
+
+const NO_SLOT_CANCEL_REASON = 'No priority queue slot free on the server';
+
+// After claimActivation refused and claimed an activation: the cancel at PayPal
+// (marked 'no_slot', so its CANCELLED webhook stays quiet), one card, one email. Never
+// throws for anything PayPal does. effects: paypal, getOrderWithContext(id),
+// sendCard(specFn), sendEmail({ to, ctx, reason }), logger.
+async function reportRefusedActivation(db, { verdict, payerEmail = null, now = nowUnix() } = {}, effects = {}) {
+  const log = effects.logger || console;
+  const o = verdict.order;
+  const sub = o.paypal_subscription_id;
+  const cancel = await cancelAtPayPal({ db, paypal: effects.paypal, testMode: !!o.test_mode, subscriptionId: sub, reason: NO_SLOT_CANCEL_REASON, source: 'no_slot', now });
+  const bad = cancel.outcome === 'failed' || cancel.outcome === 'unknown';
+  log[bad ? 'error' : 'log'](`[pq-slot] order #${o.id}: no free slot on ${verdict.serverId} when subscription ${sub} activated, so it was not started; cancel at PayPal: ${cancel.outcome}`);
+  const ctx = (effects.getOrderWithContext && attempt(log, 'order lookup', () => effects.getOrderWithContext(o.id))) || o;
+  if (effects.sendCard) effects.sendCard(() => cards.refusedActivationCard({ order: ctx, serverId: verdict.serverId, slot: verdict.slot, cancel }));
+  const to = payerEmail || ctx.payer_email || null;
+  let emailed = false;
+  if (effects.sendEmail && to) emailed = attempt(log, 'player email', () => { effects.sendEmail({ to, ctx, reason: 'activation', billingStopped: billingStopped(cancel) }); return true; }) === true;
+  return { cancel, emailed };
+}
+
+// ---- A payment the shop cannot honour -------------------------------------------------------
+// PAYMENT.SALE.COMPLETED books a cycle only while the subscription is still the
+// shop's to bill and its payment takes no priority queue slot from anyone
+// (missingSlot): a renewal inside its window, or a server with a free slot.
+// Otherwise the payment is refunded and the subscription cancelled (refuseSale), so
+// nobody pays for priority queue they cannot have:
+//   no_slot        paid after the paid period and window ended, and the server is
+//                  full now; or a first payment that landed after the server filled
+//   ended_unpaid   paid on a subscription the shop ended for non-payment
+//   ended_no_slot  paid on a subscription the shop ended for want of a slot
+//   revoked        paid on a subscription whose every order the shop had taken back
+//                  and that the shop had ended (subscriptionStoppedByShop)
+// The first cycle's own payment is booked when its order was activated, because
+// activation already held the slot for it (claimActivation). A first payment that
+// arrives before activation counts only checkouts started before its own.
+//
+// Returns { book: true, reason }, { book: false, reason, firstPayment?, serverId?,
+// slot? }, or { book: null, reason: 'no_order' } when no order stands for the
+// subscription and the shop never ended it (reported to staff, not refunded).
+function saleBookingDecision(db, { subscriptionId, resource = null, now = nowUnix() } = {}) {
+  const sub = String(subscriptionId || '');
+  const ended = shopEndedReason(db, sub);
+  if (ended) return { book: false, reason: `ended_${ended}` };
+  const row = db.prepare(`${ORDER_FOR_SLOT_SQL} WHERE o.paypal_subscription_id = ? AND o.status IN ('completed', 'pending') ORDER BY o.id ASC LIMIT 1`).get(sub);
+  if (!row) return subscriptionStoppedByShop(db, sub) ? { book: false, reason: 'revoked' } : { book: null, reason: 'no_order' };
+  const first = unpaidFirstCycleRow(db, sub);
+  if (first && isFirstCycleSale(first, saleTimeOf(resource, now))) return { book: true, reason: 'first_cycle' };
+  const completed = !!db.prepare("SELECT 1 FROM orders WHERE paypal_subscription_id = ? AND status = 'completed' LIMIT 1").get(sub);
+  const missing = missingSlot(db, { row, now, before: completed ? null : { createdAt: row.created_at, id: row.id } });
+  if (missing) {
+    return { book: false, reason: 'no_slot', firstPayment: !completed, serverId: missing.serverId, slot: missing.slot };
+  }
+  return { book: true, reason: row.grants_priority_queue && !row.test_mode ? 'slot' : 'no_slot_needed' };
+}
+
+// Whether a subscription with no completed or pending order is one the shop itself
+// stopped: every order was revoked, refunded or cancelled, and the shop marked the
+// subscription ended (a staff revoke, PayPal's cancel notice) or lost a dispute on it.
+// A payment on such a subscription gives nothing, so it is refunded. An agreement the
+// shop never ended stays a staff decision (card only): staff may have left it billing
+// on purpose, and nothing in the shop's records says otherwise.
+function subscriptionStoppedByShop(db, subscriptionId) {
+  if (!subscriptionId) return false;
+  const rows = db.prepare('SELECT id, status, subscription_cancelled_at FROM orders WHERE paypal_subscription_id = ?').all(String(subscriptionId));
+  if (!rows.length || rows.some(r => r.status === 'completed' || r.status === 'pending')) return false;
+  if (rows.some(r => r.subscription_cancelled_at != null)) return true;
+  const ids = rows.map(r => r.id);
+  return !!db.prepare(`
+    SELECT 1 FROM paypal_disputes
+    WHERE order_id IN (${ids.map(() => '?').join(',')}) AND status = 'RESOLVED'
+      AND outcome IN ('RESOLVED_BUYER_FAVOUR', 'ACCEPTED')
+    LIMIT 1
+  `).get(...ids);
+}
+
+const REFUSED_CANCEL_REASONS = Object.freeze({
+  no_slot: 'Payment refunded: no priority queue slot free',
+  ended_unpaid: 'Payment refunded: the subscription had ended for non-payment',
+  ended_no_slot: 'Payment refunded: no priority queue slot free',
+  revoked: 'Payment refunded: the subscription had ended'
+});
+// How refuseSale marks the subscription and names its cancel, per refusal reason. A
+// revoked subscription keeps the reason it already has ('cancelled' only fills a gap).
+const REFUSED_END_REASON = Object.freeze({ ended_unpaid: 'unpaid', revoked: 'cancelled' });
+const REFUSED_CANCEL_SOURCE = Object.freeze({ ended_unpaid: 'unpaid', revoked: 'revoked' });
+
+// Refunds one sale saleBookingDecision refused, and cancels its subscription. The
+// claim comes first and is synchronous: a row in paypal_refunds for the sale (source
+// 'shop'), the subscription marked ended, any checkout row of it cancelled. A retry
+// of the sale event finds that row and does nothing. Then PayPal is asked:
+//   refunded  the row takes the refund's own id, so the refund webhook is a duplicate
+//   failed    PayPal refused, so the row goes: the daily PayPal check then lists the
+//             payment as unbooked until staff refund it by hand
+//   unknown   no answer: the row stays, so a second refund is never tried
+// One card for staff. The player gets one email, and only when the money went back:
+// a subscription already ended for want of a slot was explained when it ended.
+// effects: paypal (refundCapture, cancelSubscription), sendCard(specFn),
+// sendEmail({ to, ctx, reason, amountCents, currency }), logger.
+async function refuseSale(db, { subscriptionId, resource = {}, decision = {}, testMode = false, now = nowUnix() } = {}, effects = {}) {
+  const log = effects.logger || console;
+  const r = resource || {};
+  const sub = String(subscriptionId);
+  const amount = moneyOf(r.amount);
+  const plan = {
+    action: null, reason: decision.reason || 'no_slot', subscriptionId: sub, saleId: r.id ? String(r.id) : null,
+    amountCents: amount ? amount.cents : null, currency: amount ? amount.currency : 'USD', refund: null, cancel: null, ctx: null, emailed: false
+  };
+  if (!plan.saleId) {
+    plan.action = 'ignored';
+    log.error(`[billing] a payment the shop cannot honour on ${sub} carries no sale id, so nothing was refunded: check it in PayPal`);
+    return plan;
+  }
+  const claimId = `shop:${plan.saleId}`;
+  const ctxBefore = subscriptionContext(db, sub) || null;
+  const sandbox = ctxBefore ? !!ctxBefore.test_mode : !!testMode;
+  const claimed = db.transaction(() => {
+    if (shopRefundOfPayment(db, plan.saleId)) return false;
+    recordRefund(db, { refundId: claimId, orderId: null, paymentId: plan.saleId, amountCents: plan.amountCents, currency: plan.currency, kind: 'refund', source: 'shop', testMode: sandbox, now });
+    markSubscriptionEnded(db, sub, REFUSED_END_REASON[plan.reason] || 'no_slot', now);
+    db.prepare("UPDATE orders SET status = 'cancelled' WHERE paypal_subscription_id = ? AND status = 'pending'").run(sub);
+    resolveBillingIssue(db, sub, now);
+    return true;
+  })();
+  if (!claimed) {
+    plan.action = 'duplicate';
+    log.log(`[billing] sale ${plan.saleId} on ${sub} was already refused and refunded; nothing to do`);
+    return plan;
+  }
+  plan.action = 'refused';
+  plan.ctx = subscriptionContext(db, sub) || null;
+  plan.refund = await refundPayment({ paypal: effects.paypal, testMode: sandbox, paymentId: plan.saleId, amountCents: plan.amountCents, currency: plan.currency });
+  attempt(log, `sale ${plan.saleId}: recording the refund`, () => {
+    if (plan.refund.outcome === 'refunded' && plan.refund.refundId && !db.prepare('SELECT 1 FROM paypal_refunds WHERE refund_id = ?').get(plan.refund.refundId)) {
+      db.prepare('UPDATE paypal_refunds SET refund_id = ?, amount_cents = COALESCE(?, amount_cents) WHERE refund_id = ?')
+        .run(plan.refund.refundId, Number.isFinite(plan.refund.refundedCents) ? plan.refund.refundedCents : null, claimId);
+    } else if (plan.refund.outcome === 'failed') {
+      db.prepare('DELETE FROM paypal_refunds WHERE refund_id = ?').run(claimId);
+    }
+  });
+  plan.cancel = await cancelAtPayPal({
+    db, paypal: effects.paypal, testMode: sandbox, subscriptionId: sub,
+    reason: REFUSED_CANCEL_REASONS[plan.reason] || REFUSED_CANCEL_REASONS.no_slot,
+    source: REFUSED_CANCEL_SOURCE[plan.reason] || 'no_slot', now
+  });
+  const money = Number.isFinite(plan.amountCents) ? `${(plan.amountCents / 100).toFixed(2)} ${plan.currency}` : 'amount not given';
+  const bad = plan.refund.outcome !== 'refunded' || plan.cancel.outcome === 'failed' || plan.cancel.outcome === 'unknown';
+  log[bad ? 'error' : 'log'](`[billing] sale ${plan.saleId} (${money}${sandbox ? ', sandbox' : ''}) on ${sub} cannot be honoured (${plan.reason}); refund: ${plan.refund.outcome}${plan.refund.error ? ` (${plan.refund.error})` : ''}; cancel at PayPal: ${plan.cancel.outcome}`);
+  if (effects.sendCard) {
+    effects.sendCard(() => cards.refusedPaymentCard({
+      ctx: plan.ctx, subscriptionId: sub, saleId: plan.saleId, amountCents: plan.amountCents, currency: plan.currency,
+      reason: plan.reason, firstPayment: !!decision.firstPayment, serverId: decision.serverId || null, slot: decision.slot || null,
+      refund: plan.refund, cancel: plan.cancel, testMode: sandbox
+    }));
+  }
+  const to = plan.ctx ? plan.ctx.payer_email : null;
+  if (effects.sendEmail && to && plan.refund.outcome === 'refunded' && plan.reason !== 'ended_no_slot') {
+    const reason = plan.reason === 'no_slot' && decision.firstPayment ? 'first_payment' : plan.reason;
+    plan.emailed = attempt(log, 'player email', () => {
+      effects.sendEmail({ to, ctx: plan.ctx, reason, amountCents: plan.amountCents, currency: plan.currency, billingStopped: billingStopped(plan.cancel) });
+      return true;
+    }) === true;
+  }
+  return plan;
+}
+
+// ---- A dispute the shop lost -----------------------------------------------------------------
+// The money went back to the buyer, so the order stops giving its perks, the same as
+// a refund: status 'refunded' (every entitlement reader takes that as no perks). No
+// staff member made the change, so admin_audit records it with actor 'paypal' and
+// reason 'dispute_lost'. An order that is no longer completed (already refunded or
+// revoked) is left as it is. The subscription is not cancelled here: a dispute is
+// about one payment, and the card tells staff to cancel it if PayPal bills it again.
+function revokeForLostDispute(db, { order, disputeId = null, now = nowUnix() }) {
+  if (!order) return { revoked: false, reason: 'no_order', status: null };
+  return db.transaction(() => {
+    const upd = db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ? AND status = 'completed'").run(order.id);
+    if (!upd.changes) {
+      const current = db.prepare('SELECT status FROM orders WHERE id = ?').get(order.id);
+      return { revoked: false, reason: 'not_completed', status: current ? current.status : null };
+    }
+    require('./adminAudit').recordAdminAudit(db, {
+      actor: 'paypal', action: 'order.revoke', target: order.steam_id,
+      before: { order_id: order.id, status: 'completed' },
+      after: { order_id: order.id, status: 'refunded', dispute_id: disputeId },
+      reason: 'dispute_lost', now
+    });
+    return { revoked: true, reason: 'dispute_lost', status: 'refunded' };
+  })();
 }
 
 // The subscriptions a billing rescan asks PayPal about: every one the shop believes
@@ -836,6 +1364,25 @@ function billingRescanTargets(db) {
   `).all();
 }
 
+// Subscriptions the shop ended for non-payment or for want of a slot in the last
+// SHOP_END_RECHECK_S, which the daily PayPal check looks up again: when the cancel at
+// PayPal did not go through at the time, the agreement is still ACTIVE and can bill,
+// and the check cancels it then (tools/reconcile.js recheckShopEndedCancels). Past
+// that window any payment PayPal still takes is refunded when it arrives (refuseSale),
+// which cancels once more. reason is 'unpaid' or 'no_slot'.
+const SHOP_END_RECHECK_S = 45 * DAY;
+function shopEndedRecheckTargets(db, now = nowUnix()) {
+  return db.prepare(`
+    SELECT paypal_subscription_id AS sub_id, MAX(test_mode) AS test_mode, MAX(subscription_ended_reason) AS reason
+    FROM orders
+    WHERE paypal_subscription_id IS NOT NULL
+      AND subscription_ended_reason IN ('unpaid', 'no_slot')
+      AND subscription_cancelled_at > ?
+    GROUP BY paypal_subscription_id
+    ORDER BY paypal_subscription_id
+  `).all(now - SHOP_END_RECHECK_S);
+}
+
 module.exports = {
   // payloads
   moneyOf, unixOf, paymentIdFromHref, paymentIdsOf, disputeOf,
@@ -843,18 +1390,22 @@ module.exports = {
   findOrderForPayment,
   // refunds
   recordRefund, refundedSoFar, isWholeRefund, staffRefundCovers, applyRefundEvent, handleRefundEvent, STAFF_REFUND_WINDOW_S,
-  applyRefundFailure, handleRefundFailure,
+  applyRefundFailure, handleRefundFailure, refundErrorOutcome, shopRefundOfPayment, refundPayment,
   // disputes
-  disputeMoneyResult, applyDisputeEvent, handleDisputeEvent,
+  disputeMoneyResult, applyDisputeEvent, handleDisputeEvent, revokeForLostDispute,
   // unmatched payments
   recordUnmatchedSale,
   // shop cancels
   SHOP_CANCEL_SOURCES, SHOP_CANCEL_WINDOW_S, markShopCancel, clearShopCancel, restoreShopCancel, shopCancelFor,
-  cancelErrorOutcome, cancelAtPayPal, endedNotices,
+  cancelErrorOutcome, cancelAtPayPal, billingStopped, endedNotices,
   // access floor
   MONTHLY, UNBOOKED_PAYMENT_GAP_S, addBillingInterval, intervalOfPlan, planInterval, paidThroughOf, applyPaidThroughFloor,
   // first cycle and cycle end
   FIRST_CYCLE_DAYS, saleTimeOf, unpaidFirstCycleRow, isFirstCycleSale, renewalCycleEnd,
-  // billing failures
-  paypalEverPaid, everPaid, billingIssueEscalates, billingRescanTargets
+  // billing failures and how a subscription ends
+  paypalEverPaid, everPaid, billingRescanTargets, recordBillingIssue, resolveBillingIssue,
+  markSubscriptionEnded, shopEndedReason, subscriptionContext, claimUnpaidEnd, endUnpaidSubscription,
+  SHOP_END_RECHECK_S, shopEndedRecheckTargets, UNPAID_CANCEL_REASON, NO_SLOT_CANCEL_REASON,
+  // a slot for a priority queue payment
+  missingSlot, claimActivation, reportRefusedActivation, saleBookingDecision, subscriptionStoppedByShop, refuseSale
 };

@@ -1482,9 +1482,10 @@ try {
   console.error('[backup] could not schedule:', e.message);
 }
 // The 08:30 UTC PayPal reconciliation (tools/reconcile.js): payments PayPal took
-// that nothing in the shop accounts for, in one card before the health card.
+// that nothing in the shop accounts for, in one card before the health card, and
+// ACTIVE subscriptions still failing at PayPal, ended the way the webhook ends one.
 try {
-  require('./tools/reconcile').scheduleDailyReconcile();
+  require('./tools/reconcile').scheduleDailyReconcile({ endUnpaid: shopRoutes.endUnpaidSubscription });
 } catch (e) {
   console.error('[reconcile] could not schedule:', e.message);
 }

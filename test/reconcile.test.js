@@ -495,3 +495,75 @@ test('a first payment the shop never attached to its active order is listed apar
   const out2 = await run(fakePayPal([[txn(later, { ref: 'I-TEST00000004', at: NOW + 25 * DAY })]]), { post: poster(), now: NOW + 26 * DAY });
   assert.deepEqual(out2.unbooked.map(p => [p.transactionId, p.unattachedOrderId]), [[later, null]]);
 });
+
+// ---- Subscriptions still failing at PayPal --------------------------------------------------
+
+// A PayPal client answering subscription lookups: states maps an id to the answer,
+// throws names ids whose lookup fails, and anything else is a healthy ACTIVE agreement.
+function subscriptionPayPal({ states = {}, throws = [], configured = { live: true, sandbox: true } } = {}) {
+  const asked = [];
+  return {
+    asked,
+    isConfigured: (testMode) => (testMode ? configured.sandbox : configured.live),
+    async getSubscription(testMode, id) {
+      asked.push({ testMode, id });
+      if (throws.includes(id)) { const e = new Error('paypal 503: Service Unavailable'); e.status = 503; throw e; }
+      return states[id] || { id, status: 'ACTIVE', billing_info: { failed_payments_count: 0 } };
+    }
+  };
+}
+
+test('the daily check ends each ACTIVE agreement with failed payments and leaves healthy and ended ones alone', async () => {
+  order({ capture: 'SALE-FAILING-1', sub: 'I-FAILING1' });
+  order({ capture: 'SALE-HEALTHY-1', sub: 'I-HEALTHY1' });
+  order({ capture: 'SALE-GONE-1', sub: 'I-GONE1' });
+  const failingInfo = { failed_payments_count: 1, outstanding_balance: { value: '15.00', currency_code: 'USD' } };
+  const pp = subscriptionPayPal({ states: {
+    'I-FAILING1': { status: 'ACTIVE', billing_info: failingInfo },
+    'I-GONE1': { status: 'CANCELLED', billing_info: { failed_payments_count: 2 } }
+  } });
+  const ended = [];
+  const end = async (input) => { ended.push(input); return { action: 'ended' }; };
+  const log = logger();
+  const out = await reconcile.endFailingSubscriptions({ db, paypal: pp, end, now: NOW, logger: log, pauseMs: 0 });
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.failing.map(f => f.subscriptionId), ['I-FAILING1']);
+  assert.deepEqual(out.ended, ['I-FAILING1']);
+  assert.equal(ended.length, 1);
+  assert.deepEqual(ended[0], { subscriptionId: 'I-FAILING1', billingInfo: failingInfo, paypalStatus: 'ACTIVE', testMode: false, source: 'reconcile', now: NOW });
+  assert.ok(out.notFailing.some(n => n.subscriptionId === 'I-GONE1' && n.status === 'CANCELLED'));
+  assert.ok(out.notFailing.some(n => n.subscriptionId === 'I-HEALTHY1' && n.status === 'ACTIVE'));
+  assert.doesNotMatch(log.lines.join('\n'), PAYER_RE);
+
+  const dry = await reconcile.endFailingSubscriptions({ db, paypal: subscriptionPayPal({ states: { 'I-FAILING1': { status: 'ACTIVE', billing_info: failingInfo } } }), end, now: NOW, dryRun: true, logger: logger(), pauseMs: 0 });
+  assert.deepEqual(dry.failing.map(f => f.subscriptionId), ['I-FAILING1']);
+  assert.deepEqual(dry.ended, []);
+  assert.equal(ended.length, 1, 'a dry run ends nothing');
+});
+
+test('the daily check refuses to end anything when one PayPal lookup failed, and skips a mode with no credentials', async () => {
+  order({ capture: 'SALE-FAILING-2', sub: 'I-FAILING2' });
+  order({ capture: 'SALE-UNREADABLE-2', sub: 'I-UNREADABLE2' });
+  const calls = [];
+  const end = async (input) => { calls.push(input); return { action: 'ended' }; };
+  const log = logger();
+  const out = await reconcile.endFailingSubscriptions({
+    db, paypal: subscriptionPayPal({ states: { 'I-FAILING2': { status: 'ACTIVE', billing_info: { failed_payments_count: 1 } } }, throws: ['I-UNREADABLE2'] }),
+    end, now: NOW, logger: log, pauseMs: 0
+  });
+  assert.equal(out.ok, false);
+  assert.match(out.error, /1 of \d+ PayPal subscription lookups failed/);
+  assert.equal(calls.length, 0, 'fails closed: nothing is ended');
+  assert.deepEqual(out.ended, []);
+  assert.match(log.lines.join('\n'), /no failing subscription was ended: I-UNREADABLE2/);
+
+  const sandboxSub = order({ capture: 'SALE-SANDBOX-2', sub: 'I-SANDBOX2' });
+  db.prepare('UPDATE orders SET test_mode = 1 WHERE id = ?').run(sandboxSub);
+  // Asking PayPal about the sandbox agreement would fail, so a run that asked would refuse.
+  const pp = subscriptionPayPal({ throws: ['I-SANDBOX2'], configured: { live: true, sandbox: false } });
+  const skipped = await reconcile.endFailingSubscriptions({ db, paypal: pp, end, now: NOW, logger: logger(), pauseMs: 0 });
+  assert.equal(skipped.ok, true, 'a sandbox agreement with no sandbox credentials is skipped, not a failed lookup');
+  assert.ok(skipped.skipped >= 1);
+  assert.ok(!pp.asked.some(a => a.id === 'I-SANDBOX2'));
+  await assert.rejects(reconcile.endFailingSubscriptions({ paypal: pp }), /database handle/);
+});

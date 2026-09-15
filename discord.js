@@ -173,6 +173,27 @@ async function getMemberRoleIds(userId) {
   return Array.isArray(member.roles) ? member.roles : [];
 }
 
+// A member lookup's answer, telling "not in the ReforgedZ Discord" apart from "no
+// answer that settles it". Pure, from the HTTP status and the parsed body:
+//   { state: 'member', roles }        the member record
+//   { state: 'not_member', status }   404 Unknown Member (10007) or Unknown User (10013)
+//   { state: 'unknown', status }      anything else: an outage, a rate limit past the
+//                                     retries, a bad token, an unknown guild
+function memberStateOf(status, body) {
+  if (status >= 200 && status < 300) return { state: 'member', roles: body && Array.isArray(body.roles) ? body.roles : [] };
+  const code = body && Number(body.code);
+  if (status === 404 && (code === 10007 || code === 10013)) return { state: 'not_member', status };
+  return { state: 'unknown', status };
+}
+
+// memberStateOf for one user id. An id that is not a Discord id cannot be a member.
+async function memberRoles(userId) {
+  if (!/^\d{15,25}$/.test(String(userId || ''))) return { state: 'not_member', status: null };
+  const res = await discordFetch(`/guilds/${guildId()}/members/${userId}`);
+  const body = await res.json().catch(() => null);
+  return memberStateOf(res.status, body);
+}
+
 // Post an embed into a guild channel as the bot. Used for staff-facing
 // alerts that need to land in a specific private channel rather than the
 // shop-orders webhook (which is a fixed, separate destination).
@@ -200,6 +221,8 @@ module.exports = {
   assignRole,
   removeRole,
   getMemberRoleIds,
+  memberRoles,
+  memberStateOf,
   postToChannel,
   guildId
 };

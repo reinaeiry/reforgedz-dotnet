@@ -4,6 +4,10 @@
 // require. routes/shop.js starts timers and writes to the database the moment it
 // is loaded, so logic kept there cannot be tested; kept here, the tests run it
 // against a throwaway copy of the real schema (test/pqGuards.test.js).
+//
+// Who holds priority queue is not decided here: pqEntitlement.js has the one rule.
+
+const { livePqOrderSql } = require('./pqEntitlement');
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December'];
@@ -38,19 +42,13 @@ const lowerId = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
 // serverId null (a product not tied to a server) only matches a subscription
 // that is not tied to a server either. excludeSubscriptionId leaves one
 // subscription out, for the check made when a new one activates.
-//
-// payment_problem is 1 while the subscription has an open billing issue: it is
-// in its grace days and failing to renew, whatever effective_until says.
 const ACTIVATION_GAP_S = 2 * 86400;
 
 function ownLiveSubscription(db, { steamId, serverId, testMode, now, excludeSubscriptionId = null }) {
   if (!steamId) return null;
   const exclude = excludeSubscriptionId == null ? null : String(excludeSubscriptionId);
   return db.prepare(`
-    SELECT o.id, o.server_id, o.effective_until, o.paypal_subscription_id, p.server_specific,
-           EXISTS (SELECT 1 FROM subscription_billing_issues b
-                   WHERE b.paypal_subscription_id = o.paypal_subscription_id
-                     AND b.resolved_at IS NULL) AS payment_problem
+    SELECT o.id, o.server_id, o.effective_until, o.paypal_subscription_id, p.server_specific
     FROM orders o JOIN products p ON p.id = o.product_id
     WHERE o.steam_id = ?
       AND o.status = 'completed'
@@ -69,40 +67,12 @@ function ownLiveSubscription(db, { steamId, serverId, testMode, now, excludeSubs
     serverId == null ? null : serverId) || null;
 }
 
-// Whether staff have blocked priority queue on this server for the in-game ID: a
-// server move (a block on the bought server, a grant on the new one) or a server
-// turned off. The order keeps naming the old server, so without this the refusal
-// would tell a moved player they have priority queue where the sync hides it.
-function blockedOnServer(db, { biUid, serverId }) {
-  const guid = lowerId(biUid);
-  if (!guid || !serverId) return false;
-  return !!db.prepare(
-    'SELECT 1 FROM priority_queue_grants WHERE lower(guid) = ? AND server_id = ? AND removed = 1 LIMIT 1'
-  ).get(guid, String(serverId));
-}
-
 // The 409 body for ownLiveSubscription. renewsAt is unix seconds, or null when
-// the first billing date has not been stored yet, or when the renewal is failing
-// (the date is then only the end of the grace days). The code is the same in
-// every case, so the page shows them all the same way.
-//   blocked: blockedOnServer said staff blocked this server for the buyer's ID.
-function alreadySubscribedRefusal(row, serverLabel, { blocked = false } = {}) {
+// the first billing date has not been stored yet. A staff move changes the order's
+// server, so the server named here is always where the subscription applies.
+function alreadySubscribedRefusal(row, serverLabel) {
   const where = serverLabel ? ` on ${serverLabel}` : '';
   const dated = row && row.effective_until != null ? row.effective_until : null;
-  if (blocked) {
-    return {
-      code: 'already_subscribed',
-      error: `Staff changed where your priority queue subscription applies, so it is not active${where}. To change it, open a Shop Support ticket.`,
-      renewsAt: dated
-    };
-  }
-  if (row && row.payment_problem) {
-    return {
-      code: 'already_subscribed',
-      error: `Your priority queue subscription${where} has a payment problem. Update your payment method on PayPal, or cancel it on your account page, then buy again.`,
-      renewsAt: null
-    };
-  }
   const when = dated != null ? `renews on ${dayMonth(dated)}` : 'renews automatically';
   return {
     code: 'already_subscribed',
@@ -117,13 +87,12 @@ function alreadySubscribedRefusal(row, serverLabel, { blocked = false } = {}) {
 // never blocks a purchase on its own, it only asks the buyer to confirm, and the
 // text names no server, date or account.
 //
-// True when a DIFFERENT account with this in-game ID holds a completed, unexpired,
-// live-mode priority queue order on ANY server. Deliberately not narrowed to the
-// server being bought: the buyer picks that server, so a per-server answer would
-// tell anyone which server another player's priority queue is on, one checkout
-// per server. Manual grants are staff decisions about a player, not a purchase,
-// so they do not count.
-function otherAccountLivePq(db, { steamId, biUid, now }) {
+// True when a DIFFERENT account with this in-game ID holds priority queue on ANY
+// server, by the one rule (pqEntitlement.js: a paid, live-mode order whose paid
+// period has not ended). Deliberately not narrowed to the server being bought: the
+// buyer picks that server, so a per-server answer would tell anyone which server
+// another player's priority queue is on, one checkout per server.
+function otherAccountLivePq(db, { steamId, biUid, now = Math.floor(Date.now() / 1000) }) {
   const guid = lowerId(biUid);
   if (!guid) return false;
   return !!db.prepare(`
@@ -131,14 +100,11 @@ function otherAccountLivePq(db, { steamId, biUid, now }) {
     FROM orders o
     JOIN users u    ON u.steam_id = o.steam_id
     JOIN products p ON p.id = o.product_id
-    WHERE lower(u.bi_uid) = ?
-      AND u.steam_id != ?
-      AND o.status = 'completed'
-      AND o.test_mode = 0
-      AND p.grants_priority_queue = 1
-      AND (o.effective_until IS NULL OR o.effective_until > ?)
+    WHERE lower(u.bi_uid) = @guid
+      AND u.steam_id != @steamId
+      AND ${livePqOrderSql('o', 'p')}
     LIMIT 1
-  `).get(guid, String(steamId || ''), now);
+  `).get({ guid, steamId: String(steamId || ''), now });
 }
 
 function sharedIdRefusal() {
@@ -170,72 +136,6 @@ function duplicateLiveSubscription(db, { orderId, now }) {
     now,
     excludeSubscriptionId: o.paypal_subscription_id
   });
-}
-
-// ---- A leftover block on a new purchase (plan J11) --------------------------
-// A deny row (priority_queue_grants.removed = 1) hides priority queue on a server
-// for an in-game ID whatever order exists (sync.js), and nothing except the staff
-// DELETE ever removed one. So a player taken off a server, whose order there then
-// ran out, paid for that server again and got no priority.
-//
-// Call it only when a purchase completes for the first time. A renewal continues
-// what the player already had.
-//
-// Only a true leftover is deleted. A block is kept, and returned in `kept` for
-// staff to look at, when:
-//  - the ID has a grant (removed = 0) on another server: reason 'moved'. That is
-//    a staff move, a block on the bought server plus a grant on the new one.
-//    Renewals roll that grant forward (rollGrantsForward), lapsed or not, so
-//    deleting the block would give the player both servers for one payment.
-//  - another completed, unexpired priority queue order for the ID, on any
-//    account, covers that server: reason 'other_order'. Staff set the block
-//    while it was paid for, so they meant it, and a deleted block would stay
-//    deleted after a refund of this purchase.
-// Test-mode orders count here, as they do in the sync. orderId is the purchase
-// being completed, which is left out.
-//
-// Returns { cleared, kept }: the block rows, kept ones carrying a reason.
-function clearLeftoverPqDenies(db, { guid, serverIds, orderId = null, now = Math.floor(Date.now() / 1000) }) {
-  const g = lowerId(guid);
-  const servers = Array.isArray(serverIds) ? serverIds.filter(s => typeof s === 'string' && s) : [];
-  const out = { cleared: [], kept: [] };
-  if (!g || !servers.length) return out;
-  const holes = servers.map(() => '?').join(',');
-  const grantElsewhere = db.prepare(`
-    SELECT 1 FROM priority_queue_grants
-    WHERE lower(guid) = ? AND removed = 0 AND server_id != ?
-    LIMIT 1
-  `);
-  const otherOrder = db.prepare(`
-    SELECT 1
-    FROM orders o
-    JOIN users u    ON u.steam_id = o.steam_id
-    JOIN products p ON p.id = o.product_id
-    WHERE lower(u.bi_uid) = ?
-      AND o.id != ?
-      AND o.status = 'completed'
-      AND p.grants_priority_queue = 1
-      AND (o.effective_until IS NULL OR o.effective_until > ?)
-      AND (COALESCE(p.server_specific, 0) = 0 OR o.server_id = ?)
-    LIMIT 1
-  `);
-  const drop = db.prepare('DELETE FROM priority_queue_grants WHERE guid = ? AND server_id = ? AND removed = 1');
-  db.transaction(() => {
-    const blocks = db.prepare(`
-      SELECT guid, server_id, granted_by, granted_at FROM priority_queue_grants
-      WHERE lower(guid) = ? AND removed = 1 AND server_id IN (${holes})
-      ORDER BY server_id
-    `).all(g, ...servers);
-    for (const b of blocks) {
-      const reason = grantElsewhere.get(g, b.server_id) ? 'moved'
-        : otherOrder.get(g, orderId == null ? -1 : orderId, now, b.server_id) ? 'other_order'
-        : null;
-      if (reason) { out.kept.push({ ...b, reason }); continue; }
-      drop.run(b.guid, b.server_id);
-      out.cleared.push(b);
-    }
-  })();
-  return out;
 }
 
 // ---- A renewal on a revoked subscription (plan J2) --------------------------
@@ -285,35 +185,8 @@ function refundedLatestCycle(db, subscriptionId) {
   return row && row.status === 'refunded' ? { id: row.id, noRefund: row.revoked_without_refund_at != null } : null;
 }
 
-// ---- Where a moved holder's priority queue really is ------------------------
-// A staff move leaves the order naming the server it was bought for, and writes a
-// block (removed = 1) there plus a grant (removed = 0) on the new server. Cards that
-// print the order's server told staff the queue was where the sync hides it.
-//
-// For a priority queue order tied to one server whose buyer's in-game ID is blocked
-// on that server, returns { boughtFor, queueOn }: queueOn is a server with a live
-// grant for the ID (the first by id when there are several), or null when the ID
-// has no live grant anywhere. Returns null for any other order.
-function queueMoveForOrder(db, orderId, now = Math.floor(Date.now() / 1000)) {
-  if (orderId == null) return null;
-  const o = db.prepare(`
-    SELECT o.server_id, u.bi_uid, p.grants_priority_queue, p.server_specific
-    FROM orders o JOIN users u ON u.steam_id = o.steam_id JOIN products p ON p.id = o.product_id
-    WHERE o.id = ?
-  `).get(orderId);
-  if (!o || !o.grants_priority_queue || !o.server_specific || !o.server_id) return null;
-  if (!blockedOnServer(db, { biUid: o.bi_uid, serverId: o.server_id })) return null;
-  const grant = db.prepare(`
-    SELECT server_id FROM priority_queue_grants
-    WHERE lower(guid) = ? AND removed = 0 AND server_id != ?
-      AND (expires_at IS NULL OR expires_at > ?)
-    ORDER BY server_id LIMIT 1
-  `).get(lowerId(o.bi_uid), o.server_id, now);
-  return { boughtFor: o.server_id, queueOn: grant ? grant.server_id : null };
-}
-
 module.exports = {
-  ownLiveSubscription, blockedOnServer, alreadySubscribedRefusal, otherAccountLivePq, sharedIdRefusal,
-  duplicateLiveSubscription, clearLeftoverPqDenies, recordRevokedRenewal, refundedLatestCycle, queueMoveForOrder,
+  ownLiveSubscription, alreadySubscribedRefusal, otherAccountLivePq, sharedIdRefusal,
+  duplicateLiveSubscription, recordRevokedRenewal, refundedLatestCycle,
   dayMonth, ACTIVATION_GAP_S
 };

@@ -263,34 +263,72 @@ test('an ended card whose paid access is already over says so instead of "keeps 
   assert.match(future.description, /keeps access until the date shown/);
 });
 
-// ---- Queue moves, unknown and pending states, failed refunds, rescans ----------------
+// ---- Staff moves, the admin list limit, unknown and pending states, failed refunds, rescans
 
 const EU2 = dc.serverLabel('eu2');
-const MOVED = Object.freeze({ ...ROW, server_id: 'eu2', pq_queue: Object.freeze({ boughtFor: 'eu2', queueOn: 'eu1' }) });
 
-test('a holder staff moved is shown on the server their queue is on, with where it was bought', () => {
+test("cards name the order's own server: a staff move changes it, so there is no second server to show", () => {
+  const moved = Object.freeze({ ...ROW, server_id: 'eu2', pq_queue: Object.freeze({ boughtFor: 'eu1', queueOn: 'na1' }) });
   const specs = [
-    cards.orderEventCard('subscription_renewed', MOVED, { nextCharge: UNTIL }),
-    cards.subscriptionEndedCard('cancelled', MOVED, { accessUntil: UNTIL }),
-    cards.billingFailureCard({ subId: 'I-X', ctx: { ...MOVED, id: undefined, order_id: 721 }, failedCount: 1 }),
-    cards.staffRevokeCard({ order: MOVED, refunded: true, refundedCents: 1500, cancel: { outcome: 'cancelled' } }),
-    cards.refundEventCard({ plan: plan(), order: MOVED }),
-    cards.disputeCard({ card: 'opened', dispute: dispute(), order: MOVED }),
-    cards.renewalAfterRefundCard({ subId: 'I-X', saleId: 'S', refundedOrderId: 700, newOrderId: 721, original: MOVED, amountCents: 1500 }),
-    cards.revokedRenewalCard({ subId: 'I-X', saleId: 'S', orders: [{ id: 721, status: 'refunded' }], context: MOVED }),
-    cards.refundUnknownCard({ order: MOVED, amountCents: 1500 })
+    cards.orderEventCard('subscription_renewed', moved, { nextCharge: UNTIL }),
+    cards.subscriptionEndedCard('cancelled', moved, { accessUntil: UNTIL }),
+    cards.unpaidEndedCard({ ctx: { ...moved, id: undefined, order_id: 721 }, subscriptionId: 'I-X', cancel: { outcome: 'cancelled' }, failedCount: 1 }),
+    cards.refusedPaymentCard({ ctx: moved, saleId: 'S', amountCents: 1500, reason: 'no_slot', refund: { outcome: 'refunded' }, cancel: { outcome: 'cancelled' } }),
+    cards.refusedActivationCard({ order: moved, cancel: { outcome: 'cancelled' } }),
+    cards.staffRevokeCard({ order: moved, refunded: true, refundedCents: 1500, cancel: { outcome: 'cancelled' } }),
+    cards.refundEventCard({ plan: plan(), order: moved }),
+    cards.disputeCard({ card: 'opened', dispute: dispute(), order: moved }),
+    cards.renewalAfterRefundCard({ subId: 'I-X', saleId: 'S', refundedOrderId: 700, newOrderId: 721, original: moved, amountCents: 1500 }),
+    cards.revokedRenewalCard({ subId: 'I-X', saleId: 'S', orders: [{ id: 721, status: 'refunded' }], context: moved }),
+    cards.refundUnknownCard({ order: moved, amountCents: 1500 })
   ];
   for (const spec of specs) {
     const body = built(spec);
     const e = embedOf(body);
-    assert.ok(e.title.endsWith(` · ${EU1}`), e.title);
-    assert.equal(field(e, 'Queue on'), `${EU1} (bought for ${EU2})`, e.title);
+    assert.ok(e.title.endsWith(` · ${EU2}`), e.title);
+    assert.equal(field(e, 'Queue on'), undefined, e.title);
     assertClean(body);
   }
-  const nowhere = embedOf(built(cards.orderEventCard('subscription_cancelled', { ...MOVED, pq_queue: { boughtFor: 'eu2', queueOn: null } })));
-  assert.ok(nowhere.title.endsWith(` · ${EU2}`));
-  assert.match(field(nowhere, 'Queue on'), /^No server: staff blocked/);
-  assert.equal(field(embedOf(built(cards.orderEventCard('subscription_renewed', ROW))), 'Queue on'), undefined, 'not moved');
+});
+
+test('a staff move card is grey and silent, and names both servers, every changed order and the reason', () => {
+  const after = { ...ROW, server_id: 'eu2', effective_until: UNTIL };
+  const body = built(cards.staffQueueMoveCard({ order: after, from: 'eu1', to: 'eu2', orderIds: [640, 700, 721], reason: 'Wants to play with friends' }));
+  const e = embedOf(body);
+  assert.equal(e.title, `Priority queue moved by staff · Priority Queue · ${EU2}`);
+  assert.equal(e.color, dc.KIND_COLORS.info);
+  assert.equal(body.flags, dc.SUPPRESS_NOTIFICATIONS);
+  assert.equal(field(e, 'Moved'), `${EU1} to ${EU2}`);
+  assert.equal(field(e, 'Orders changed'), '#640, #700, #721');
+  assert.equal(field(e, 'Subscription'), '`I-ABCDEF123456`');
+  assert.equal(field(e, 'Reason'), 'Wants to play with friends');
+  assert.equal(field(e, 'Access until'), `<t:${UNTIL}:D>`);
+  assert.match(e.description, /renewals pay for EU2/);
+  assert.equal(e.footer.text, "Order #721 · Takes effect at each server's next restart");
+  assertClean(body);
+
+  const oneTime = embedOf(built(cards.staffQueueMoveCard({ order: { ...ONE_TIME, product_title: 'Priority Queue', server_id: 'na1' }, from: 'na2', to: 'na1', orderIds: [722] })));
+  assert.equal(field(oneTime, 'Order changed'), '#722');
+  assert.equal(field(oneTime, 'Subscription'), undefined);
+  assert.equal(field(oneTime, 'Reason'), undefined);
+  assert.doesNotMatch(oneTime.description, /renewals/);
+  for (const text of [e.description, oneTime.description]) assert.doesNotMatch(text, /[—–]|dayz/i);
+});
+
+test('an admin list over the limit is a red card with counts only', () => {
+  const body = built(cards.adminCeilingCard({ serverId: 'eu1', planned: 51, ceiling: 50, current: 50, shopOwned: 40, others: 11 }));
+  const e = embedOf(body);
+  assert.equal(e.title, `Admin list over the limit · ${EU1}`);
+  assert.equal(e.color, dc.KIND_COLORS.action);
+  assert.equal(body.flags, undefined, 'someone has to act, so it notifies');
+  assert.equal(field(e, 'Entries after this sync'), '51');
+  assert.equal(field(e, 'Limit'), '50');
+  assert.equal(field(e, 'Entries before'), '50');
+  assert.equal(field(e, 'Priority queue, from the shop'), '40');
+  assert.equal(field(e, 'Game masters and others'), '11');
+  assert.match(e.description, /Nothing was removed/);
+  assert.doesNotMatch(e.description, /[—–]|dayz/i);
+  assertClean(body);
 });
 
 test('a cancel PayPal did not answer makes the revoke card amber and says to check PayPal', () => {
@@ -372,21 +410,83 @@ test('a suspended card says the shop is closing the agreement, and a close that 
   assert.match(noAnswer.description, /did not answer/);
 });
 
-test('a billing card says when the shop holds no paid order, and a rescan posts one card for many subscriptions', () => {
-  const none = embedOf(built(cards.billingFailureCard({ subId: 'I-X', ctx: { ...ROW, order_id: 721 }, failedCount: 1, localPaid: false })));
-  assert.equal(field(none, 'Paid order in the shop'), 'None, so nothing was granted for this subscription');
-  assert.equal(field(embedOf(built(cards.billingFailureCard({ subId: 'I-X', ctx: ROW, failedCount: 1 }))), 'Paid order in the shop'), undefined);
-
-  const items = Array.from({ length: 25 }, (_, i) => ({
-    subId: `I-TESTRESCAN${i}`, ctx: { ...ROW, id: undefined, order_id: 800 + i }, failedCount: 2, outstandingCents: 1500, currency: 'USD', localPaid: i !== 0
-  }));
-  const body = built(cards.billingRescanSummaryCard({ items }));
+test('a subscription ended for non-payment is blue and silent, red when PayPal refused the cancel, amber when it did not answer', () => {
+  const body = built(cards.unpaidEndedCard({ ctx: { ...ROW, id: undefined, order_id: 721 }, cancel: { outcome: 'cancelled' }, failedCount: 1, outstandingCents: 1500, currency: 'USD', accessUntil: UNTIL, now: UNTIL + 3600 }));
   const e = embedOf(body);
-  assert.equal(e.title, 'Billing rescan: 25 failing subscriptions');
-  assert.equal(e.color, dc.KIND_COLORS.attention);
-  assert.equal((e.description.match(/`I-TESTRESCAN\d+`/g) || []).length, cards.RESCAN_LIST_MAX);
-  assert.match(e.description, /and 5 more/);
-  assert.match(e.description, /`I-TESTRESCAN0` order #800, Nightfall, Priority Queue on EU1.*2 failed payments, \$15\.00 outstanding, no paid order in the shop, nothing granted/);
+  assert.equal(e.title, `Subscription ended, payment not received · Priority Queue · ${EU1}`);
+  assert.equal(e.color, dc.KIND_COLORS.ended);
+  assert.equal(body.flags, dc.SUPPRESS_NOTIFICATIONS);
+  assert.equal(e.footer.text, 'Order #721');
+  assert.equal(field(e, 'Status'), 'Ended, payment not received');
+  assert.equal(field(e, 'Failed payments'), '1');
+  assert.equal(field(e, 'Outstanding'), '$15.00');
+  assert.equal(field(e, 'PayPal subscription'), 'Cancelled at PayPal');
+  assert.equal(field(e, 'Amount'), undefined, 'nothing was paid or returned');
+  assert.match(e.description, /ended the subscription at once.*paid access ended on the date shown/);
   assertClean(body);
-  assert.equal(embedOf(built(cards.billingRescanSummaryCard({ items: items.slice(0, 1) }))).title, 'Billing rescan: 1 failing subscription');
+  const pqCard = embedOf(built(cards.unpaidEndedCard({ ctx: { ...ROW, grants_priority_queue: 1 }, cancel: { outcome: 'cancelled' } })));
+  assert.match(pqCard.description, /No payment, no priority queue/);
+  const backerCard = embedOf(built(cards.unpaidEndedCard({ ctx: { ...ROW, product_title: 'ReforgedZ Backer', grants_priority_queue: 0 }, cancel: { outcome: 'cancelled' } })));
+  assert.doesNotMatch(backerCard.description, /priority queue/i, 'a product that is not priority queue says nothing about slots');
+  const refused = built(cards.unpaidEndedCard({ ctx: ROW, cancel: { outcome: 'failed', status: 422 }, source: 'reconcile' }));
+  assert.equal(embedOf(refused).color, dc.KIND_COLORS.action);
+  assert.equal(refused.flags, undefined);
+  assert.equal(field(embedOf(refused), 'Access until'), 'No paid access left');
+  assert.match(embedOf(refused).description, /daily PayPal check.*refused to cancel the subscription \(HTTP 422\)/);
+  assert.equal(embedOf(built(cards.unpaidEndedCard({ ctx: ROW, cancel: { outcome: 'unknown' } }))).color, dc.KIND_COLORS.attention);
+  assert.doesNotMatch(e.description + embedOf(refused).description, /[—–]|dayz/i);
+});
+
+test('a refused payment says why and what happened to the money: purple when refunded, red when PayPal refused, amber with no answer', () => {
+  const slot = { limit: 24, used: 24, reserved: 1 };
+  const ok = built(cards.refusedPaymentCard({ ctx: ROW, saleId: 'SALE-9', amountCents: 1500, currency: 'USD', reason: 'no_slot', serverId: 'eu1', slot, refund: { outcome: 'refunded', refundId: 'RF-9', refundStatus: 'COMPLETED' }, cancel: { outcome: 'cancelled' } }));
+  const e = embedOf(ok);
+  assert.equal(e.title, `Payment refunded, server full · Priority Queue · ${EU1}`);
+  assert.equal(e.color, dc.KIND_COLORS.refund_out);
+  assert.equal(field(e, 'Amount'), '$15.00');
+  assert.equal(field(e, 'Sale'), '`SALE-9`');
+  assert.equal(field(e, 'Refund id'), '`RF-9`');
+  assert.equal(field(e, 'Priority queue slots'), '24 of 24 taken, 1 more waiting at PayPal');
+  assert.match(e.description, /after this subscription's paid period and renewal window had ended.*refunded in full automatically/);
+  assertClean(ok);
+  const first = embedOf(built(cards.refusedPaymentCard({ ctx: ROW, amountCents: 1500, reason: 'no_slot', firstPayment: true, refund: { outcome: 'refunded' }, cancel: { outcome: 'cancelled' } })));
+  assert.match(first.description, /the first payment of this subscription, after EU1.*had filled up/);
+  const failed = built(cards.refusedPaymentCard({ ctx: ROW, amountCents: 1500, reason: 'ended_unpaid', refund: { outcome: 'failed', status: 422 }, cancel: { outcome: 'already_ended' } }));
+  assert.equal(embedOf(failed).title, `Refund failed, subscription had ended · Priority Queue · ${EU1}`);
+  assert.equal(embedOf(failed).color, dc.KIND_COLORS.action);
+  assert.match(embedOf(failed).description, /already ended because a renewal payment failed.*refused the automatic refund \(HTTP 422\).*refund it in PayPal/);
+  const unknown = embedOf(built(cards.refusedPaymentCard({ ctx: null, subscriptionId: 'I-X', saleId: 'S', amountCents: null, reason: 'ended_no_slot', refund: { outcome: 'unknown' }, cancel: { outcome: 'cancelled' }, testMode: true })));
+  assert.equal(unknown.title, '[TEST] Refund state unknown, subscription had ended');
+  assert.equal(unknown.color, dc.KIND_COLORS.attention);
+  assert.match(unknown.description, /PayPal took a payment on a subscription/);
+  const cancelFailed = embedOf(built(cards.refusedPaymentCard({ ctx: ROW, amountCents: 1500, reason: 'no_slot', refund: { outcome: 'refunded' }, cancel: { outcome: 'failed', status: 500 } })));
+  assert.equal(cancelFailed.color, dc.KIND_COLORS.action);
+  const revoked = embedOf(built(cards.refusedPaymentCard({ ctx: ROW, amountCents: 1500, reason: 'revoked', refund: { outcome: 'refunded' }, cancel: { outcome: 'cancelled' } })));
+  assert.equal(revoked.title, `Payment refunded, subscription had ended · Priority Queue · ${EU1}`);
+  assert.match(revoked.description, /orders had all been revoked or refunded and which the shop had already ended.*refunded in full automatically/);
+  for (const text of [e.description, first.description, embedOf(failed).description, unknown.description, revoked.description]) assert.doesNotMatch(text, /[—–]|dayz/i);
+});
+
+test('a subscription not started for want of a slot is blue and silent, and names the server and the slots', () => {
+  const body = built(cards.refusedActivationCard({ order: { ...ROW, status: 'cancelled' }, serverId: 'eu1', slot: { limit: 24, used: 23, reserved: 1 }, cancel: { outcome: 'cancelled' } }));
+  const e = embedOf(body);
+  assert.equal(e.title, `Subscription not started, server full · Priority Queue · ${EU1}`);
+  assert.equal(e.color, dc.KIND_COLORS.ended);
+  assert.equal(body.flags, dc.SUPPRESS_NOTIFICATIONS);
+  assert.equal(field(e, 'Status'), 'Not started');
+  assert.equal(field(e, 'Priority queue slots'), '23 of 24 taken, 1 more waiting at PayPal');
+  assert.match(e.description, /EU1.*had no free priority queue slot.*refunded automatically/);
+  assertClean(body);
+  assert.equal(embedOf(built(cards.refusedActivationCard({ order: ROW, cancel: { outcome: 'unknown' } }))).color, dc.KIND_COLORS.attention);
+});
+
+test('a lost dispute that revoked the order is purple and says the perks were removed; one on an order already refunded says nothing changed', () => {
+  const revoked = embedOf(built(cards.disputeCard({ card: 'resolved', result: 'lost', revoke: { revoked: true, reason: 'dispute_lost' }, dispute: dispute({ status: 'RESOLVED', outcome: 'RESOLVED_BUYER_FAVOUR', amountRefundedCents: 1500 }), order: { ...ROW, status: 'refunded' } })));
+  assert.equal(revoked.title, `Dispute lost · Priority Queue · ${EU1}`);
+  assert.equal(revoked.color, dc.KIND_COLORS.refund_out);
+  assert.equal(field(revoked, 'Status'), 'Refunded');
+  assert.match(revoked.description, /lost \$15\.00\. The order is now refunded and its perks were removed automatically\. Its subscription was not cancelled/);
+  const already = embedOf(built(cards.disputeCard({ card: 'resolved', result: 'lost', revoke: { revoked: false, reason: 'not_completed', status: 'refunded' }, dispute: dispute({ status: 'RESOLVED', outcome: 'ACCEPTED' }), order: ROW })));
+  assert.equal(already.color, dc.KIND_COLORS.action);
+  assert.match(already.description, /already refunded, so nothing on it changed/);
 });
