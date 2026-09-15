@@ -890,7 +890,9 @@
     function escHtml(s) {
       const d = document.createElement('div');
       d.textContent = s;
-      return d.innerHTML;
+      // textContent -> innerHTML escapes & < > but not quotes. Escape those too, so
+      // the result is also safe inside a quoted attribute (shop.js does the same).
+      return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function formatPrice(cents, currency) {
@@ -1536,11 +1538,11 @@
         <tr>
           <td>
             <div class="player-cell">
-              <img src="${o.avatar_url || ''}" alt="" onerror="this.style.display='none'">
+              <img src="${escHtml(o.avatar_url || '')}" alt="" onerror="this.style.display='none'">
               <div class="player-info">
                 <div class="player-name">${escHtml(o.persona)}</div>
                 <div class="player-steamid">${escHtml(o.steam_id)}</div>
-                <div class="player-biuid ${o.bi_uid ? '' : 'empty'}" onclick="editBiUid('${escHtml(o.steam_id)}', '${escHtml(o.bi_uid || '')}')" title="Click to edit">${o.bi_uid ? escHtml(o.bi_uid) : 'No BI UID — click to set'}</div>
+                <div class="player-biuid ${o.bi_uid ? '' : 'empty'}" data-steam-id="${escHtml(o.steam_id)}" data-bi-uid="${escHtml(o.bi_uid || '')}" role="button" tabindex="0" title="Click to edit">${o.bi_uid ? escHtml(o.bi_uid) : 'No in-game ID: click to set'}</div>
               </div>
             </div>
           </td>
@@ -1600,29 +1602,78 @@
       document.getElementById('searchInput').addEventListener('input', renderOrders);
     }
 
+    // Staff set or clear an account's in-game ID. The server checks the ID, asks
+    // before saving one another account already holds, and keeps an audit record
+    // (adminAudit.js). This used to ignore the response and show the new ID even
+    // when the save was refused, so every refusal is shown now.
     async function editBiUid(steamId, currentUid) {
-      const input = prompt('Enter Bohemia Identity UID (e.g. 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac):', currentUid);
+      const input = prompt('In-game ID for this account, like 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac. Leave it empty to clear it.', currentUid);
       if (input === null) return;
 
-      const cleaned = input.trim().toLowerCase();
+      // Braces, spaces and capitals are the usual noise around a correct ID.
+      const cleaned = input.replace(/[{}\s]/g, '').toLowerCase();
       if (cleaned && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(cleaned)) {
-        alert('Invalid BI UID format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx');
+        alert('That is not a valid in-game ID. Expected xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx');
         return;
       }
 
-      try {
-        await fetch(`/api/shop/admin/users/${steamId}/bi-uid`, {
+      const put = async (body) => {
+        const res = await fetch(`/api/shop/admin/users/${encodeURIComponent(steamId)}/bi-uid`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ biUid: cleaned || null })
+          body: JSON.stringify(body)
         });
-        // Update local data and re-render
-        allOrders.forEach(o => { if (o.steam_id === steamId) o.bi_uid = cleaned || null; });
+        const data = await res.json().catch(() => ({}));
+        return { res, data };
+      };
+
+      try {
+        let { res, data } = await put({ biUid: cleaned || null });
+        // The ID is on another account too: that can be one player on Steam and a
+        // console, or a mistake. Saving it anyway needs a yes and a reason for the record.
+        if (res.status === 409 && data.code === 'id_on_other_account') {
+          const others = Array.isArray(data.otherAccounts) ? data.otherAccounts.join('\n') : '';
+          if (!confirm(`${data.error || 'That in-game ID is already on another account.'}\n\nAlready on:\n${others}\n\nSave it on this account as well?`)) return;
+          const reason = prompt('Why is this ID right for both accounts? The reason is kept in the audit record.', '');
+          if (reason === null) return;
+          if (!reason.trim()) {
+            alert('Nothing was saved: a reason is needed to save an in-game ID another account holds.');
+            return;
+          }
+          const second = await put({ biUid: cleaned, confirmShared: true, reason: reason.trim() });
+          res = second.res;
+          data = second.data;
+        }
+        if (!res.ok) {
+          alert(data.error || `Could not save the in-game ID (error ${res.status}).`);
+          return;
+        }
+        const saved = data.bi_uid || null;
+        allOrders.forEach(o => { if (o.steam_id === steamId) o.bi_uid = saved; });
         renderOrders();
       } catch (e) {
-        alert('Failed to update BI UID');
+        alert('Could not save the in-game ID: ' + e.message);
       }
     }
+
+    // The in-game ID cell carries its account in data attributes, and one listener
+    // on the table handles every row. It used to be onclick="editBiUid('...')" with
+    // escHtml, which did not escape quotes, so a stored ID containing a quote could
+    // run script on this page.
+    function biUidCellFor(e) {
+      return e.target && e.target.closest ? e.target.closest('.player-biuid[data-steam-id]') : null;
+    }
+    document.getElementById('ordersBody').addEventListener('click', (e) => {
+      const cell = biUidCellFor(e);
+      if (cell) editBiUid(cell.dataset.steamId, cell.dataset.biUid || '');
+    });
+    document.getElementById('ordersBody').addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const cell = biUidCellFor(e);
+      if (!cell) return;
+      e.preventDefault();
+      editBiUid(cell.dataset.steamId, cell.dataset.biUid || '');
+    });
 
     function toggleRevokeMenu(event, orderId) {
       event.stopPropagation();

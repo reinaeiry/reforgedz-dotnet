@@ -23,6 +23,7 @@ const reforgedzServers = require('./reforgedzServers');
 const webAuth = require('./webAuth');
 const consoleIdentity = require('./consoleIdentity');
 const { sendAccountLink } = require('./invoiceMail');
+const funnel = require('./funnel');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -326,6 +327,10 @@ app.use((req, res, next) => {
 // ---- Tighter limiter on /api writes ----
 app.use('/api', (req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD') return next();
+  // The buy-flow beacon (POST /api/shop/funnel) has its own cap in routes/shop.js.
+  // The page sends it on its own as a buyer moves along, so counting it here
+  // would spend the budget the buyer's own sign-in, ID save and checkout need.
+  if (req.path === '/shop/funnel') return next();
   return writeLimiter(req, res, next);
 });
 
@@ -487,6 +492,8 @@ app.get('/api/auth/me', (req, res) => {
     avatar_url: req.user.avatar_url,
     role: req.user.role,
     bi_uid: req.user.bi_uid || null,
+    // The player name seen with that ID, so the confirmation can say who the priority goes to.
+    bi_uid_name: req.user.bi_uid_name || null,
     platform: req.user.platform || 'steam',
     gamertag: req.user.gamertag || null,
     discord_id: req.user.discord_id || null,
@@ -593,6 +600,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       throw e;
     }
     console.log(`[auth] new website account ${user.steam_id}`);
+    funnel.countStep(db, 'account_created');
     signInAndReply(req, res, user, 'password');
   } catch (e) {
     authError(res, e, 'register', 'Could not create your account. Try again.');
@@ -615,6 +623,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       return wrong();
     }
     webAuth.clearLoginFailures(email, req.ip);
+    funnel.countStep(db, 'signed_in');
     signInAndReply(req, res, user, 'password');
   } catch (e) {
     authError(res, e, 'login', 'Could not sign you in. Try again.');
@@ -1478,4 +1487,11 @@ try {
   require('./tools/healthReport').scheduleDailyHealth();
 } catch (e) {
   console.error('[health] could not schedule:', e.message);
+}
+// The "your priority queue ends soon" email at 15:00 UTC (tools/reminders.js), for
+// players whose queue priority ends in 2 to 3 days and will not renew.
+try {
+  require('./tools/reminders').scheduleDailyReminders();
+} catch (e) {
+  console.error('[reminders] could not schedule:', e.message);
 }

@@ -6,10 +6,17 @@ const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../db');
 const { syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus } = require('../sync');
-const { SERVER_IDS, SERVER_LABELS, isValidServerId, isSaveServerId, listSaveServers } = require('../gameServers');
+const { SERVER_IDS, SELLABLE_SERVER_IDS, SERVER_LABELS, isSaveServerId, listSaveServers } = require('../gameServers');
 const discord = require('../discord');
 const consoleIdentity = require('../consoleIdentity');
 const webAuth = require('../webAuth');
+const pqGuards = require('../pqGuards');
+const { adminActor, staffSetBiUid } = require('../adminAudit');
+const { postCard, COLORS } = require('../tools/lib/discordCard');
+const funnel = require('../funnel');
+const inGameId = require('../inGameId');
+const { windowLimit } = require('../windowLimit');
+const reminders = require('../tools/reminders');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
@@ -462,7 +469,7 @@ router.get('/api/shop/config', (req, res) => {
 
 // Create a PayPal checkout order and return the approve URL to redirect to.
 router.post('/api/shop/checkout', requireAuth, async (req, res) => {
-  const { productId, testMode, serverId, customAmountCents } = req.body;
+  const { productId, testMode, serverId, customAmountCents, confirmSharedId } = req.body;
   if (!productId) return res.status(400).json({ error: 'Missing productId' });
 
   // Only admins can use test mode (sandbox). Checked after the product, so a
@@ -485,16 +492,44 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     return res.status(400).json({ code: 'needs_in_game_id', error: 'Add your in-game ID first, so your priority queue has somewhere to go.' });
   }
 
-  if (!paypal.isConfigured(useTest)) {
-    return res.status(503).json({ error: `PayPal ${useTest ? 'sandbox' : 'live'} is not configured.` });
-  }
-
+  // Only a server the shop offers. dev1 is synced to but never sold, so naming it
+  // here could only come from a crafted request.
   let orderServerId = null;
   if (product.server_specific) {
-    if (!isValidServerId(serverId)) {
+    if (!SELLABLE_SERVER_IDS.includes(serverId)) {
       return res.status(400).json({ error: 'Pick a server for this purchase.' });
     }
     orderServerId = serverId;
+  }
+
+  const isRecurring = product.type === 'subscription' || product.type === 'recurring_custom';
+
+  // A second priority queue subscription for the same server. pqGuards.js says
+  // what each check catches, and why the in-game ID one only asks.
+  let sharedIdConfirmed = false;
+  if (product.grants_priority_queue && isRecurring) {
+    const now = Math.floor(Date.now() / 1000);
+    const live = pqGuards.ownLiveSubscription(db, { steamId: req.user.steam_id, serverId: orderServerId, testMode: useTest, now });
+    if (live) {
+      const labelId = orderServerId || (live.server_specific ? live.server_id : null);
+      const label = labelId ? (SERVER_LABELS[labelId] || labelId.toUpperCase()) : 'every server';
+      // A staff move leaves the order naming the old server, with a block there, so
+      // that player is told staff moved it rather than that they have it here.
+      const blocked = pqGuards.blockedOnServer(db, { biUid: req.user.bi_uid, serverId: orderServerId });
+      funnel.countStep(db, 'checkout_blocked_duplicate');
+      return res.status(409).json(pqGuards.alreadySubscribedRefusal(live, label, { blocked }));
+    }
+    if (pqGuards.otherAccountLivePq(db, { steamId: req.user.steam_id, biUid: req.user.bi_uid, now })) {
+      if (confirmSharedId !== true) {
+        console.log(`[pq-guard] ${req.user.steam_id}: in-game ID ${String(req.user.bi_uid).slice(0, 8)}... already has live priority queue on another account (buying ${orderServerId || 'all servers'}); asked to confirm`);
+        funnel.countStep(db, 'checkout_blocked_duplicate');
+        return res.status(409).json(pqGuards.sharedIdRefusal());
+      }
+      sharedIdConfirmed = true;
+    }
+  }
+
+  if (product.server_specific) {
     const effLimit = effectiveStockLimit(product, serverId);
     if (effLimit != null) {
       let used, alreadyHas, limit = effLimit;
@@ -566,14 +601,23 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     return res.status(409).json({ error: 'You already have a checkout in progress for this item. Finish or cancel it first.' });
   }
 
+  // Every refusal above is decided from our own data, so a player hears the real
+  // reason (already subscribed, sold out, no server) even while PayPal is not set
+  // up. Nothing before this point creates an order or talks to PayPal; only the
+  // step counter is touched.
+  if (!paypal.isConfigured(useTest)) {
+    return res.status(503).json({ error: `PayPal ${useTest ? 'sandbox' : 'live'} is not configured.` });
+  }
+
   // Create the pending order row up-front so the customId we hand to PayPal
   // can map back to our DB even before they approve.
   const order = db.prepare(`
     INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode) VALUES (?, ?, ?, 'pending', ?, ?)
   `).run(req.user.steam_id, product.id, orderServerId, amountCents, useTest ? 1 : 0);
   const orderId = order.lastInsertRowid;
-
-  const isRecurring = product.type === 'subscription' || product.type === 'recurring_custom';
+  if (sharedIdConfirmed) {
+    console.log(`[pq-guard] order #${orderId}: ${req.user.steam_id} confirmed in-game ID ${String(req.user.bi_uid).slice(0, 8)}... is theirs although another account has live priority queue on it (buying ${orderServerId || 'all servers'})`);
+  }
 
   try {
     if (isRecurring) {
@@ -589,6 +633,7 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
       });
       if (!approveUrl) throw new Error('PayPal did not return a subscription approve URL');
       db.prepare('UPDATE orders SET paypal_subscription_id = ? WHERE id = ?').run(subscriptionId, orderId);
+      funnel.countStep(db, 'checkout_started');
       return res.json({ url: approveUrl });
     }
 
@@ -604,6 +649,7 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     });
     if (!approveUrl) throw new Error('PayPal did not return an approve URL');
     db.prepare('UPDATE orders SET paypal_order_id = ? WHERE id = ?').run(paypalOrderId, orderId);
+    funnel.countStep(db, 'checkout_started');
     res.json({ url: approveUrl });
   } catch (err) {
     console.error('PayPal checkout error:', err.message);
@@ -700,6 +746,7 @@ router.post('/api/shop/checkout-custom-flag', requireAuth, handleCustomFlagUploa
     });
     if (!approveUrl) throw new Error('PayPal did not return an approve URL');
     db.prepare('UPDATE orders SET paypal_order_id = ? WHERE id = ?').run(paypalOrderId, orderId);
+    funnel.countStep(db, 'checkout_started');
     res.json({ url: approveUrl });
   } catch (err) {
     console.error('[custom-flag] PayPal checkout error:', err.message);
@@ -758,7 +805,7 @@ async function ensurePlanForProduct(product, useTest) {
 // Discord/email payload from just an order id.
 function getOrderWithContext(orderId) {
   return db.prepare(`
-    SELECT o.*, u.persona, u.bi_uid, u.platform, u.gamertag, u.bm_player_id, u.discord_id,
+    SELECT o.*, u.persona, u.bi_uid, u.bi_uid_name, u.platform, u.gamertag, u.bm_player_id, u.discord_id,
            p.title AS product_title, p.type, p.currency, p.grants_priority_queue, p.discord_role_id, p.server_specific
     FROM orders o JOIN users u ON o.steam_id = u.steam_id JOIN products p ON o.product_id = p.id
     WHERE o.id = ?
@@ -775,6 +822,8 @@ function purchaseNextSteps(order) {
     const label = order.server_id ? (SERVER_LABELS[order.server_id] || order.server_id) : 'your server';
     steps.push(`Queue priority on ${label} starts at the next scheduled restart, ${describeNextRestart().text}. Servers restart every 4 hours, so it is never a long wait.`);
     if (!order.bi_uid) steps.push(`Set your in-game id on your account page first, or the priority has nowhere to go: ${base}/account`);
+    // Named, so a mistyped or planted in-game ID is noticed on the receipt rather than in the queue.
+    else if (inGameId.recipientLine(order.bi_uid_name)) steps.push(inGameId.recipientLine(order.bi_uid_name));
   }
   if (order.discord_role_id) {
     steps.push(order.discord_id
@@ -811,6 +860,14 @@ function fulfillOrder(orderId, cap) {
   if (order.status === 'cancelled') {
     console.warn(`[orders] order ${orderId} was rescued from 'cancelled' — payment arrived after the stale-pending sweep.`);
   }
+  // Only here, after the row moved: a repeat call for the same payment returned above.
+  funnel.countStep(db, 'payment_completed');
+
+  // A new purchase of queue priority must not stay hidden by a block left over
+  // from an earlier move or removal. This runs once per order, on its first
+  // completion; renewal cycles never come through here, so a staff move survives
+  // them. Before the sync below, so that write already goes without the block.
+  if (order.grants_priority_queue && order.bi_uid) clearLeftoverBlocksForOrder(order);
 
   sendDiscordNotification({
     eventType: 'payment_completed',
@@ -865,6 +922,63 @@ function fulfillOrder(orderId, cap) {
     }).catch(() => {});
   }
   return true;
+}
+
+// The servers an order's queue priority covers, with any leftover block there
+// removed (pqGuards.clearLeftoverPqDenies says which blocks count as leftover).
+// Staff are told either way: a block they set is gone, or a block was kept and
+// this purchase stays hidden there until they look. A sandbox order leaves real
+// blocks alone. Never throws: a paid order must complete regardless.
+function clearLeftoverBlocksForOrder(order) {
+  if (order.test_mode) return;
+  const servers = order.server_specific ? (order.server_id ? [order.server_id] : []) : SERVER_IDS;
+  let result;
+  try {
+    result = pqGuards.clearLeftoverPqDenies(db, { guid: order.bi_uid, serverIds: servers, orderId: order.id });
+  } catch (e) {
+    console.error(`[pq-guard] order #${order.id}: could not clear leftover priority queue blocks: ${e.message}`);
+    return;
+  }
+  const { cleared, kept } = result;
+  if (!cleared.length && !kept.length) return;
+  const label = (id) => SERVER_LABELS[id] || id;
+  const idHead = `${String(order.bi_uid).slice(0, 8)}...`;
+  const setBy = (r) => `by ${r.granted_by || 'unknown'}${r.granted_at ? `, <t:${r.granted_at}:D>` : ''}`;
+  const orderFields = [
+    { name: 'Order', value: `#${order.id} ${order.product_title}`, inline: true },
+    { name: 'Player', value: playerNameOf(order) || order.steam_id, inline: true },
+    { name: 'In-game ID', value: order.bi_uid, inline: false }
+  ];
+  if (cleared.length) {
+    console.log(`[pq-guard] order #${order.id}: cleared a leftover priority queue block for in-game ID ${idHead} on ${cleared.map(r => r.server_id).join(', ')}`);
+    postCard({
+      title: 'Leftover priority queue block cleared',
+      color: COLORS.amber,
+      description: `A new purchase covers ${cleared.map(r => label(r.server_id)).join(', ')}, where an earlier block was hiding this player's priority queue. The block was removed so the purchase works.`,
+      fields: [
+        ...orderFields,
+        { name: 'Block was set', value: cleared.map(r => `${label(r.server_id)}: ${setBy(r)}`).join('\n'), inline: false }
+      ],
+      footer: 'Takes effect at the next restart of each server'
+    }).catch(() => {});
+  }
+  if (kept.length) {
+    const why = {
+      moved: 'part of a server move (this in-game ID has a staff grant on another server)',
+      other_order: 'set on purpose (another live order for this in-game ID covers that server)'
+    };
+    console.log(`[pq-guard] order #${order.id}: kept a staff priority queue block for in-game ID ${idHead} on ${kept.map(r => `${r.server_id} (${r.reason})`).join(', ')}`);
+    postCard({
+      title: 'Purchase hidden by a staff block',
+      color: COLORS.amber,
+      description: `A new purchase covers ${kept.map(r => label(r.server_id)).join(', ')}, where a staff block hides this player's priority queue. The block was kept, so this purchase gives no priority queue there until staff remove the block or refund the order.`,
+      fields: [
+        ...orderFields,
+        { name: 'Block kept', value: kept.map(r => `${label(r.server_id)}: ${why[r.reason] || r.reason}, ${setBy(r)}`).join('\n'), inline: false }
+      ],
+      footer: 'Check with the player which server they meant to buy'
+    }).catch(() => {});
+  }
 }
 
 // Posts a Custom Flag order to the shop-orders Discord webhook with the
@@ -1189,16 +1303,51 @@ async function setOwnBiUid(req, res) {
     }
   }
 
-  db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(cleaned, req.user.steam_id);
-  // A website account goes by its in-game name once we know it: that is what the
-  // account page shows and the name the game-server sync writes.
-  if (playerName && req.user.platform === 'web') {
-    db.prepare('UPDATE users SET persona = ? WHERE steam_id = ?').run(String(playerName).slice(0, 64), req.user.steam_id);
-  }
+  // With the ID go the player name BattleMetrics showed (or none) and how it was
+  // chosen, so the account page and receipts can say who the priority goes to
+  // (inGameId.js). A website account also takes that name as its display name.
+  const picked = body.ref != null;
+  const proof = inGameId.proofForSave({ picked, verified });
+  const saved = inGameId.saveOwnBiUid(db, {
+    steamId: req.user.steam_id, biUid: cleaned, name: playerName, proof, isWeb: req.user.platform === 'web'
+  });
   req.user.bi_uid = cleaned;
+  funnel.countStep(db, picked ? 'id_saved_find' : 'id_saved_paste');
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  res.json({ ok: true, bi_uid: cleaned, verified, playerName });
+  res.json({ ok: true, bi_uid: cleaned, verified, playerName, proof: saved.proof });
 }
+
+// The player name behind the account's current in-game ID, looked up on request
+// and stored (plan J13). IDs saved before names were stored, by staff, or while
+// BattleMetrics was down have none, and the account page offers this so the
+// player can see whose ID it is. BattleMetrics only names players seen on a
+// ReforgedZ server. Capped per account: each lookup spends the BattleMetrics
+// budget the Find me search and the homepage player counts share.
+const lookupNameLimit = windowLimit({ limit: 6, windowMs: 60 * 1000 });
+
+router.post('/api/shop/account/bi-uid/lookup-name', requireAuth, async (req, res) => {
+  if (!lookupNameLimit(req.user.steam_id)) {
+    return res.status(429).json({ error: 'Too many lookups. Try again in a minute.' });
+  }
+  const me = db.prepare('SELECT bi_uid FROM users WHERE steam_id = ?').get(req.user.steam_id);
+  const biUid = me && me.bi_uid;
+  if (!biUid) return res.status(400).json({ code: 'no_in_game_id', error: 'Add your in-game ID first.' });
+  try {
+    const found = await require('../battlemetrics').findPlayers(biUid);
+    if (found.unavailable) {
+      return res.status(503).json({ error: 'We could not reach BattleMetrics. Please try again in a minute.' });
+    }
+    const name = inGameId.cleanPlayerName(found.candidates[0] && found.candidates[0].name);
+    if (!name) {
+      return res.status(404).json({ code: 'not_found', error: 'BattleMetrics has not seen that in-game ID on a ReforgedZ server yet. Play one round, then try again.' });
+    }
+    inGameId.storeLookedUpName(db, { steamId: req.user.steam_id, biUid, name });
+    res.json({ ok: true, name });
+  } catch (e) {
+    console.error('[bi-uid] name lookup failed:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Could not look up the player name. Try again.' });
+  }
+});
 
 // Verify/capture a PayPal order (fallback when the return redirect or webhook
 // didn't complete fulfillment). Frontend calls this with the order id.
@@ -1373,15 +1522,22 @@ router.get('/api/shop/admin/orders/:id/flag-image', requireAdmin, (req, res) => 
   res.sendFile(filePath);
 });
 
-// Set BI UID for a user (admin only)
+// Set or clear an account's in-game ID (admin only). adminAudit.staffSetBiUid
+// checks the value, asks before saving an ID another account holds, records the
+// change in admin_audit, and explains why priority queue grants stay where they are.
+// Body: { biUid, confirmShared?, reason? }. 409 { code: 'id_on_other_account', otherAccounts }.
 router.put('/api/shop/admin/users/:steamId/bi-uid', requireAdmin, (req, res) => {
-  const { biUid } = req.body;
-  const user = db.prepare('SELECT * FROM users WHERE steam_id = ?').get(req.params.steamId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-
-  db.prepare('UPDATE users SET bi_uid = ? WHERE steam_id = ?').run(biUid || null, req.params.steamId);
+  const body = req.body || {};
+  const actor = adminActor(req);
+  const out = staffSetBiUid(db, {
+    steamId: req.params.steamId, biUid: body.biUid, confirmShared: body.confirmShared,
+    actor, reason: body.reason, ip: req.ip
+  });
+  if (out.status !== 200) return res.status(out.status).json(out.body);
+  const head = (v) => (v ? `${String(v).slice(0, 8)}...` : 'none');
+  console.log(`[bi-uid] ${actor} set the in-game ID on ${req.params.steamId}: ${head(out.before.bi_uid)} -> ${head(out.after.bi_uid)}`);
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  res.json({ ok: true });
+  res.json(out.body);
 });
 
 const VALID_PRODUCT_TYPES = ['one_time', 'subscription', 'recurring_custom', 'custom_flag'];
@@ -3807,7 +3963,7 @@ router.get('/api/shop/admin/doctor', requireAdmin, async (req, res) => {
 router.get('/api/shop/account/summary', requireAuth, (req, res) => {
   const me = db.prepare(`
     SELECT steam_id, persona, avatar_url, platform, gamertag, bm_player_id,
-           bi_uid, discord_id, role, created_at, email, email_verified_at,
+           bi_uid, bi_uid_name, bi_uid_proof, bi_uid_set_at, discord_id, role, created_at, email, email_verified_at,
            password_hash IS NOT NULL AS has_password
     FROM users WHERE steam_id = ?
   `).get(req.user.steam_id);
@@ -3898,6 +4054,11 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
       gamertag: me.gamertag,
       bmPlayerId: me.bm_player_id,
       biUid: me.bi_uid,
+      // Who that ID belongs to by name, how it was chosen (inGameId.js PROOFS) and
+      // when, so a wrong or planted ID is visible. Null when not known.
+      biUidName: me.bi_uid_name || null,
+      biUidProof: me.bi_uid_proof || null,
+      biUidSetAt: me.bi_uid_set_at || null,
       discordId: me.discord_id,
       // From the per-request user, which derives admin from ADMIN_STEAM_IDS -- not the
       // stored row, which still says 'admin' for someone removed from that list.
@@ -3918,6 +4079,67 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
     subscriptions: subs,
     orders
   });
+});
+
+// ---- Buy-flow counters and expiry reminders (plan J5) ------------------------
+// funnel.js says why the shop counts steps and why it stores no player data.
+
+// Steps only the page can see. No sign-in, because most of them happen before
+// one. Only funnel.CLIENT_STEPS are accepted, so this cannot write anything else.
+// The step comes in the JSON body or as ?step=, so the page can use
+// navigator.sendBeacon, which cannot send a JSON content type. Its own cap per
+// address, in memory only; server.js leaves it out of the /api write cap.
+//
+// A real page sends each of the five steps at most once per load, so one address
+// gets 10 posts a minute, and each step counts at most 3 times an hour from one
+// address. A buyer who reloads or comes back from PayPal still counts; a script
+// cannot drown out the handful of real buyers the owner decides from. Past the
+// hourly cap the post still answers 204, uncounted, so a reloading player's
+// console shows no errors.
+const funnelBeaconLimit = windowLimit({ limit: 10, windowMs: 60 * 1000 });
+const funnelStepLimit = windowLimit({ limit: 3, windowMs: 60 * 60 * 1000 });
+
+router.post('/api/shop/funnel', (req, res) => {
+  if (!funnelBeaconLimit(req.ip)) return res.status(429).json({ error: 'Too many requests.' });
+  const fromBody = req.body && typeof req.body.step === 'string' ? req.body.step : null;
+  const step = fromBody || (typeof req.query.step === 'string' ? req.query.step : '');
+  if (!funnel.CLIENT_STEPS.includes(step)) return res.status(400).json({ error: 'Unknown step.' });
+  if (funnelStepLimit(`${req.ip}|${step}`)) funnel.countStep(db, step);
+  res.status(204).end();
+});
+
+// Daily counts for the last ?days= days (1 to 366, default 30), newest first.
+router.get('/api/shop/admin/funnel', requireAdmin, (req, res) => {
+  try {
+    res.json(funnel.readFunnel(db, { days: req.query.days }));
+  } catch (e) {
+    console.error('[funnel] read failed:', e.message);
+    res.status(500).json({ error: 'Could not read the counts.' });
+  }
+});
+
+// What the next 15:00 UTC reminder run would send (?at=now: a run right now),
+// without sending or recording anything. Order ids, dates and skip reasons only,
+// never an email address.
+router.get('/api/shop/admin/reminders/preview', requireAdmin, async (req, res) => {
+  try {
+    const at = req.query.at === 'now' ? Math.floor(Date.now() / 1000) : reminders.nextRunAt();
+    const out = await reminders.runExpiryReminders({ db, now: at, dryRun: true });
+    res.json({
+      runAt: at,
+      enabled: !reminders.remindersOff(),
+      windowStart: out.windowStart,
+      windowEnd: out.windowEnd,
+      due: out.due,
+      wouldSend: out.items,
+      skipped: out.skipped,
+      counts: out.counts,
+      maxPerRun: reminders.MAX_PER_RUN
+    });
+  } catch (e) {
+    console.error('[reminders] preview failed:', e.message);
+    res.status(500).json({ error: 'Could not build the reminder preview.' });
+  }
 });
 
 // ---- Discord role reconciliation -------------------------------------------
@@ -4199,6 +4421,91 @@ async function webhookHandler(req, res) {
   return res.sendStatus(200);
 }
 
+// A renewal PayPal took on a subscription whose orders were all revoked or
+// refunded (pqGuards.recordRevokedRenewal says how that happens). Grants nothing;
+// records the sale once and tells staff, who decide whether to cancel and refund.
+function reportRevokedRenewal(subId, resource) {
+  const amountCents = resource.amount && resource.amount.total != null ? ppValueToCents(resource.amount.total) : null;
+  const recorded = pqGuards.recordRevokedRenewal(db, {
+    saleId: resource.id, subscriptionId: subId, amountCents, now: Math.floor(Date.now() / 1000)
+  });
+  if (!recorded) return;
+  const { orders } = recorded;
+  const currency = String((resource.amount && resource.amount.currency) || 'usd').toUpperCase();
+  const money = amountCents != null ? `$${(amountCents / 100).toFixed(2)} ${currency}` : 'amount not given';
+  const sandbox = orders.every(o => o.test_mode);
+  const orderList = orders.map(o => `#${o.id} ${o.status}`).join(', ');
+  const accounts = Array.from(new Set(orders.map(o => o.steam_id))).join(', ');
+  console.error(`[billing] renewal ${resource.id} (${money}${sandbox ? ', sandbox' : ''}) on subscription ${subId} matched no live order (${orderList}); nothing granted. Cancel it in PayPal and refund if the player should not be billed.`);
+  postCard({
+    title: 'Renewal received for a revoked subscription',
+    color: COLORS.red,
+    description: 'PayPal billed a subscription whose orders were all revoked or refunded. Nothing was granted.',
+    fields: [
+      { name: 'Orders', value: orderList, inline: false },
+      { name: 'Subscription', value: '`' + subId + '`', inline: true },
+      { name: 'Amount', value: money + (sandbox ? ' (sandbox)' : ''), inline: true },
+      { name: 'Account', value: accounts, inline: false },
+      { name: 'Sale', value: '`' + resource.id + '`', inline: true }
+    ],
+    footer: 'Cancel the agreement in PayPal, and refund this payment if the player should not be billed.'
+  }).catch(() => {});
+}
+
+// A renewal booked on a subscription whose newest cycle had been refunded
+// (pqGuards.refundedLatestCycle says why it is still booked). Once per sale: the
+// caller only gets here after inserting the new cycle, which PayPal's retries skip.
+function reportRenewalAfterRefund(subId, resource, { refundedOrderId, newOrderId, original, amountCents }) {
+  const money = Number.isFinite(amountCents)
+    ? `$${(amountCents / 100).toFixed(2)} ${String(original.currency || 'usd').toUpperCase()}`
+    : 'amount not given';
+  const sandbox = !!original.test_mode;
+  console.error(`[billing] renewal ${resource.id} (${money}${sandbox ? ', sandbox' : ''}) on subscription ${subId} came after order #${refundedOrderId} was refunded; booked as order #${newOrderId}. Revoke it with a refund if the subscription was meant to end.`);
+  postCard({
+    title: 'Renewal after a refund',
+    color: COLORS.red,
+    description: `PayPal billed a subscription whose latest cycle was revoked or refunded. The renewal was booked and its perks given as normal, because a refund made on PayPal's side can leave a subscription that is meant to carry on.`,
+    fields: [
+      { name: 'Refunded cycle', value: `#${refundedOrderId}`, inline: true },
+      { name: 'New cycle', value: `#${newOrderId} ${original.product_title}`, inline: true },
+      { name: 'Amount', value: money + (sandbox ? ' (sandbox)' : ''), inline: true },
+      { name: 'Player', value: playerNameOf(original) || original.steam_id, inline: true },
+      { name: 'Subscription', value: '`' + subId + '`', inline: false },
+      { name: 'Sale', value: '`' + resource.id + '`', inline: true }
+    ],
+    footer: 'If the subscription was meant to end, revoke the new cycle with a refund: that also cancels it at PayPal.'
+  }).catch(() => {});
+}
+
+// A second live priority queue subscription for the same account and server,
+// found when a subscription activates (pqGuards.duplicateLiveSubscription). Card
+// only: both payments are taken, and staff decide which one to cancel and refund.
+// Never throws: it runs in the webhook after the order is already fulfilled.
+function reportDuplicateSubscription(orderId) {
+  try {
+    const other = pqGuards.duplicateLiveSubscription(db, { orderId, now: Math.floor(Date.now() / 1000) });
+    if (!other) return;
+    const order = getOrderWithContext(orderId);
+    if (!order) return;
+    const where = order.server_specific && order.server_id ? (SERVER_LABELS[order.server_id] || order.server_id) : 'every server';
+    console.error(`[pq-guard] order #${order.id}: ${order.steam_id} now has two live priority queue subscriptions for ${where} (order #${other.id} already live); nothing cancelled`);
+    postCard({
+      title: 'Duplicate priority queue subscription',
+      color: COLORS.red,
+      description: `This account now pays for two auto-renewing priority queue subscriptions for ${where}. Nothing was cancelled or refunded. Check with the player, then cancel and refund the one they did not mean to buy.`,
+      fields: [
+        { name: 'Player', value: playerNameOf(order) || order.steam_id, inline: true },
+        { name: 'Account', value: order.steam_id, inline: true },
+        { name: 'New', value: `#${order.id} \`${order.paypal_subscription_id}\``, inline: false },
+        { name: 'Already live', value: `#${other.id} \`${other.paypal_subscription_id}\`${other.effective_until ? `, paid up to <t:${other.effective_until}:D>` : ''}`, inline: false }
+      ],
+      footer: order.test_mode ? 'Sandbox' : 'Revoke with refund also cancels that subscription at PayPal'
+    }).catch(() => {});
+  } catch (e) {
+    console.error(`[pq-guard] order #${orderId}: duplicate subscription check failed: ${e.message}`);
+  }
+}
+
 async function dispatchPayPalEvent(event, resource, orderId) {
   switch (event.event_type) {
     case 'PAYMENT.CAPTURE.COMPLETED': {
@@ -4246,7 +4553,7 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         // event carries the real transaction id and will fill it in. (Older
         // code passed subId as a placeholder, which then caused a duplicate
         // row when SALE.COMPLETED inserted a "real" cycle on top.)
-        fulfillOrder(found.id, {
+        const firstCompletion = fulfillOrder(found.id, {
           captureId: null,
           payerEmail: resource.subscriber?.email_address || null,
           feeCents: null
@@ -4272,6 +4579,10 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             }
           }
         }
+        // Look again now the subscription is paid: two approvals made close together
+        // both pass the checkout check. Only on the order's first completion, so a
+        // PayPal retry of this event posts nothing twice.
+        if (firstCompletion) reportDuplicateSubscription(found.id);
       }
       break;
     }
@@ -4348,7 +4659,9 @@ async function dispatchPayPalEvent(event, resource, orderId) {
               newOrderId = placeholder.id;
             } else {
               // True renewal cycle — buyer's been on the sub for ≥1 month and
-              // this is a fresh billing. Insert a new row.
+              // this is a fresh billing. Insert a new row. Asked first, while the
+              // new row is not yet the newest: was the latest cycle refunded?
+              const refundedBefore = pqGuards.refundedLatestCycle(db, subId);
               const ins = db.prepare(`
                 INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
                                     paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
@@ -4361,6 +4674,11 @@ async function dispatchPayPalEvent(event, resource, orderId) {
                 feeCents, effectiveUntil
               );
               newOrderId = ins.lastInsertRowid;
+              if (refundedBefore) {
+                reportRenewalAfterRefund(subId, resource, {
+                  refundedOrderId: refundedBefore.id, newOrderId, original, amountCents: cycleAmount
+                });
+              }
             }
             // Keep a moved holder's grant alive across the new cycle.
             if (effectiveUntil && original.bi_uid) {
@@ -4405,6 +4723,10 @@ async function dispatchPayPalEvent(event, resource, orderId) {
               }
             }
           }
+        } else {
+          // No completed or pending order: the subscription was revoked, yet
+          // PayPal billed it. Still 200, so PayPal does not retry.
+          reportRevokedRenewal(subId, resource);
         }
       }
       break;

@@ -32,6 +32,7 @@ const VARS = [
   { name: 'SMTP_USER', group: 'Email', required: true, doc: '', example: 'billing@reforgedz.net' },
   { name: 'SMTP_PASS', group: 'Email', required: true, secret: true, doc: '', example: '' },
   { name: 'INVOICE_FROM', group: 'Email', doc: 'From header on every email.', example: 'ReforgedZ Billing <billing@reforgedz.net>' },
+  { name: 'EXPIRY_REMINDERS', group: 'Email', doc: 'off stops the daily 15:00 UTC email telling a player their priority queue ends in 2 to 3 days and will not renew (a cancelled subscription or a one-time purchase). Blank = on. Nothing is sent without SMTP_HOST either.', example: '' },
 
   // ---- Discord --------------------------------------------------------------
   { name: 'DISCORD_BOT_TOKEN', group: 'Discord', required: true, secret: true, outbound: true, doc: 'Bot token (shared with the ticket bot application) used to grant and remove entitlement roles.', example: '' },

@@ -8,6 +8,10 @@
 // saves away with it.
 const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2', 'dev1'];
 const ALL_SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2', 'dev1'];
+// What a buyer may pick at checkout. dev1 stays in SERVER_IDS because the sync
+// writes to it and staff grant there, but the shop page never offers it, so a
+// checkout naming it could only come from a crafted request.
+const SELLABLE_SERVER_IDS = SERVER_IDS.filter(id => id !== 'dev1');
 const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Faircroft)', eu3: 'EU3 (now EU Dev)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Faircroft)', dev1: 'NA Dev' };
 
 // Given the shop's purchases.json path (which sits deep inside the
@@ -101,4 +105,4 @@ function listSaveServers() {
   return listAllServers().map(s => ({ id: s.id, label: SERVER_LABELS[s.id] || s.id.toUpperCase() }));
 }
 
-module.exports = { SERVER_IDS, ALL_SERVER_IDS, SERVER_LABELS, listServers, listAllServers, listSaveServers, getServer, isValidServerId, isSaveServerId, configPathFromShopPath, saveGamePathFromShopPath };
+module.exports = { SERVER_IDS, ALL_SERVER_IDS, SELLABLE_SERVER_IDS, SERVER_LABELS, listServers, listAllServers, listSaveServers, getServer, isValidServerId, isSaveServerId, configPathFromShopPath, saveGamePathFromShopPath };

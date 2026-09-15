@@ -175,6 +175,25 @@ async function api(url, opts = {}) {
   return res.json();
 }
 
+// ---- Buy-flow counters ----
+// Tells the shop a step of the buy flow happened (POST /api/shop/funnel). The
+// server keeps daily counts only, never who (funnel.js says why). Each step goes
+// at most once per page load, so opening the same box twice counts once, and a
+// failed or blocked request never stops or slows the page.
+const funnelSent = new Set();
+function funnelStep(step) {
+  if (funnelSent.has(step)) return;
+  funnelSent.add(step);
+  try {
+    fetch('/api/shop/funnel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ step }),
+      keepalive: true
+    }).catch(() => {});
+  } catch (e) {}
+}
+
 // ---- FX ----
 async function loadFx() {
   try {
@@ -398,12 +417,71 @@ function renderMatches(box, candidates, selectedRef, onPick) {
   box.style.display = candidates.length ? 'flex' : 'none';
 }
 
+// ---- A purchase started while signed out ----
+// A signed-out buyer who picked a product (and a server or an amount) used to land
+// back on the product list after signing in, with nothing selected, and had to
+// start again. The choice is kept in this tab for 30 minutes and carries on after
+// an email sign-in or new account in the sign-in box, or on the page load that
+// follows the Steam round trip. sessionStorage, not localStorage, so a buy never
+// reappears in another tab or days later.
+const PENDING_BUY_KEY = 'rz_pending_buy';
+const PENDING_BUY_MAX_AGE_MS = 30 * 60 * 1000;
+
+function savePendingBuy(productId, serverId, customAmountCents) {
+  try {
+    sessionStorage.setItem(PENDING_BUY_KEY, JSON.stringify({
+      productId,
+      serverId: serverId || null,
+      customAmountCents: customAmountCents != null ? customAmountCents : null,
+      at: Date.now()
+    }));
+  } catch (e) {}
+}
+
+// The saved buy, or null when there is none, it is too old, or it is not one this page wrote.
+function readPendingBuy() {
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(PENDING_BUY_KEY) || 'null'); } catch (e) { return null; }
+  if (!saved || typeof saved !== 'object' || !Number.isInteger(saved.productId)) return null;
+  const age = Date.now() - Number(saved.at);
+  if (!(age >= 0 && age <= PENDING_BUY_MAX_AGE_MS)) return null;
+  return {
+    productId: saved.productId,
+    serverId: SERVER_IDS.includes(saved.serverId) ? saved.serverId : null,
+    customAmountCents: Number.isInteger(saved.customAmountCents) && saved.customAmountCents > 0 ? saved.customAmountCents : null
+  };
+}
+
+function clearPendingBuy() {
+  try { sessionStorage.removeItem(PENDING_BUY_KEY); } catch (e) {}
+}
+
+// Read and forget: a saved buy carries on once, however the page got here.
+function takePendingBuy() {
+  const pending = readPendingBuy();
+  clearPendingBuy();
+  return pending;
+}
+
+// Carry on through the normal gates: the server or amount picker when one is
+// missing, the in-game ID prompt, and the checks at checkout. A product no longer
+// on sale is dropped quietly.
+function resumePendingBuy(pending) {
+  if (!pending || !currentUser) return;
+  if (!currentProducts.some(p => p.id === pending.productId)) return;
+  buyProduct(pending.productId, pending.serverId, pending.customAmountCents);
+}
+
 // ---- Sign-in modal (email and password) ----
 // The one way into the shop. Steam stays as a small link for staff and for Steam
 // customers who have not added an email yet. Xbox and PlayStation customers move
 // over with "Forgot password", which emails the address they
 // paid with and sets up sign-in on the account they already have.
 let authMode = 'signin';
+// Set once this box sent an email (a new account's link or a password reset).
+// Closing the box after that keeps a saved buy: the player may set a password
+// from the email and come back to sign in here.
+let authEmailSent = false;
 
 function setAuthMode(mode) {
   authMode = mode;
@@ -422,22 +500,44 @@ function setAuthMode(mode) {
   document.getElementById('authForgot').style.display = forgot ? 'none' : '';
   document.getElementById('authError').textContent = '';
   const notice = document.getElementById('authNotice');
+  // Signing in to buy: the product is out of sight now, so say the purchase is kept.
+  const buyNote = !forgot && readPendingBuy() ? 'Sign in or create an account, and your purchase carries on from where you left it.' : '';
   notice.textContent = forgot
     ? 'Enter your email and we will send you a link. Bought from us before on Xbox or PlayStation? Use the email you paid with: the link sets up sign-in on that account, so your purchases come with you. Bought with Steam? Use Sign in with Steam below.'
-    : '';
-  notice.style.display = forgot ? 'block' : 'none';
+    : buyNote;
+  notice.style.display = forgot || buyNote ? 'block' : 'none';
 }
 
 function openAuthModal(mode) {
+  authEmailSent = false;
   setAuthMode(mode || 'signin');
   document.getElementById('authPassword').value = '';
-  document.getElementById('authSteamLink').href = '/auth/steam' + (returnTo ? '?next=' + encodeURIComponent(returnTo) : '');
+  // Steam comes back to the shop while a buy is waiting, so it can carry on there;
+  // otherwise to the page that sent the player here to sign in.
+  const back = readPendingBuy() ? '/shop' : returnTo;
+  document.getElementById('authSteamLink').href = '/auth/steam' + (back ? '?next=' + encodeURIComponent(back) : '');
   document.getElementById('authOverlay').classList.add('open');
   setTimeout(() => document.getElementById('authEmail').focus(), 50);
 }
 
 function closeAuthModal() {
   document.getElementById('authOverlay').classList.remove('open');
+}
+
+// Closed without signing in: forget a saved buy, so a later sign-in does not
+// start a purchase the player walked away from. Kept once an email went out.
+function dismissAuthModal() {
+  if (!authEmailSent) clearPendingBuy();
+  closeAuthModal();
+}
+
+// The emailed link opens a new tab, and a saved buy lives only in this one, so a
+// player who sets a password from it has to come back here to carry on.
+function withBuyReminder(message) {
+  const text = String(message || '');
+  return readPendingBuy()
+    ? `${text} When you have set your password, come back to this tab and sign in to carry on with your purchase.`
+    : text;
 }
 
 async function submitAuth(e) {
@@ -459,8 +559,9 @@ async function submitAuth(e) {
   try {
     if (mode === 'forgot') {
       const data = await api('/api/auth/reset/request', { method: 'POST', body: JSON.stringify({ email }) });
-      notice.textContent = data.message || 'If that email has an account or has bought from us, an email is on its way.';
+      notice.textContent = withBuyReminder(data.message || 'If that email has an account or has bought from us, an email is on its way.');
       notice.style.display = 'block';
+      authEmailSent = true;
       return;
     }
     const data = await api(mode === 'register' ? '/api/auth/register' : '/api/auth/login', {
@@ -469,16 +570,21 @@ async function submitAuth(e) {
     });
     if (data.linkSent) {
       // Registering with an email ReforgedZ already knows: no second account,
-      // and the email itself gets the next step.
-      notice.textContent = data.message;
+      // and the email itself gets the next step. A saved buy waits for that sign-in.
+      notice.textContent = withBuyReminder(data.message);
       notice.style.display = 'block';
+      authEmailSent = true;
       return;
     }
     closeAuthModal();
-    // Sent here from another page to sign in: go back there, signed in.
-    if (returnTo) { location.href = returnTo; return; }
+    // A buy started before signing in carries on right here. Without one, a player
+    // sent here from another page to sign in goes back there, signed in.
+    const pending = takePendingBuy();
+    if (returnTo && !pending) { location.href = returnTo; return; }
+    if (returnTo) window.history.replaceState({}, '', '/shop');
     await loadUser();
     await loadProducts();
+    resumePendingBuy(pending);
   } catch (err) {
     errorText = err.message || 'That did not work. Try again.';
     if (err.code === 'email_taken') setAuthMode('signin');
@@ -490,7 +596,7 @@ async function submitAuth(e) {
   }
 }
 
-document.getElementById('authCancel').addEventListener('click', closeAuthModal);
+document.getElementById('authCancel').addEventListener('click', dismissAuthModal);
 document.getElementById('authTabSignin').addEventListener('click', () => setAuthMode('signin'));
 document.getElementById('authTabRegister').addEventListener('click', () => setAuthMode('register'));
 document.getElementById('authForgot').addEventListener('click', () => setAuthMode('forgot'));
@@ -498,7 +604,7 @@ document.getElementById('authForm').addEventListener('submit', submitAuth);
 // Escape closes the sign-in box, like the product box. A click outside it does not,
 // so a half-typed password is not lost to a stray tap.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.getElementById('authOverlay').classList.contains('open')) closeAuthModal();
+  if (e.key === 'Escape' && document.getElementById('authOverlay').classList.contains('open')) dismissAuthModal();
 });
 
 // ---- Products ----
@@ -550,8 +656,8 @@ function renderProducts(products) {
     const buyBtnHtml = currentUser
       ? (soldOut
           ? `<button class="shop-buy-btn" disabled onclick="event.stopPropagation()">Sold out</button>`
-          : `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="event.stopPropagation(); buyProduct(${p.id})">${buyLabel}</button>`)
-      : `<button class="shop-buy-btn" onclick="event.stopPropagation(); openSigninFromCard()">Sign in to buy</button>`;
+          : `<button class="shop-buy-btn" ${p.active ? '' : 'disabled'} onclick="event.stopPropagation(); startBuy(${p.id})">${buyLabel}</button>`)
+      : `<button class="shop-buy-btn" onclick="event.stopPropagation(); startBuy(${p.id})">Sign in to buy</button>`;
 
     const typeLabel = formatTypeLabel(p.type, p.interval_days);
     const typeClass = p.type === 'one_time' ? 'one_time' : 'subscription';
@@ -669,9 +775,16 @@ function updateDetailBuyButton() {
   const product = detailProduct;
   if (!product) return;
   if (!currentUser) {
-    buyBtn.textContent = 'Sign in to buy';
+    // The server and amount picked so far go with the sign-in, so the buy carries
+    // on after it (startBuy). Without a server the picker opens again then.
+    const sid = product.server_specific ? selectedServerId : null;
+    buyBtn.textContent = sid ? `Sign in to buy for ${SERVER_LABELS[sid]}` : 'Sign in to buy';
     buyBtn.disabled = false;
-    buyBtn.onclick = () => { closeDetail(); openSigninFromCard(); };
+    buyBtn.onclick = () => {
+      const amt = product.custom_price && isCustomAmountValid(product) ? selectedCustomAmountCents : null;
+      closeDetail();
+      startBuy(product.id, sid, amt);
+    };
     return;
   }
 
@@ -711,7 +824,7 @@ function updateDetailBuyButton() {
       const sid = selectedServerId;
       const amt = product.custom_price ? selectedCustomAmountCents : null;
       closeDetail();
-      buyProduct(product.id, sid, amt);
+      startBuy(product.id, sid, amt);
     };
     return;
   }
@@ -731,7 +844,7 @@ function updateDetailBuyButton() {
     buyBtn.onclick = () => {
       const amt = product.custom_price ? selectedCustomAmountCents : null;
       closeDetail();
-      buyProduct(product.id, null, amt);
+      startBuy(product.id, null, amt);
     };
   }
 }
@@ -880,6 +993,7 @@ function showBiUidModal(productId, serverId, customAmountCents) {
   document.getElementById('biuidSkip').style.display = required || locked ? 'none' : '';
   document.getElementById('biuidSubmit').textContent = locked ? 'Go to my account' : 'Save and continue';
   document.getElementById('biuidOverlay').classList.add('open');
+  funnelStep('id_prompt_shown');
   if (!locked) input.focus();
 }
 
@@ -985,7 +1099,7 @@ document.getElementById('biuidSubmit').addEventListener('click', async () => {
     const amt = pendingCustomAmountCents;
     hideBiUidModal();
     renderAuth();
-    // Back through the normal gates (Discord prompt, already-owned check) now the ID is set.
+    // Back through the normal gates (already-owned check, checkout refusals) now the ID is set.
     if (pid) buyProduct(pid, sid, amt);
   } catch (e) {
     error.textContent = e.code === 'pick_expired'
@@ -1003,10 +1117,11 @@ document.getElementById('biuidInput').addEventListener('keydown', (e) => {
   document.getElementById('biuidSubmit').click();
 });
 
-// ---- Discord ID modal (pre-checkout, only when product grants a role) ----
-let pendingDiscordPid = null;
-let pendingDiscordSid = null;
-let pendingDiscordAmt = null;
+// ---- Discord, after payment ----
+// Role products used to stop for a Discord box before PayPal: one more step
+// between a buyer and paying, for something that can be linked at any time. The
+// payment confirmation offers Connect Discord instead (showNextSteps), and the
+// role is applied whenever the account links it.
 
 // Whether the server can run the Connect Discord flow; fetched once, lazily.
 let discordOAuthAvailable = null;
@@ -1016,96 +1131,9 @@ async function loadDiscordOAuthFlag() {
   return discordOAuthAvailable;
 }
 
-function showDiscordIdModal(productId, serverId, customAmountCents) {
-  pendingDiscordPid = productId;
-  pendingDiscordSid = serverId || null;
-  pendingDiscordAmt = customAmountCents != null ? customAmountCents : null;
-  // The one-click route: sign in with Discord, come straight back into this
-  // checkout. Shown only when the server has the OAuth credentials.
-  const connect = document.getElementById('discordConnectBtn');
-  const lead = document.getElementById('discordPasteLead');
-  if (connect) {
-    connect.style.display = 'none';
-    if (lead) lead.style.display = 'none';
-    loadDiscordOAuthFlag().then((on) => {
-      if (!on) return;
-      const back = `/shop?buy=${productId}${serverId ? '&server=' + encodeURIComponent(serverId) : ''}`;
-      connect.href = '/auth/discord/link?next=' + encodeURIComponent(back);
-      connect.style.display = 'block';
-      if (lead) lead.style.display = 'block';
-    });
-  }
-  const overlay = document.getElementById('discordIdOverlay');
-  const input = document.getElementById('discordIdInput');
-  const error = document.getElementById('discordIdError');
-  input.value = '';
-  error.textContent = '';
-  overlay.classList.add('open');
-  setTimeout(() => input.focus(), 50);
-}
-
-function hideDiscordIdModal() {
-  document.getElementById('discordIdOverlay').classList.remove('open');
-  pendingDiscordPid = null;
-  pendingDiscordSid = null;
-  pendingDiscordAmt = null;
-}
-
-document.getElementById('discordIdCancel').addEventListener('click', () => {
-  const pid = pendingDiscordPid;
-  hideDiscordIdModal();
-  if (pid) {
-    const btn = document.querySelector(`.shop-card[data-id="${pid}"] .shop-buy-btn`);
-    if (btn) { btn.disabled = false; btn.textContent = 'Purchase'; }
-  }
-});
-
-document.getElementById('discordIdSkip').addEventListener('click', () => {
-  const pid = pendingDiscordPid;
-  const sid = pendingDiscordSid;
-  const amt = pendingDiscordAmt;
-  hideDiscordIdModal();
-  if (pid) proceedCheckout(pid, sid, amt);
-});
-
-document.getElementById('discordIdSubmit').addEventListener('click', async () => {
-  const input = document.getElementById('discordIdInput');
-  const error = document.getElementById('discordIdError');
-  const submitBtn = document.getElementById('discordIdSubmit');
-
-  const raw = input.value.trim();
-  if (!/^\d{15,25}$/.test(raw)) {
-    error.textContent = 'That doesn\'t look like a Discord User ID. Right-click your name in Discord (Developer Mode on) and Copy User ID.';
-    return;
-  }
-
-  submitBtn.disabled = true;
-  submitBtn.textContent = 'Linking...';
-  error.textContent = '';
-
-  try {
-    const result = await api('/api/shop/set-discord-id', {
-      method: 'POST',
-      body: JSON.stringify({ discordId: raw })
-    });
-    currentUser.discord_id = result.discord_id || raw;
-    const pid = pendingDiscordPid;
-    const sid = pendingDiscordSid;
-    const amt = pendingDiscordAmt;
-    hideDiscordIdModal();
-    renderAuth();
-    if (pid) proceedCheckout(pid, sid, amt);
-  } catch (e) {
-    error.textContent = e.message || 'Failed to link Discord ID';
-  } finally {
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Link & Continue';
-  }
-});
-
 // In-game ID and Discord are edited on /account now, not in the nav dropdown.
-// The checkout-time overlays (biuidOverlay, discordIdOverlay) still collect
-// them when a purchase needs one and the account is missing it.
+// The checkout-time in-game ID overlay (biuidOverlay) still collects the ID when
+// a purchase needs one and the account is missing it.
 
 // ---- Custom Flag checkout (player details + image upload) ----
 let pendingFlagProductId = null;
@@ -1236,15 +1264,9 @@ async function buyProduct(productId, serverId, customAmountCents) {
 
   // Every perk is delivered to an in-game ID, so ask for it before PayPal on
   // any platform. Console players used to get an alert and a dead end here.
+  // Discord is not asked for here: the payment confirmation offers it.
   if (!currentUser.bi_uid) {
     showBiUidModal(productId, serverId, customAmountCents);
-    return;
-  }
-
-  // If the product grants a Discord role and the user hasn't linked their
-  // Discord yet, prompt for it (optional — they can skip).
-  if (product && product.discord_role_id && !currentUser.discord_id) {
-    showDiscordIdModal(productId, serverId, customAmountCents);
     return;
   }
 
@@ -1261,7 +1283,69 @@ async function buyProduct(productId, serverId, customAmountCents) {
   proceedCheckout(productId, serverId, customAmountCents);
 }
 
-async function proceedCheckout(productId, serverId, customAmountCents) {
+// Every buy button comes through here (product cards, the detail box, ?buy=
+// links). Signed out, the choice is saved and the sign-in box opens; the buy
+// carries on once the buyer is signed in (resumePendingBuy).
+function startBuy(productId, serverId, customAmountCents) {
+  funnelStep('buy_clicked');
+  if (currentUser) {
+    buyProduct(productId, serverId, customAmountCents);
+    return;
+  }
+  savePendingBuy(productId, serverId, customAmountCents);
+  funnelStep('signin_shown');
+  openAuthModal('signin');
+}
+
+// ---- Checkout refusals that need more than an alert ----
+// A link to the account page, or a second button, which alert() cannot hold.
+// Filled with textContent: the message comes from the server.
+//   link: { label, href }, a way out shown between Close and the main action.
+function showCheckoutNotice({ title, text, closeLabel, action, link }) {
+  document.getElementById('checkoutNoticeTitle').textContent = title;
+  document.getElementById('checkoutNoticeText').textContent = text;
+  const actions = document.getElementById('checkoutNoticeActions');
+  actions.textContent = '';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'biuid-cancel';
+  close.textContent = closeLabel || 'Close';
+  close.addEventListener('click', hideCheckoutNotice);
+  actions.appendChild(close);
+  if (link) {
+    const a = document.createElement('a');
+    a.className = 'biuid-cancel';
+    a.href = link.href;
+    a.textContent = link.label;
+    actions.appendChild(a);
+  }
+  if (action) {
+    const main = document.createElement(action.href ? 'a' : 'button');
+    main.className = 'biuid-submit';
+    main.textContent = action.label;
+    if (action.href) {
+      main.href = action.href;
+    } else {
+      main.type = 'button';
+      // Once only, so a double click cannot start two checkouts.
+      main.addEventListener('click', () => { hideCheckoutNotice(); action.onClick(); }, { once: true });
+    }
+    actions.appendChild(main);
+  }
+  document.getElementById('checkoutNoticeOverlay').classList.add('open');
+  close.focus();
+}
+
+function hideCheckoutNotice() {
+  document.getElementById('checkoutNoticeOverlay').classList.remove('open');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('checkoutNoticeOverlay').classList.contains('open')) hideCheckoutNotice();
+});
+
+// opts.confirmSharedId: the buyer answered "It is mine, buy anyway" to the shared in-game ID question.
+async function proceedCheckout(productId, serverId, customAmountCents, opts = {}) {
   const btn = document.querySelector(`.shop-card[data-id="${productId}"] .shop-buy-btn`);
   if (btn) { btn.disabled = true; btn.textContent = 'Redirecting...'; }
 
@@ -1272,7 +1356,8 @@ async function proceedCheckout(productId, serverId, customAmountCents) {
         productId,
         testMode: isTestMode,
         serverId: serverId || null,
-        customAmountCents: customAmountCents != null ? customAmountCents : undefined
+        customAmountCents: customAmountCents != null ? customAmountCents : undefined,
+        confirmSharedId: opts.confirmSharedId === true ? true : undefined
       })
     });
     if (data.url) {
@@ -1282,6 +1367,31 @@ async function proceedCheckout(productId, serverId, customAmountCents) {
     if (btn) { btn.disabled = false; btn.textContent = 'Purchase'; }
     if (e.code === 'needs_in_game_id') {
       showBiUidModal(productId, serverId, customAmountCents);
+      return;
+    }
+    // A second priority queue subscription for a server this account already has.
+    if (e.code === 'already_subscribed') {
+      showCheckoutNotice({
+        title: 'You already have this',
+        text: e.message,
+        action: { label: 'Go to my account', href: '/account' }
+      });
+      return;
+    }
+    // The in-game ID has priority queue on another account. The server only asks,
+    // since the ID may be this buyer's own on a second account. The buyer's own
+    // player name is shown (their own account's data), so someone who picked the
+    // wrong player in Find me sees it and changes the ID instead of paying for
+    // another player's queue.
+    if (e.code === 'id_has_priority_elsewhere' && e.data && e.data.needsConfirm) {
+      const name = currentUser && currentUser.bi_uid_name;
+      showCheckoutNotice({
+        title: 'Is this in-game ID yours?',
+        text: name ? `Your in-game ID is the player ${name}. ${e.message}` : e.message,
+        closeLabel: 'Cancel',
+        link: { label: 'Change my in-game ID', href: '/account' },
+        action: { label: 'It is mine, buy anyway', onClick: () => proceedCheckout(productId, serverId, customAmountCents, { confirmSharedId: true }) }
+      });
       return;
     }
     alert(e.message || 'Checkout failed');
@@ -1524,7 +1634,7 @@ async function deleteProduct(id) {
 
 async function hardDeleteProduct(id, orderCount, subCount) {
   const subWarning = subCount > 0
-    ? `\n\nNote: ${subCount} legacy subscription order(s) reference this product. Subscriptions are retired, so nothing recurring is billed — but cancel any leftover ones in the PayPal/Stripe dashboard if needed.`
+    ? `\n\nNote: ${subCount} old Stripe subscription order(s) reference this product. Hard Delete cancels every live PayPal subscription for this product, so those players stop being billed and lose what it gives them. It cannot cancel Stripe subscriptions: check the Stripe dashboard for those.`
     : '';
   const typed = prompt(
     `HARD DELETE\n\nThis permanently deletes the product AND ${orderCount} order(s) referencing it. This cannot be undone.${subWarning}\n\nType DELETE to confirm:`
@@ -1682,20 +1792,37 @@ function nextRestartText(now = Date.now()) {
 
 // What just happened and what happens next, so nobody has to guess whether
 // the purchase "worked". Entitlement was decided server-side already.
-function nextStepsHtml(order) {
+// opts.discordOAuth: the server can run Connect Discord, so offer it as a button.
+function nextStepsHtml(order, opts = {}) {
   const items = [];
   const label = order.server_id ? (SERVER_LABELS[order.server_id] || String(order.server_id).toUpperCase()) : 'your server';
   if (order.grants_priority_queue) {
     items.push(`Queue priority on <strong>${escHtml(label)}</strong> starts at the next scheduled restart, <strong>${escHtml(nextRestartText())}</strong>. Servers restart every 4 hours.`);
     if (currentUser && !currentUser.bi_uid) items.push('Set your in-game id on your <a href="/account">account page</a> first, or the priority has nowhere to go.');
+    // Who it goes to, so a mistyped or planted in-game ID is noticed now rather than in the queue.
+    else if (currentUser && currentUser.bi_uid_name) items.push(`Priority queue goes to <strong>${escHtml(currentUser.bi_uid_name)}</strong>, the player on your in-game ID. If that is not you, change your in-game ID on your <a href="/account">account page</a>.`);
   }
   if (order.discord_role_id) {
-    items.push(currentUser && currentUser.discord_id
-      ? 'Your Discord role is applied automatically, usually within a minute.'
-      : 'Link your Discord on your <a href="/account">account page</a> to receive your role.');
+    if (currentUser && currentUser.discord_id) {
+      items.push('Your Discord role is applied automatically, usually within a minute.');
+    } else if (opts.discordOAuth) {
+      // Asked here, after payment, rather than in a box before PayPal.
+      items.push('Connect your Discord to receive your role. It is applied as soon as Discord is linked.<br><a class="alert-action" href="/auth/discord/link?next=/account">Connect Discord</a>');
+    } else {
+      items.push('Link your Discord on your <a href="/account">account page</a> to receive your role. It is applied as soon as Discord is linked.');
+    }
   }
   items.push('See or change any of this on your <a href="/account">account page</a>.');
   return `<strong>Payment successful. Thanks for supporting ReforgedZ.</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>`;
+}
+
+// The confirmation for an order, offering Connect Discord when the product gives a
+// Discord role and the account has none linked.
+async function showNextSteps(order) {
+  const wantsDiscord = !!order.discord_role_id && !(currentUser && currentUser.discord_id);
+  const discordOAuth = wantsDiscord ? await loadDiscordOAuthFlag() : false;
+  alertSuccess.innerHTML = nextStepsHtml(order, { discordOAuth });
+  if (wantsDiscord) funnelStep('discord_prompt_shown');
 }
 
 async function findOwnOrder(orderId) {
@@ -1720,7 +1847,7 @@ async function checkAlerts() {
       await new Promise(r => setTimeout(r, 3000));
       const order = await findOwnOrder(orderId);
       if (order && order.status === 'completed') {
-        alertSuccess.innerHTML = nextStepsHtml(order);
+        await showNextSteps(order);
         loadOrders();
         return;
       }
@@ -1745,7 +1872,7 @@ async function checkAlerts() {
       try {
         const order = await findOwnOrder(orderId);
         if (order && order.type !== 'custom_flag') {
-          alertSuccess.innerHTML = nextStepsHtml(order);
+          await showNextSteps(order);
         } else if (order && order.type === 'custom_flag') {
           const cfg = await api('/api/shop/config').catch(() => ({}));
           const tutorial = cfg.customFlagTutorialUrl
@@ -1769,6 +1896,7 @@ async function checkAlerts() {
   }
   if (params.get('cancelled') === '1') {
     alertCancelled.style.display = 'block';
+    funnelStep('checkout_cancelled_seen');
     window.history.replaceState({}, '', '/shop');
   }
   if (params.get('error') === '1') {
@@ -1789,20 +1917,29 @@ async function init() {
   await loadProducts();
   // After the user, so the confirmation can say whether Discord is linked.
   checkAlerts();
-  // /shop?buy=<product>&server=<id>: the account page's "Start again" and any
-  // link that should land straight in checkout. Signed out, go through sign-in
-  // and come back here with the same parameters.
+  // /shop?buy=<product>&server=<id>: the account page's "Start again", the expiry
+  // reminder email and any link that should land straight in checkout. Signed out,
+  // startBuy keeps the choice and opens sign-in on this page, and the buy carries
+  // on after it.
   const params = new URLSearchParams(location.search);
   const buyId = parseInt(params.get('buy'), 10);
   if (buyId) {
     const server = SERVER_IDS.includes(params.get('server')) ? params.get('server') : null;
-    if (currentUser) {
-      window.history.replaceState({}, '', '/shop');
-      buyProduct(buyId, server);
-    } else {
-      location.href = '/shop?next=' + encodeURIComponent(`/shop?buy=${buyId}${server ? '&server=' + server : ''}`);
-    }
+    window.history.replaceState({}, '', '/shop');
+    // This link is the buy now, not anything saved earlier in the tab.
+    clearPendingBuy();
+    startBuy(buyId, server);
     return;
+  }
+  // Signed in with a buy saved before signing in: back from the Steam round
+  // trip, or a reload. It carries on, ahead of any page that asked for the sign-in.
+  if (currentUser) {
+    const pending = takePendingBuy();
+    if (pending) {
+      if (returnTo) window.history.replaceState({}, '', '/shop');
+      resumePendingBuy(pending);
+      return;
+    }
   }
   // Arrived here to sign in and still signed out: open the sign-in menu so
   // the next step is obvious. Already signed in: they only wanted the page
@@ -1814,6 +1951,7 @@ async function init() {
 }
 
 window.buyProduct = buyProduct;
+window.startBuy = startBuy;
 window.editProduct = editProduct;
 window.toggleProduct = toggleProduct;
 window.deleteProduct = deleteProduct;

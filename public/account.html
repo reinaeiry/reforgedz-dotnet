@@ -289,6 +289,34 @@
       font-weight: 600;
     }
 
+    /* ---- in-game ID: find yourself by name ---- */
+    .id-name { color: #fff; font-size: 0.95rem; font-weight: 600; overflow-wrap: anywhere; }
+    .id-raw { margin-top: 3px; font-family: monospace; font-size: 0.74rem; color: var(--text-ghost); word-break: break-all; }
+    .id-find-label { display: block; margin-top: 12px; font-size: 0.74rem; color: var(--text-ghost); }
+    .id-find-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .id-find-row .link-input { flex: 1 1 160px; min-width: 0; margin-top: 0; }
+    .id-find-row .link-action { margin-top: 0; }
+    .finder-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; max-height: 260px; overflow-y: auto; }
+    .finder-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      width: 100%;
+      text-align: left;
+      padding: 9px 12px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .finder-item:hover { border-color: var(--border-hover); }
+    .finder-item:disabled { opacity: 0.5; cursor: default; }
+    .finder-name { font-size: 0.88rem; font-weight: 600; overflow-wrap: anywhere; }
+    .finder-meta { font-size: 0.74rem; color: var(--text-ghost); }
+
     @media (max-width: 640px) {
       .account-page { padding-top: 110px; }
       .history-table table { min-width: 620px; }
@@ -502,21 +530,9 @@
         `);
       }
 
-      // In-game identity: what queue priority and perks are delivered to.
-      const idHelp = 'Find it in Arma Reforger: open the Main Menu and select your account name at the top right.';
-      items.push(`
-        <div class="link-item">
-          <div class="link-label">In-game ID</div>
-          <div class="link-value ${p.biUid ? '' : 'missing'}">${p.biUid ? esc(p.biUid) : 'Not set. Perks cannot be delivered until it is.'}</div>
-          ${p.canEditBiUid ? `
-            <input class="link-input" id="biUidInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${esc(p.biUid || '')}" spellcheck="false" autocomplete="off">
-            <button class="link-action" onclick="saveBiUid()">${p.biUid ? 'Change' : 'Save'} in-game ID</button>
-            <div class="link-hint" id="biUidHint">${idHelp} If you change it, your priority queue follows the new ID from the next server restart.</div>
-          ` : `
-            <div class="link-hint">${isConsole ? 'Set up email sign-in above to change it.' : esc(idHelp)}</div>
-          `}
-        </div>
-      `);
+      // In-game identity: what queue priority and perks are delivered to. A
+      // placeholder here; renderBiUidCard builds the card itself with the DOM.
+      items.push('<div id="biUidCard"></div>');
 
       // One click when the server has OAuth credentials; the paste box stays
       // underneath either way.
@@ -535,6 +551,7 @@
       `);
 
       document.getElementById('linkGrid').innerHTML = items.join('');
+      renderBiUidCard();
     }
 
     function setHint(id, msg, kind) {
@@ -544,20 +561,178 @@
       el.className = 'link-hint' + (kind ? ' ' + kind : '');
     }
 
-    async function saveBiUid() {
-      const val = document.getElementById('biUidInput').value.trim();
-      setHint('biUidHint', 'Checking…');
+    // ---- In-game ID card ----
+    // One box for a name or an ID, like the shop's: Find me lists the ReforgedZ
+    // players the text could mean and picking one saves it, while a pasted ID saves
+    // as it is. The saved ID shows with the player's name, so a mistyped or planted
+    // ID is noticed. Built with the DOM rather than an HTML string, because the
+    // names come from BattleMetrics and the search results from whatever was typed.
+    const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    const ID_HELP = 'Find it in Arma Reforger: open the Main Menu and select your account name at the top right.';
+
+    // Braces, spaces and capitals are the usual noise around a correct ID.
+    function tidyId(s) {
+      return String(s || '').replace(/[{}\s]/g, '').toLowerCase();
+    }
+
+    function make(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+
+    // Same wording as the shop's finder (shop.js lastPlayedText).
+    function lastPlayedText(iso) {
+      const t = Date.parse(iso || '');
+      if (!Number.isFinite(t)) return '';
+      const days = Math.floor((Date.now() - t) / 86400000);
+      if (days <= 0) return 'played today';
+      if (days === 1) return 'played yesterday';
+      if (days < 14) return `played ${days} days ago`;
+      if (days < 60) return `played ${Math.round(days / 7)} weeks ago`;
+      return `played ${Math.max(2, Math.round(days / 30))} months ago`;
+    }
+
+    function renderBiUidCard() {
+      const slot = document.getElementById('biUidCard');
+      if (slot) slot.replaceWith(buildBiUidCard());
+    }
+
+    function buildBiUidCard() {
+      const p = account.profile;
+      const isConsole = p.platform === 'xbox' || p.platform === 'psn';
+      const card = make('div', 'link-item');
+      card.id = 'biUidCard';
+      card.appendChild(make('div', 'link-label', 'In-game ID'));
+
+      if (!p.biUid) {
+        card.appendChild(make('div', 'link-value missing', 'Not set. Perks cannot be delivered until it is.'));
+      } else if (p.biUidName) {
+        // The name first: a player knows their own name, not a 36-character ID.
+        card.appendChild(make('div', 'id-name', p.biUidName));
+        card.appendChild(make('div', 'id-raw', p.biUid));
+      } else {
+        card.appendChild(make('div', 'link-value', p.biUid));
+        const lookUp = make('button', 'link-action', 'Look up name');
+        lookUp.type = 'button';
+        lookUp.addEventListener('click', () => lookUpIdName(lookUp));
+        card.appendChild(lookUp);
+      }
+
+      // Xbox and PlayStation accounts without confirmed email sign-in keep today's
+      // guidance: /api/shop/set-bi-uid refuses them until that is set up.
+      if (!p.canEditBiUid) {
+        const hint = make('div', 'link-hint', isConsole ? 'Set up email sign-in above to change it.' : ID_HELP);
+        hint.id = 'biUidHint';
+        card.appendChild(hint);
+        return card;
+      }
+
+      const label = make('label', 'id-find-label', p.biUid ? 'Change it: your in-game name or ID' : 'Your in-game name or ID');
+      label.htmlFor = 'biUidQuery';
+      const row = make('div', 'id-find-row');
+      const input = make('input', 'link-input');
+      input.id = 'biUidQuery';
+      input.type = 'text';
+      input.placeholder = 'Your in-game name or ID';
+      input.maxLength = 60;
+      input.spellcheck = false;
+      input.autocomplete = 'off';
+      const go = make('button', 'link-action', 'Find me');
+      go.type = 'button';
+      go.id = 'biUidGo';
+      // The button says what it will do with what is typed.
+      input.addEventListener('input', () => { go.textContent = ID_PATTERN.test(tidyId(input.value)) ? 'Save this ID' : 'Find me'; });
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        go.click();
+      });
+      go.addEventListener('click', () => findOrSaveId(input, go));
+      row.append(input, go);
+
+      const matches = make('div', 'finder-list');
+      matches.id = 'biUidMatches';
+      matches.style.display = 'none';
+      const hint = make('div', 'link-hint', `Type the name you play under and pick yourself, or paste your ID. ${ID_HELP} If you change it, your priority queue follows the new ID from the next server restart.`);
+      hint.id = 'biUidHint';
+      card.append(label, row, matches, hint);
+      return card;
+    }
+
+    async function findOrSaveId(input, btn) {
+      const typed = input.value.trim();
+      const matches = document.getElementById('biUidMatches');
+      if (!typed) return setHint('biUidHint', 'Type the name you play under, or paste your in-game ID.', 'error');
+      const tidy = tidyId(typed);
+      if (ID_PATTERN.test(tidy)) return saveBiUid({ biUid: tidy });
+
+      matches.style.display = 'none';
+      matches.textContent = '';
+      btn.disabled = true;
+      btn.textContent = 'Searching…';
+      setHint('biUidHint', '');
+      try {
+        const res = await fetch('/api/identity/find', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: typed, wide: false })
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) return setHint('biUidHint', j.error || 'Search failed. Try again.', 'error');
+        const candidates = Array.isArray(j.candidates) ? j.candidates : [];
+        if (!candidates.length) {
+          return setHint('biUidHint', 'No ReforgedZ player matches that. Check the spelling, or paste your in-game ID.', 'error');
+        }
+        for (const c of candidates) {
+          const pick = make('button', 'finder-item');
+          pick.type = 'button';
+          const meta = [lastPlayedText(c.lastSeen), c.previousName ? `was ${c.previousName}` : ''].filter(Boolean).join(' · ');
+          pick.append(make('span', 'finder-name', c.name || 'Unnamed player'), make('span', 'finder-meta', meta));
+          pick.addEventListener('click', () => saveBiUid({ ref: c.ref }));
+          matches.appendChild(pick);
+        }
+        matches.style.display = 'flex';
+        setHint('biUidHint', candidates.length === 1 ? 'Is this you? Select it to save it.' : 'Select yourself to save it.');
+      } catch (e) {
+        setHint('biUidHint', 'Search failed: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = ID_PATTERN.test(tidyId(input.value)) ? 'Save this ID' : 'Find me';
+      }
+    }
+
+    // body is { ref } for a Find me pick or { biUid } for a pasted ID.
+    let biUidSaving = false;
+    async function saveBiUid(body) {
+      if (biUidSaving) return;
+      biUidSaving = true;
+      const buttons = Array.from(document.querySelectorAll('#biUidCard button'));
+      buttons.forEach(b => { b.disabled = true; });
+      setHint('biUidHint', 'Saving…');
       try {
         const res = await fetch('/api/shop/set-bi-uid', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ biUid: val })
+          body: JSON.stringify(body)
         });
         const j = await res.json().catch(() => ({}));
-        if (!res.ok) return setHint('biUidHint', j.error || 'Could not save.', 'error');
-        // Redraw so the saved ID shows, then say what happened under it.
-        account.profile.biUid = j.bi_uid;
-        renderLinks();
+        if (!res.ok) {
+          if (j.code === 'pick_expired') {
+            const matches = document.getElementById('biUidMatches');
+            if (matches) { matches.style.display = 'none'; matches.textContent = ''; }
+            return setHint('biUidHint', 'That took a while, so search again and pick yourself.', 'error');
+          }
+          return setHint('biUidHint', j.error || 'Could not save.', 'error');
+        }
+        // Redraw with the saved ID and its name, then say what happened under it.
+        const p = account.profile;
+        p.biUid = j.bi_uid;
+        p.biUidName = j.playerName || null;
+        p.biUidProof = j.proof || null;
+        p.biUidSetAt = Math.floor(Date.now() / 1000);
+        renderBiUidCard();
         if (j.playerName) {
           setHint('biUidHint', `Saved. This ID belongs to ${j.playerName}. Priority queue and perks follow it from the next server restart.`, 'ok');
         } else if (j.verified) {
@@ -567,6 +742,41 @@
         }
       } catch (e) {
         setHint('biUidHint', 'Could not save: ' + e.message, 'error');
+      } finally {
+        biUidSaving = false;
+        // A refusal leaves the same card up; give its buttons back. After a save
+        // these belong to the card that was replaced, so this changes nothing.
+        buttons.forEach(b => { b.disabled = false; });
+      }
+    }
+
+    // The name behind an ID saved before names were kept, by staff, or while
+    // BattleMetrics was down. It changes nothing but the name shown.
+    async function lookUpIdName(btn) {
+      btn.disabled = true;
+      btn.textContent = 'Looking up…';
+      try {
+        const res = await fetch('/api/shop/account/bi-uid/lookup-name', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.name) {
+          btn.disabled = false;
+          btn.textContent = 'Look up name';
+          return setHint('biUidHint', j.error || 'Could not look up the name. Try again.', 'error');
+        }
+        account.profile.biUidName = j.name;
+        renderBiUidCard();
+        // Xbox and PlayStation accounts without email sign-in have no box on this
+        // card to change it with (buildBiUidCard), so they are told the way there.
+        const fix = account.profile.canEditBiUid ? 'change it here' : 'set up email sign-in above, then change it';
+        setHint('biUidHint', `This ID belongs to ${j.name}. If that is not you, ${fix}.`, 'ok');
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Look up name';
+        setHint('biUidHint', 'Could not look up the name: ' + e.message, 'error');
       }
     }
 

@@ -669,4 +669,77 @@ db.exec(`
   );
 `);
 
+// ---- In-game ID provenance (2026-09-15) -----------------------------------
+// users.bi_uid is where queue priority and every perk is delivered, and the
+// player types it, so it is not proven. Nothing recorded HOW an ID got there, so
+// a staff fix, a Find me pick and a paste all looked the same, and nothing could
+// ever rely on one being proven. bi_uid_proof says how (staff | find_me |
+// pasted_verified | pasted_unverified; inGameId.js says what each means), bi_uid_name the player name seen with it, bi_uid_set_at
+// when. All three change together with bi_uid.
+if (!userHasColumn('bi_uid_name')) {
+  db.exec("ALTER TABLE users ADD COLUMN bi_uid_name TEXT");
+}
+if (!userHasColumn('bi_uid_proof')) {
+  db.exec("ALTER TABLE users ADD COLUMN bi_uid_proof TEXT");
+}
+if (!userHasColumn('bi_uid_set_at')) {
+  db.exec("ALTER TABLE users ADD COLUMN bi_uid_set_at INTEGER");
+}
+
+// Staff changes to accounts, with the value before and after and the reason given.
+// requireAdmin's [admin-audit] line names only the URL, carries no before/after,
+// and lives in a container log that rotates within days, so an in-game ID changed
+// by staff could not be traced once a dispute surfaced. actor is 'steam:<id>' or
+// 'apikey'; target is the account's steam_id.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS admin_audit (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           INTEGER NOT NULL,
+    actor        TEXT NOT NULL,
+    action       TEXT NOT NULL,
+    target       TEXT,
+    before_json  TEXT,
+    after_json   TEXT,
+    reason       TEXT,
+    ip           TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit(target, ts);
+`);
+
+// A renewal PayPal took on a subscription whose order rows were all revoked or
+// refunded. The webhook used to find no live order and return 200 with nothing
+// written, so the money arrived and nobody knew. Keyed on the sale id so PayPal's
+// retries of the same event record and alert once.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS revoked_renewals (
+    sale_id          TEXT PRIMARY KEY,
+    subscription_id  TEXT NOT NULL,
+    amount_cents     INTEGER,
+    received_at      INTEGER NOT NULL
+  );
+`);
+
+// Daily counts of each step of the buy flow, counts only, no player data. The
+// shop could not say where buyers give up, so every checkout change was a guess.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS funnel_counts (
+    day   TEXT NOT NULL,
+    step  TEXT NOT NULL,
+    n     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, step)
+  );
+`);
+
+// One expiry reminder per order per paid-up period. Keyed on effective_until as
+// well as the order, so a period extended by staff or a grace window gets its own
+// reminder while a restart or a second sweep never sends the same one twice.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reminder_sent (
+    order_id         INTEGER NOT NULL,
+    effective_until  INTEGER NOT NULL,
+    sent_at          INTEGER NOT NULL,
+    PRIMARY KEY (order_id, effective_until)
+  );
+`);
+
 module.exports = db;

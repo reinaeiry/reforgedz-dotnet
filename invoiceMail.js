@@ -886,4 +886,88 @@ async function sendAccountLink({ to, purpose, accountName, url, expiresMinutes }
   }
 }
 
-module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed, sendAccountLink };
+// Two to three days before a player's priority queue ends without renewing: a
+// subscription they cancelled but paid up, or a one-time purchase
+// (tools/reminders.js). Nothing told those players before, and their queue
+// priority simply stopped. The only link is the shop's own "Start again" link,
+// never a sign-in or password link: this goes to the PayPal payer address, which
+// is not necessarily the account's email. endsAt is unix seconds.
+function priorityQueueEndingEmail({ displayName, productTitle, serverLabel, endsAt, restartUrl }) {
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const name = displayName || 'there';
+  const item = productTitle || 'priority queue';
+  const link = restartUrl || `${base}/shop`;
+  const endsMs = Number(endsAt) * 1000;
+  const endsStr = Number.isFinite(endsMs) && endsMs > 0
+    ? new Date(endsMs).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC'
+    : 'in a few days';
+  const subject = 'Your ReforgedZ priority queue ends soon';
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <tr><td style="background:#0d0f12;padding:24px;color:#ffffff;font-size:20px;font-weight:700;letter-spacing:.5px">ReforgedZ</td></tr>
+        <tr><td style="padding:28px 24px;font-size:15px;color:#1a1a1a;line-height:1.55">
+          <p style="margin:0 0 12px">Hi ${esc(name)},</p>
+          <p style="margin:0 0 12px">Your <strong>${esc(item)}</strong>${serverLabel ? ` on <strong>${esc(serverLabel)}</strong>` : ''} ends on <strong>${esc(endsStr)}</strong>. It does not renew by itself, so nothing more will be charged.</p>
+          <p style="margin:0 0 12px">Want to keep it? Start it again from the shop. A new purchase starts from the day you buy it.</p>
+          <p style="margin:24px 0">
+            <a href="${esc(link)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">Keep my priority queue</a>
+          </p>
+          <p style="margin:0 0 12px;color:#4b5563;font-size:13px">If you meant to let it end, there is nothing to do. Any questions, reply to this email or open a ticket in our Discord.</p>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:16px 24px;border-top:1px solid #ecedf0;font-size:12px;color:#6b7280">
+          Questions? <a href="mailto:contact@reforgedz.net" style="color:#2563eb;text-decoration:none">contact@reforgedz.net</a> &middot; <a href="${esc(base)}/shop" style="color:#2563eb;text-decoration:none">reforgedz.net/shop</a>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    `Hi ${name},`,
+    '',
+    `Your ${item}${serverLabel ? ` on ${serverLabel}` : ''} ends on ${endsStr}.`,
+    'It does not renew by itself, so nothing more will be charged.',
+    '',
+    'Want to keep it? Start it again from the shop. A new purchase starts',
+    'from the day you buy it:',
+    link,
+    '',
+    'If you meant to let it end, there is nothing to do. Any questions, reply',
+    'to this email or open a ticket in our Discord.',
+    '',
+    'Questions? contact@reforgedz.net',
+    `${base}/shop`
+  ].join('\n');
+
+  return { subject, html, text };
+}
+
+// Returns { ok, skipped?, error? }. Never throws.
+async function sendPriorityQueueEnding({ to, displayName, productTitle, serverLabel, endsAt, restartUrl }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to) return { ok: false, skipped: 'no_recipient' };
+  try {
+    const { subject, html, text } = priorityQueueEndingEmail({ displayName, productTitle, serverLabel, endsAt, restartUrl });
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] priority queue ending send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation, sendPaymentFailed, sendAccountLink, sendPriorityQueueEnding, priorityQueueEndingEmail };
