@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Power and Generators · ReforgedZ Wiki</title>
+<meta name="description" content="A generator in your base runs fridges, cookers, lights, a sawmill and the battery charger. How far it reaches, how much fuel it burns and what happens when it runs dry.">
+<link rel="canonical" href="https://reforgedz.net/wiki/systems/power/">
+<meta name="theme-color" content="#cc1f1f">
+<link rel="icon" href="/wiki/img/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/wiki/assets/wiki.css">
+</head>
+<body class="wk-is-page">
+<a class="wk-skip" href="#wk-main">Skip to content</a>
+<header class="wk-top">
+  <div class="wk-top-inner">
+    <a class="wk-brand" href="https://reforgedz.net/">Reforged<span class="z">Z</span></a>
+    <a class="wk-brand-sub" href="/wiki/">Wiki</a>
+    <button class="wk-search-open" type="button" data-search-open aria-label="Search the wiki">
+      <span>Search the wiki</span><kbd>/</kbd>
+    </button>
+    <nav class="wk-site-links" aria-label="reforgedz.net">
+      <a href="https://reforgedz.net/">Home</a><a href="https://reforgedz.net/map">Map</a><a href="https://reforgedz.net/shop">Shop</a><a href="https://discord.gg/reforgedz">Discord</a>
+    </nav>
+    <button class="wk-menu" type="button" data-menu aria-controls="wk-side" aria-expanded="false" aria-label="Wiki sections">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+  
+</header>
+<div class="wk-shell">
+<nav class="wk-side" id="wk-side" aria-label="Wiki sections">
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/start/">Start Here</a>
+      <ul><li><a href="/wiki/start/your-first-hour/">Your First Hour</a></li><li><a href="/wiki/start/how-you-die/">How You Die in Your First Hour</a></li><li><a href="/wiki/start/which-server/">Which Server Should I Join?</a></li><li><a href="/wiki/start/controls/">Controls</a></li><li><a href="/wiki/start/coming-from-other-games/">Coming from Other Games</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/systems/">Systems</a>
+      <ul><li><a href="/wiki/systems/fishing/">Fishing</a></li><li><a href="/wiki/systems/farming/">Farming</a></li><li><a href="/wiki/systems/fires-and-cooking/">Fires and Cooking</a></li><li><a href="/wiki/systems/crafting/">Crafting</a></li><li><a href="/wiki/systems/mining/">Mining</a></li><li><a href="/wiki/systems/salvage/">Salvage</a></li><li><a href="/wiki/systems/claiming-your-first-base/">Claiming Your First Base</a></li><li><a href="/wiki/systems/power/" aria-current="page">Power and Generators</a></li><li><a href="/wiki/systems/stashes/">Stashes</a></li><li><a href="/wiki/systems/codelocks/">Codelocks</a></li><li><a href="/wiki/systems/raiding-and-defending/">Raiding and Defending</a></li><li><a href="/wiki/systems/drugs/">Drugs</a></li><li><a href="/wiki/systems/traders-and-caps/">Traders and Caps</a></li><li><a href="/wiki/systems/heroes-and-bandits/">Heroes and Bandits</a></li><li><a href="/wiki/systems/your-first-vehicle/">Your First Vehicle</a></li><li><a href="/wiki/systems/contracts/">Contracts</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/locations/">Locations</a>
+      <ul><li><a href="/wiki/locations/where-to-go/">Where to Go for What</a></li><li><a href="/wiki/locations/chernarus/">Chernarus</a></li><li><a href="/wiki/locations/faircroft-islands/">Faircroft Islands</a></li><li><a href="/wiki/locations/the-safezone/">The Safezone</a></li><li><a href="/wiki/locations/the-black-market/">The Black Market</a></li><li><a href="/wiki/locations/rify/">Rify</a></li><li><a href="/wiki/locations/the-oil-rigs/">The Oil Rigs</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/mechanics/">Gameplay Mechanics</a>
+      <ul><li><a href="/wiki/mechanics/staying-alive/">Staying Alive</a></li><li><a href="/wiki/mechanics/food-and-water/">Food and Water</a></li><li><a href="/wiki/mechanics/cooking-and-spoilage/">Cooking and Spoilage</a></li><li><a href="/wiki/mechanics/body-temperature/">Body Temperature</a></li><li><a href="/wiki/mechanics/sickness-and-medicine/">Sickness and Medicine</a></li><li><a href="/wiki/mechanics/wounds-and-bleeding/">Wounds and Bleeding</a></li><li><a href="/wiki/mechanics/how-looting-works/">How Looting Works</a></li><li><a href="/wiki/mechanics/keys-and-locked-containers/">Keys and Locked Containers</a></li><li><a href="/wiki/mechanics/zombies/">Zombies</a></li><li><a href="/wiki/mechanics/animals/">Animals</a></li><li><a href="/wiki/mechanics/death-and-combat-logging/">Death and Combat Logging</a></li><li><a href="/wiki/mechanics/server-restarts/">Server Restarts</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/lookup/">Look It Up</a>
+      <ul><li><a href="/wiki/lookup/fish/">Fish</a></li><li><a href="/wiki/lookup/recipes/">Recipes</a></li><li><a href="/wiki/lookup/keybinds/">Keybinds</a></li><li><a href="/wiki/lookup/map-icons/">Map Icons</a></li></ul>
+    </div>
+    <div class="wk-side-group">
+      <a class="wk-side-title" href="/wiki/about/">About</a>
+      <ul><li><a href="/wiki/about/about-this-wiki/">About This Wiki</a></li></ul>
+    </div>
+  </nav>
+<main class="wk-main" id="wk-main">
+<article class="wk-article">
+    <p class="wk-crumb"><a href="/wiki/">Wiki</a> <span aria-hidden="true">›</span> <a href="/wiki/systems/">Systems</a></p>
+    <h1>Power and Generators</h1>
+    <p class="wk-lede">A generator in your base runs fridges, cookers, lights, a sawmill and the battery charger. How far it reaches, how much fuel it burns and what happens when it runs dry.</p>
+    <details class="wk-toc-mobile">
+      <summary>On this page</summary>
+      <ul><li><a href="#setting-one-up">Setting one up</a></li><li><a href="#what-it-powers">What it powers</a></li><li><a href="#when-it-runs-dry">When it runs dry</a></li><li><a href="#floodlights-run-on-their-own">Floodlights run on their own</a></li><li><a href="#charging-car-batteries">Charging car batteries</a></li><li><a href="#upkeep">Upkeep</a></li></ul>
+    </details>
+    <div class="wk-body">
+<p>A generator powers the devices in your base. Put fuel in it, start it, and everything of yours within 50 m can run. The more you switch on, the faster it burns fuel.</p>
+<div class="tablewrap"><table>
+<tbody>
+<tr>
+<td><strong>You need</strong></td>
+<td>Generator Plans, your own base, and fuel in a jerry can</td>
+</tr>
+<tr>
+<td><strong>Reach</strong></td>
+<td>50 m, and only your own base’s devices</td>
+</tr>
+<tr>
+<td><strong>Tank</strong></td>
+<td>40 L, empty when you place it</td>
+</tr>
+<tr>
+<td><strong>Fuel burn</strong></td>
+<td>0.5 L an hour while running, plus every device that’s switched on</td>
+</tr>
+<tr>
+<td><strong>Limit</strong></td>
+<td>1 generator per base</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="setting-one-up">Setting one up</h2>
+<ol>
+<li><strong>Buy Generator Plans</strong> from a General Trader, at the Safezone or the Black Market.</li>
+<li><strong>Put the plans in your hands and place the generator</strong> on the ground inside your base. It can’t go down outside a base.</li>
+<li><strong>Fill the tank.</strong> A new generator is empty. Hold a jerry can and pour it in at the generator’s fuel cap.</li>
+<li><strong>Start it</strong> with <em>Start Generator</em>. Only your base’s members get the switch. With nothing in the tank you’ll see <em>Out of fuel</em>.</li>
+</ol>
+<h3 id="checking-the-fuel">Checking the fuel</h3>
+<p>Look at the generator and its prompt shows the tank and whether it’s on, for example <em>Generator - Fuel 45% (Running)</em>. Use it for the details: litres left, the current draw in litres an hour, and the hours of running time left at that draw. Anyone can check.</p>
+<h2 id="what-it-powers">What it powers</h2>
+<p>A running generator powers every device <strong>within 50 m</strong> that belongs to <strong>the same base</strong>. A neighbor’s generator never runs your fridge, even when your fridge is inside its reach. A device with no power refuses with <em>No generator power</em>.</p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>Device</th>
+<th>Comes from</th>
+<th>Fuel while on</th>
+<th>When it’s on</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Fridge</strong></td>
+<td>Fridge Plans</td>
+<td>0.5 L/h</td>
+<td>Always, while it has power</td>
+</tr>
+<tr>
+<td><strong>Small Fridge</strong></td>
+<td>Small Fridge Plans</td>
+<td>0.3 L/h</td>
+<td>Always, while it has power</td>
+</tr>
+<tr>
+<td><strong>Sawmill</strong></td>
+<td>Sawmill</td>
+<td>1 L/h</td>
+<td>Always, while it has power</td>
+</tr>
+<tr>
+<td><strong>Cooker</strong> or <strong>Tiled Cooker</strong></td>
+<td>Cooker Plans, Tiled Cooker Plans</td>
+<td>0.8 L/h</td>
+<td><em>Turn Cooker On</em></td>
+</tr>
+<tr>
+<td><strong>Ceiling Light</strong></td>
+<td>Ceiling Light Plans</td>
+<td>0.15 L/h</td>
+<td>Its light switch</td>
+</tr>
+<tr>
+<td><strong>Lamp</strong></td>
+<td>Table Lamp Plans</td>
+<td>0.1 L/h</td>
+<td>Its light switch</td>
+</tr>
+<tr>
+<td><strong>Lamp</strong></td>
+<td>Lamp, sold boxed</td>
+<td>0.15 L/h</td>
+<td>Its light switch</td>
+</tr>
+<tr>
+<td><strong>Free Standing Lamp</strong></td>
+<td>Free Standing Lamp, sold boxed</td>
+<td>0.2 L/h</td>
+<td>Its light switch</td>
+</tr>
+<tr>
+<td><strong>Battery Charger</strong></td>
+<td>Battery Charger</td>
+<td>0.3 L/h</td>
+<td><em>Recharge battery charger</em></td>
+</tr>
+</tbody>
+</table></div>
+<p>General Traders sell every plan and both boxed lamps. Each one is placed from your hands, inside your base.</p>
+<ul>
+<li><strong>A device that’s switched off burns nothing.</strong> Fridges and the sawmill have no off switch, so they burn fuel the whole time the generator runs.</li>
+<li><strong>Lights need power to switch on.</strong> When the power goes they switch off, and they stay off until you switch them on again.</li>
+<li><strong>Cookers switch themselves off</strong> when the power goes. See <a href="/wiki/mechanics/cooking-and-spoilage/">Cooking and Spoilage</a>.</li>
+<li><strong>The sawmill won’t process logs</strong> without power. See <a href="/wiki/systems/crafting/">Crafting</a>.</li>
+</ul>
+<h3 id="how-long-a-tank-lasts">How long a tank lasts</h3>
+<p>Divide the litres in the tank by the draw. With a full 40 L tank:</p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>Running</th>
+<th>Draw</th>
+<th>A full tank lasts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The generator on its own</td>
+<td>0.5 L/h</td>
+<td>80 hours</td>
+</tr>
+<tr>
+<td>Two Fridges</td>
+<td>1.5 L/h</td>
+<td>About 27 hours</td>
+</tr>
+<tr>
+<td>A Sawmill and a Fridge</td>
+<td>2.0 L/h</td>
+<td>20 hours</td>
+</tr>
+<tr>
+<td>Two Fridges, a Cooker switched on and four Ceiling Lights</td>
+<td>2.9 L/h</td>
+<td>About 14 hours</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="when-it-runs-dry">When it runs dry</h2>
+<p>The generator stops by itself when the tank is empty, and everything it powered loses power at once:</p>
+<ul>
+<li><strong>Lights</strong> switch off.</li>
+<li><strong>Cookers</strong> switch off.</li>
+<li><strong>Fridges</strong> stay cold for 30 minutes, or 20 for a Small Fridge. After that, food inside rots at its normal rate. See <a href="/wiki/mechanics/cooking-and-spoilage/">Cooking and Spoilage</a>.</li>
+<li><strong>The sawmill</strong> stops.</li>
+</ul>
+<p>Refill the tank, use <em>Start Generator</em>, then switch your lights and cookers back on.</p>
+<h2 id="floodlights-run-on-their-own">Floodlights run on their own</h2>
+<p>A <strong>Floodlight</strong>, placed from Floodlight Plans, carries its own motor and its own 20 L tank. Your base generator can’t run it.</p>
+<ul>
+<li><strong>Fill it</strong> with a jerry can at its fuel cap. A new one is empty.</li>
+<li><strong>Its switch starts the motor.</strong> With an empty tank it won’t switch on: <em>Out of fuel</em>.</li>
+<li><strong>It burns 0.6 L an hour</strong> while it’s on, so a full tank lasts about 33 hours.</li>
+</ul>
+<h2 id="charging-car-batteries">Charging car batteries</h2>
+<p>A <strong>Battery Charger</strong> holds enough charge to fill three flat car batteries, and refills from a generator. Traders sell them: see <a href="/wiki/systems/your-first-vehicle/">Your First Vehicle</a>.</p>
+<ol>
+<li><strong>Put the charger and the battery on the ground</strong>, no more than 1.5 m apart. Neither can be in an inventory or a vehicle.</li>
+<li><strong>Use <em>Start charging battery</em> on the battery.</strong> It gains 20% a minute, so a flat battery is full in 5 minutes. Charging stops when the battery is full or the charger is empty.</li>
+<li><strong>Refill the charger</strong> on the ground within 50 m of a running generator, with <em>Recharge battery charger</em>. It gains 10% a minute, so it goes from empty to full in 10 minutes.</li>
+</ol>
+<h2 id="upkeep">Upkeep</h2>
+<p>The generator, fridges, cookers, lights and floodlights all add to your base’s daily upkeep. The <strong>UPKEEP</strong> tab lists them. See <a href="/wiki/systems/claiming-your-first-base/">Claiming Your First Base</a>.</p>
+<p><strong>Next:</strong> <a href="/wiki/systems/claiming-your-first-base/">Claiming Your First Base</a> · <a href="/wiki/mechanics/cooking-and-spoilage/">Cooking and Spoilage</a> · <a href="/wiki/systems/crafting/">Crafting</a> · <a href="/wiki/systems/your-first-vehicle/">Your First Vehicle</a></p>
+
+    </div>
+    <footer class="wk-page-foot">
+      <p class="wk-stamp">Numbers from ReforgedZ 1.0.227 · Text not yet checked · <a href="https://discord.gg/reforgedz">Something wrong? Tell us</a></p>
+      <div class="wk-prevnext">
+        <a class="wk-prev" href="/wiki/systems/claiming-your-first-base/"><span>Previous</span>Claiming Your First Base</a>
+        <a class="wk-next" href="/wiki/systems/stashes/"><span>Next</span>Stashes</a>
+      </div>
+    </footer>
+  </article>
+</main>
+<nav class="wk-toc" aria-label="On this page">
+    <p class="wk-toc-title">On this page</p>
+    <ul><li><a href="#setting-one-up">Setting one up</a></li><li><a href="#what-it-powers">What it powers</a></li><li><a href="#when-it-runs-dry">When it runs dry</a></li><li><a href="#floodlights-run-on-their-own">Floodlights run on their own</a></li><li><a href="#charging-car-batteries">Charging car batteries</a></li><li><a href="#upkeep">Upkeep</a></li></ul>
+  </nav>
+</div>
+<div class="wk-search" id="wk-search" hidden>
+  <div class="wk-search-panel" role="dialog" aria-modal="true" aria-label="Search the wiki">
+    <div class="wk-search-field">
+      <input id="wk-search-input" type="search" enterkeyhint="search" autocomplete="off" spellcheck="false" placeholder="Search fish, codelocks, planks…" aria-controls="wk-search-results">
+      <button type="button" data-search-close aria-label="Close search">Close</button>
+    </div>
+    <div id="wk-search-results" class="wk-search-results" role="listbox" aria-label="Results"></div>
+    <p class="wk-search-hint">Typos are fine. Press Enter to open the first result.</p>
+  </div>
+</div>
+<script src="/wiki/assets/vendor/minisearch.js" defer></script>
+<script src="/wiki/assets/wiki.js" defer></script>
+</body>
+</html>
