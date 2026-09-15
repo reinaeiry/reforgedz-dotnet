@@ -200,22 +200,22 @@ function moneyText(m) {
   return lines.join('\n');
 }
 
-// ---- Admin lists and perk entries per server --------------------------------------------
-// Two different numbers, kept apart on the card because one was once read as the other:
-// - the admin list (game.admins): priority queue holders by pqEntitlement.js's rule plus the
-//   game masters the last sync counted in that server's file. This is the list that fills up:
-//   more than ADMIN_CEILING entries has stopped servers starting.
-// - players with a shop perk entry in purchases.json: priority queue, Backer and Supporter.
-//   Backer and Supporter holders take no admin list entry.
-// Both count distinct in-game IDs, not order rows: one player can hold several live orders.
-function entitlementsByServer(buckets, pq = {}, gameMasters = {}) {
+// ---- The admin list per server ----------------------------------------------------------
+// The admin list (game.admins) is the only thing counted per server: priority queue holders
+// by pqEntitlement.js's rule plus the game masters the last sync counted in that server's
+// file. This is the list that fills up: more than ADMIN_CEILING entries has stopped servers
+// starting. Counted as distinct in-game IDs, not order rows: one player can hold several
+// live orders. Backer and Supporter give no in-game benefit, so they are never on a server
+// line (see below).
+//   pq           { serverId: Set of in-game IDs }, sync.buildPriorityQueueGuidsPerServer
+//   gameMasters  { serverId: count } from the last sync
+function adminListsByServer(pq = {}, gameMasters = {}) {
   const distinct = (list) => new Set([...(list || [])].map(g => (g ? String(g).toLowerCase() : null)).filter(Boolean)).size;
-  return Object.keys(buckets || {}).map(serverId => {
-    const priorityQueue = distinct(pq && pq[serverId]);
+  return Object.keys(pq || {}).map(serverId => {
+    const priorityQueue = distinct(pq[serverId]);
     const gm = gameMasters && Number.isFinite(gameMasters[serverId]) ? gameMasters[serverId] : null;
     return {
       serverId,
-      ids: distinct((buckets[serverId] || []).map(e => e && e.guid)),
       priorityQueue,
       gameMasters: gm,
       adminEntries: gm == null ? null : priorityQueue + gm
@@ -223,13 +223,54 @@ function entitlementsByServer(buckets, pq = {}, gameMasters = {}) {
   });
 }
 
-function entitlementsText(list, ceiling = adminCeiling()) {
+function adminListsText(list, ceiling = adminCeiling()) {
   return list.map(s => {
     const admins = s.adminEntries == null
       ? `${s.priorityQueue} priority queue, game masters not counted yet`
-      : `${s.adminEntries} of ${ceiling} admin list entries (${s.priorityQueue} priority queue, ${s.gameMasters} game masters)`;
-    return `${serverLabel(s.serverId)}: ${admins}; ${s.ids} ${s.ids === 1 ? 'player' : 'players'} with a shop perk`;
+      : `${s.adminEntries} of ${ceiling} (${s.priorityQueue} priority queue, ${s.gameMasters} game masters)`;
+    return `${serverLabel(s.serverId)}: ${admins}`;
   }).join('\n') || 'No servers';
+}
+
+// ---- Backer and Supporter, for all servers together ------------------------------------------
+// A product that does not grant priority queue and carries a Discord role (Backer, Supporter)
+// gives that role and nothing in game, and is never written to a game server, so its holders
+// are counted once for the whole shop, never per server. Holders follow the Discord role
+// reconcile's rule (pqEntitlement.perksLiveSql), live mode only, one per account: two orders
+// for one product count once, and the player total counts someone holding both once. A
+// product with no Discord role (Custom Flag) gives nothing lasting and is not listed.
+const DISCORD_ROLE_ONLY_FIELD = 'Backer and Supporter (Discord roles only, no in-game benefit)';
+
+function discordRoleOnlyHolders(db, now = nowUnix()) {
+  const { perksLiveSql } = require('../pqEntitlement');
+  const live = `p.grants_priority_queue = 0
+      AND p.discord_role_id IS NOT NULL
+      AND o.test_mode = 0
+      AND ${perksLiveSql('o', 'p')}`;
+  const products = db.prepare(`
+    SELECT p.id AS productId, p.title AS title, COUNT(DISTINCT o.steam_id) AS holders
+    FROM orders o JOIN products p ON p.id = o.product_id
+    WHERE ${live}
+    GROUP BY p.id
+    ORDER BY holders DESC, p.title ASC, p.id ASC
+  `).all({ now });
+  const players = db.prepare(`
+    SELECT COUNT(DISTINCT o.steam_id) AS n
+    FROM orders o JOIN products p ON p.id = o.product_id
+    WHERE ${live}
+  `).get({ now }).n;
+  return { products, players };
+}
+
+// "ReforgedZ Supporter: 3 · ReforgedZ Backer: 2 · 4 players"
+function discordRoleOnlyText(holders) {
+  const products = (holders && holders.products) || [];
+  if (!products.length) return 'No live holders';
+  const players = Number(holders.players) || 0;
+  return [
+    ...products.map(p => `${p.title}: ${p.holders}`),
+    `${players} ${players === 1 ? 'player' : 'players'}`
+  ].join(' · ');
 }
 
 // The shop's one admin ceiling (pqEntitlement.js), so the card never disagrees with the stock math.
@@ -275,13 +316,14 @@ function line(report, id) {
 // A card spec for discordCard.buildCard. Healthy is grey and silent, not green:
 // green in the channel means money arrived.
 //   extra.money         moneyLast24h's result
-//   extra.entitlements  entitlementsByServer's result
-//   extra.reconcile     { off, last } from tools/reconcile.js
-//   extra.manual        a run started by hand, marked "Manual run"
-//   extra.errors        [{ id, detail }] parts of the card that could not be read
-//   extra.parked        parkedWarningsFrom's result (default: read from the environment)
+//   extra.adminLists       adminListsByServer's result
+//   extra.discordRoleOnly  discordRoleOnlyHolders's result
+//   extra.reconcile        { off, last } from tools/reconcile.js
+//   extra.manual           a run started by hand, marked "Manual run"
+//   extra.errors           [{ id, detail }] parts of the card that could not be read
+//   extra.parked           parkedWarningsFrom's result (default: read from the environment)
 function buildHealthCard(report, heal, extra = {}) {
-  const { money: moneyLines = null, entitlements = null, reconcile = null, manual = false, errors = [], now = nowUnix() } = extra || {};
+  const { money: moneyLines = null, adminLists = null, discordRoleOnly = null, reconcile = null, manual = false, errors = [], now = nowUnix() } = extra || {};
   const parkedConfig = (extra && extra.parked) || parkedWarningsFrom();
   const recon = reconcileSummary(reconcile, now);
   const checks = [
@@ -322,7 +364,8 @@ function buildHealthCard(report, heal, extra = {}) {
     ...problems.map(c => ({ name: `FAIL ${c.id}`, value: c.detail })),
     ...warnings.map(c => ({ name: `warn ${c.id}`, value: c.detail }))
   ];
-  if (entitlements) fields.push({ name: 'Admin list per server (as of the last sync)', value: entitlementsText(entitlements) });
+  if (adminLists) fields.push({ name: 'Admin list per server (as of the last sync)', value: adminListsText(adminLists) });
+  if (discordRoleOnly) fields.push({ name: DISCORD_ROLE_ONLY_FIELD, value: discordRoleOnlyText(discordRoleOnly) });
   if (moneyLines) fields.push({ name: 'Money, last 24 hours', value: moneyText(moneyLines) });
   if (parked.length) fields.push({ name: 'Known, parked', value: parked.map(c => `${c.id}: ${c.note}`).join('\n') });
   if (heal && heal.details && heal.details.length) {
@@ -354,15 +397,21 @@ async function runDailyHealth({ post = true, dryRun = false, manual = true } = {
   } catch (e) {
     errors.push({ id: 'health.money', detail: `the money lines could not be read: ${e.message}` });
   }
-  let entitlements = null;
+  let adminLists = null;
   try {
     const sync = require('../sync');
     const gameMasters = Object.fromEntries(require('../db')
       .prepare('SELECT server_id, non_shop_admin_count FROM config_admin_sync_state WHERE non_shop_admin_count IS NOT NULL')
       .all().map(r => [r.server_id, r.non_shop_admin_count]));
-    entitlements = entitlementsByServer(sync.buildPerServerPurchaseBuckets(), sync.buildPriorityQueueGuidsPerServer(), gameMasters);
+    adminLists = adminListsByServer(sync.buildPriorityQueueGuidsPerServer(), gameMasters);
   } catch (e) {
     errors.push({ id: 'health.entitlements', detail: `the admin lists could not be counted: ${e.message}` });
+  }
+  let discordRoleOnly = null;
+  try {
+    discordRoleOnly = discordRoleOnlyHolders(require('../db'));
+  } catch (e) {
+    errors.push({ id: 'health.discordroles', detail: `the Backer and Supporter holders could not be counted: ${e.message}` });
   }
   let reconcile = null;
   try {
@@ -371,7 +420,7 @@ async function runDailyHealth({ post = true, dryRun = false, manual = true } = {
   } catch (e) {
     errors.push({ id: 'paypal.reconcile', detail: `the PayPal check's status could not be read: ${e.message}` });
   }
-  const card = buildHealthCard(report, heal, { money: moneyLines, entitlements, reconcile, manual, errors });
+  const card = buildHealthCard(report, heal, { money: moneyLines, adminLists, discordRoleOnly, reconcile, manual, errors });
   let posted = { ok: false, skipped: 'not requested' };
   if (post) posted = await sendCard(card);
   console.log(`[health] ${card.what} (${report.summary.ok}/${report.summary.warn}/${report.summary.fail})${heal && heal.granted ? `, ${heal.granted} roles healed` : ''}${posted.ok ? ', posted' : ', not posted: ' + JSON.stringify(posted)}`);
@@ -397,7 +446,8 @@ function scheduleDailyHealth() {
 
 module.exports = {
   runDailyHealth, buildHealthCard, scheduleDailyHealth,
-  parkedWarningsFrom, sortChecks, moneyLast24h, moneyText, entitlementsByServer, reconcileSummary, adminCeiling
+  parkedWarningsFrom, sortChecks, moneyLast24h, moneyText, adminListsByServer, discordRoleOnlyHolders, discordRoleOnlyText,
+  DISCORD_ROLE_ONLY_FIELD, reconcileSummary, adminCeiling
 };
 
 if (require.main === module) {

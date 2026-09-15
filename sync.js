@@ -84,33 +84,21 @@ const shortGuid = (g) => `${String(g || '').slice(0, 8)}...`;
 
 // Entries written to each server's purchases.json.
 //
-// Priority queue entries come from the one rule in pqEntitlement.js, the same set
-// the game.admins write below uses. The mod reads these entries to tell a priority
-// queue buyer from a real admin, so an ID in game.admins without its entry here
-// would count as a full admin: the two must never disagree.
+// The file exists for one reason: priority queue shares game.admins with the real
+// admins, and the mod reads this file to tell a priority-queue-only player from a
+// real admin (and takes admin powers from the first). So it carries exactly the
+// priority queue holders from the one rule in pqEntitlement.js, the same set the
+// game.admins write below uses. An ID in game.admins without its entry here would
+// count as a full admin: the two must never disagree.
 //
-// Every other product (Backer, Supporter) keeps its own rule: an entry while its
-// order is completed and unexpired, and a lifetime purchase (effective_until NULL)
-// stays. Expired entries are left out, or a lapsed perk would last forever.
+// Nothing else goes in. Backer and Supporter are Discord roles only and give no
+// in-game benefit (the owner's rule), and neither does any other product that does
+// not grant priority queue (Custom Flag, or one added later), so their orders are
+// never written to a game server. Their roles come from the Discord role reconcile
+// (pqEntitlement.perksLiveSql), not from this file.
 function buildPerServerPurchaseBuckets(now = nowUnix()) {
-  const otherRows = db.prepare(`
-    SELECT
-      COALESCE(u.gamertag, u.persona) AS name,
-      u.bi_uid AS guid,
-      p.title AS item,
-      p.server_specific AS server_specific,
-      o.server_id AS server_id
-    FROM orders o
-    JOIN users u ON o.steam_id = u.steam_id
-    JOIN products p ON o.product_id = p.id
-    WHERE o.status = 'completed' AND u.bi_uid IS NOT NULL AND u.bi_uid != ''
-      AND p.grants_priority_queue = 0
-      AND (o.effective_until IS NULL OR o.effective_until > @now)
-  `).all({ now });
-  const pqRows = pqEntitlement.livePqRows(db, now);
-
   const buckets = Object.fromEntries(SERVER_IDS.map(id => [id, []]));
-  for (const r of [...otherRows, ...pqRows]) {
+  for (const r of pqEntitlement.livePqRows(db, now)) {
     const entry = { name: r.name, guid: r.guid, item: r.item };
     for (const id of pqEntitlement.coveredServers(r, SERVER_IDS)) buckets[id].push(entry);
   }
@@ -134,6 +122,21 @@ function buildPerServerPurchaseBuckets(now = nowUnix()) {
 // pqEntitlement.pqGuidsPerServer, the one rule.
 function buildPriorityQueueGuidsPerServer(now = nowUnix()) {
   return pqEntitlement.pqGuidsPerServer(db, now, SERVER_IDS);
+}
+
+// The sync's one summary line: priority queue holders per server, which is both
+// the purchases.json length and the priority queue part of game.admins. The two can
+// only differ when one ID holds two differently named priority queue products on a
+// server (one file entry per product, one admin entry per ID); such a server shows
+// the file's length too, "eu1=3 (file 4)", so the difference is visible. Scripts
+// find this line by its "[sync] eu1=" start.
+function purchaseSyncSummary(buckets, pqGuids, serverIds = SERVER_IDS) {
+  const parts = serverIds.map(id => {
+    const holders = (pqGuids && pqGuids[id] ? pqGuids[id] : new Set()).size;
+    const fileLength = (buckets && buckets[id] ? buckets[id] : []).length;
+    return fileLength === holders ? `${id}=${holders}` : `${id}=${holders} (file ${fileLength})`;
+  });
+  return `[sync] ${parts.join(' ')}`;
 }
 
 function buildWritePurchasesCmd(server, json) {
@@ -655,8 +658,7 @@ async function runPurchaseSync() {
   const buckets = buildPerServerPurchaseBuckets();
   const pqGuids = buildPriorityQueueGuidsPerServer();
 
-  const totals = SERVER_IDS.map(id => `${id}=${(buckets[id] || []).length}/pq=${(pqGuids[id] || new Set()).size}`).join(' ');
-  console.log(`[sync] ${totals}`);
+  console.log(purchaseSyncSummary(buckets, pqGuids));
 
   const privateKey = getPrivateKey();
   if (!privateKey) return;
@@ -1488,4 +1490,4 @@ module.exports = {
   // Pure pieces of the admins sync, for test/syncAdmins.test.js.
   DEFAULT_STAFF_ROLE_SERVERS, DEFAULT_STAFF_ROLE_IDS, staffRoleServers, staffRoleCovering, staffProtection,
   unknownExpired, UNKNOWN_KEEP_S, ceilingAlert, CEILING_REPEAT_S,
-  syncPurchasesToServers, buildPriorityQueueGuidsPerServer, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };
+  syncPurchasesToServers, buildPriorityQueueGuidsPerServer, purchaseSyncSummary, searchSaveFiles, listSaveCategories, openSaveDownloadStream, getSaveRecord, getServerRunning, updateSaveRecord, deleteSaveRecords, scanOrphans, purgeOrphans, scanDeadCharacters, purgeDeadCharacters, listPlayers, getExtraStats, listCollectionRecords, getCollectionStats, purgeLooseItems, scanLooseItems, scanInactiveCharacters, purgeInactiveCharacters, startSaveDbCopy, getSaveDbCopyStatus };

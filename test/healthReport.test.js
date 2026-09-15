@@ -1,7 +1,7 @@
 // Tests for the daily health card (tools/healthReport.js): warnings staff have
 // accepted, the money lines (against the REAL schema: db.js on a throwaway
-// DATA_DIR), active entitlements counted per server, the PayPal check's status and
-// the manual-run marker. Nothing runs the doctor or posts. Needs better-sqlite3, so
+// DATA_DIR), the admin list per server, Backer and Supporter holders counted once
+// for all servers, the PayPal check's status and the manual-run marker. Nothing runs the doctor or posts. Needs better-sqlite3, so
 // run it where the shop's node_modules are.
 // Run: npm test
 const test = require('node:test');
@@ -145,35 +145,33 @@ test('a run started by hand says Manual run; the scheduled run does not', () => 
   assert.doesNotMatch(JSON.stringify(scheduled), /Manual run/);
 });
 
-test('admin lists and perk players per server are distinct in-game IDs, not order rows', () => {
-  const buckets = {
-    eu1: [
-      { guid: 'aaaaaaaa-0000-4000-8000-000000000001', item: 'Priority Queue' },
-      { guid: 'AAAAAAAA-0000-4000-8000-000000000001', item: 'Supporter' },
-      { guid: 'bbbbbbbb-0000-4000-8000-000000000002', item: 'Priority Queue' }
-    ],
-    eu2: [{ guid: 'cccccccc-0000-4000-8000-000000000003', item: 'Supporter' }],
-    na1: []
-  };
+test('each server line is its admin list only: distinct priority queue IDs plus game masters, no perk count', () => {
   const pq = {
-    eu1: new Set(['aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000002']),
+    eu1: new Set(['aaaaaaaa-0000-4000-8000-000000000001', 'AAAAAAAA-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000002']),
     eu2: new Set(),
     na1: new Set()
   };
-  const list = health.entitlementsByServer(buckets, pq, { eu1: 9, eu2: 2 });
+  const list = health.adminListsByServer(pq, { eu1: 9, eu2: 2 });
   assert.deepEqual(list, [
-    { serverId: 'eu1', ids: 2, priorityQueue: 2, gameMasters: 9, adminEntries: 11 },
-    { serverId: 'eu2', ids: 1, priorityQueue: 0, gameMasters: 2, adminEntries: 2 },
-    { serverId: 'na1', ids: 0, priorityQueue: 0, gameMasters: null, adminEntries: null }
+    { serverId: 'eu1', priorityQueue: 2, gameMasters: 9, adminEntries: 11 },
+    { serverId: 'eu2', priorityQueue: 0, gameMasters: 2, adminEntries: 2 },
+    { serverId: 'na1', priorityQueue: 0, gameMasters: null, adminEntries: null }
   ]);
   const oldWording = [{ id: 'db.file', status: 'ok', detail: 'integrity ok, journal wal, 10 users, 20 orders, 99 active entitlements' }];
-  const spec = health.buildHealthCard(report([], oldWording), null, { now: NOW, entitlements: list });
-  assert.equal(fieldOf(spec, 'Admin list per server (as of the last sync)').value, [
-    `${serverLabel('eu1')}: 11 of 50 admin list entries (2 priority queue, 9 game masters); 2 players with a shop perk`,
-    `${serverLabel('eu2')}: 2 of 50 admin list entries (0 priority queue, 2 game masters); 1 player with a shop perk`,
-    `${serverLabel('na1')}: 0 priority queue, game masters not counted yet; 0 players with a shop perk`
+  const spec = health.buildHealthCard(report([], oldWording), null, { now: NOW, adminLists: list });
+  const admins = fieldOf(spec, 'Admin list per server (as of the last sync)').value;
+  assert.equal(admins, [
+    `${serverLabel('eu1')}: 11 of 50 (2 priority queue, 9 game masters)`,
+    `${serverLabel('eu2')}: 2 of 50 (0 priority queue, 2 game masters)`,
+    `${serverLabel('na1')}: 0 priority queue, game masters not counted yet`
   ].join('\n'));
+  assert.doesNotMatch(admins, /perk|player|Backer|Supporter/i, 'no perk or Backer and Supporter count on a server line');
+  assert.equal(fieldOf(spec, health.DISCORD_ROLE_ONLY_FIELD), undefined, 'no holders read, no field');
   assert.doesNotMatch(JSON.stringify(spec), /Active entitlements/, 'the perk count is never labelled as entitlements again');
+
+  const full = health.adminListsByServer({ eu1: new Set(Array.from({ length: 7 }, (_, i) => `cccccccc-0000-4000-8000-${String(i).padStart(12, '0')}`)) }, { eu1: 5 });
+  assert.equal(fieldOf(health.buildHealthCard(report(), null, { now: NOW, adminLists: full }), 'Admin list per server (as of the last sync)').value,
+    'EU1 (Chernarus): 12 of 50 (7 priority queue, 5 game masters)');
   assert.equal(health.adminCeiling({ ADMIN_CEILING: '45' }), 45);
   assert.equal(health.adminCeiling({ ADMIN_CEILING: 'x' }), 50);
   assert.equal(health.adminCeiling({}), 50);
@@ -314,4 +312,60 @@ test('the PayPal check shows on the card, and a failed, stopped or unposted chec
   const unreadable = health.buildHealthCard(report(), null, { now: NOW, errors: [{ id: 'health.money', detail: 'the money lines could not be read: SQLITE_BUSY' }] });
   assert.equal(unreadable.kind, 'attention');
   assert.ok(fieldOf(unreadable, 'warn health.money'));
+});
+
+test('Backer and Supporter are one field for all servers: live holders per product with a Discord role, and distinct players', () => {
+  const T = NOW - 200 * DAY; // far from the money test's day, so its totals never see these orders
+  const roleProduct = (title, type, grantsPq, roleId) => Number(db.prepare(
+    'INSERT INTO products (title, price_cents, currency, type, grants_priority_queue, server_specific, discord_role_id) VALUES (?, 1500, ?, ?, ?, ?, ?)'
+  ).run(title, 'usd', type, grantsPq, grantsPq, roleId).lastInsertRowid);
+  const SUPPORTER = roleProduct('ReforgedZ Supporter', 'one_time', 0, '1400000000000000001');
+  const BACKER = roleProduct('ReforgedZ Backer', 'subscription', 0, '1400000000000000002');
+  const FLAG = roleProduct('Custom Flag', 'one_time', 0, null);
+  const PQ = roleProduct('Priority Queue', 'subscription', 1, '1400000000000000003');
+  const LAPSED = roleProduct('Old Perk', 'subscription', 0, '1400000000000000004');
+  const buy = (steamId, productId, { status = 'completed', until = null, testMode = 0, sub = null } = {}) => db.prepare(`
+    INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode, paypal_subscription_id, effective_until, created_at, completed_at)
+    VALUES (?, ?, ?, ?, 1500, ?, ?, ?, ?, ?)
+  `).run(steamId, productId, productId === PQ ? 'eu1' : null, status, testMode, sub, until, T, T);
+
+  const both = user();
+  buy(both, SUPPORTER);
+  buy(both, BACKER, { until: NOW + 5 * DAY, sub: 'I-B1' });
+  const twice = user();
+  buy(twice, SUPPORTER);
+  buy(twice, SUPPORTER);
+  const supporter = user();
+  buy(supporter, SUPPORTER);
+  const backer = user();
+  buy(backer, BACKER, { until: NOW + DAY, sub: 'I-B2' });
+  buy(user(), BACKER, { until: NOW - HOUR, sub: 'I-B3' }); // lapsed
+  buy(user(), SUPPORTER, { status: 'refunded' });
+  buy(user(), SUPPORTER, { status: 'pending' });
+  buy(user(), SUPPORTER, { testMode: 1 }); // sandbox
+  buy(user(), FLAG); // no Discord role
+  buy(user(), PQ, { until: NOW + 5 * DAY, sub: 'I-P1' }); // priority queue is on the server lines
+  buy(user(), LAPSED, { until: NOW - DAY, sub: 'I-L1' }); // a role product nobody holds now
+
+  const holders = health.discordRoleOnlyHolders(db, NOW);
+  assert.deepEqual(holders.products.map(p => ({ title: p.title, holders: p.holders })), [
+    { title: 'ReforgedZ Supporter', holders: 3 },
+    { title: 'ReforgedZ Backer', holders: 2 }
+  ], 'accounts, not order rows; lapsed, refunded, pending and sandbox orders hold nothing');
+  assert.equal(holders.players, 4, 'someone holding both counts once');
+
+  const spec = health.buildHealthCard(report(), null, { now: NOW, discordRoleOnly: holders, adminLists: health.adminListsByServer({ eu1: new Set() }, { eu1: 5 }) });
+  assert.equal(spec.kind, 'info');
+  const field = fieldOf(spec, 'Backer and Supporter (Discord roles only, no in-game benefit)');
+  assert.equal(field.value, 'ReforgedZ Supporter: 3 · ReforgedZ Backer: 2 · 4 players');
+  assert.doesNotMatch(field.value, /Custom Flag|Priority Queue|Old Perk/, 'a product with no Discord role, priority queue and a product nobody holds are not listed');
+  assert.doesNotMatch(fieldOf(spec, 'Admin list per server (as of the last sync)').value, /Backer|Supporter/);
+  const names = spec.fields.map(f => f.name);
+  assert.equal(names.indexOf(health.DISCORD_ROLE_ONLY_FIELD), names.indexOf('Admin list per server (as of the last sync)') + 1, 'right under the admin lists');
+  assert.doesNotMatch(JSON.stringify(buildCard(spec)), /7656119/, 'no account ID reaches the card');
+
+  // Later, only the lifetime Supporter orders are still live.
+  assert.equal(health.discordRoleOnlyText(health.discordRoleOnlyHolders(db, NOW + 10 * DAY)), 'ReforgedZ Supporter: 3 · 3 players');
+  assert.equal(health.discordRoleOnlyText({ products: [{ title: 'ReforgedZ Backer', holders: 1 }], players: 1 }), 'ReforgedZ Backer: 1 · 1 player');
+  assert.equal(health.discordRoleOnlyText({ products: [], players: 0 }), 'No live holders');
 });

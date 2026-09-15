@@ -115,7 +115,8 @@ check('db.file', 'database', { offline: true }, async () => withDb((db) => {
   const orders = c('SELECT COUNT(*) c FROM orders');
   const active = c("SELECT COUNT(*) c FROM orders WHERE status='completed' AND (effective_until IS NULL OR effective_until > unixepoch())");
   // Order rows, not entitlements: one player can hold several live rows. The health
-  // card counts entitlements itself, as distinct in-game IDs per server.
+  // card counts the admin list per server itself (distinct in-game IDs), and Backer and
+  // Supporter holders once for all servers.
   const detail = `integrity ok, journal ${mode}, ${users} users, ${orders} orders, ${active} live completed orders`;
   return mode === 'wal' ? ok(detail) : warn(detail + ' (expected wal)');
 }));
@@ -277,6 +278,7 @@ check('ssh.servers', 'game servers', { timeoutMs: 60000, deepTimeoutMs: 150000 }
     let buckets = null;
     let pq = null;
     if (deep) { buckets = sync.buildPerServerPurchaseBuckets(); pq = sync.buildPriorityQueueGuidsPerServer(); }
+    let purchasesDiffer = false;
     for (const s of servers) {
       try {
         const p = await remote.probeServerPaths(conn, s);
@@ -286,21 +288,42 @@ check('ssh.servers', 'game servers', { timeoutMs: 60000, deepTimeoutMs: 150000 }
         else if (Date.now() - p.purchasesMtime > 30 * 60000) notes.push(`${s.id} purchases.json ${mins(Date.now() - p.purchasesMtime)} old`);
         if (deep && p.purchasesMtime && p.config) {
           const remoteList = JSON.parse((await remote.readRemoteFile(conn, s, s.path + '/purchases.json')).toString('utf8'));
+          // Like with like: the builder is what the sync writes into this file, so both sides
+          // hold the same kind of entry (priority queue holders), keyed by in-game ID and item.
           const want = new Set((buckets[s.id] || []).map(e => `${e.guid}|${e.item}`));
           const have = new Set(remoteList.map(e => `${e.guid}|${e.item}`));
           const missing = [...want].filter(k => !have.has(k)).length;
-          const extra = [...have].filter(k => !want.has(k)).length;
-          if (missing || extra) problems.push(`${s.id}: purchases.json differs (${missing} missing, ${extra} extra)`);
+          // Extra entries are named by item, never by player. A file written before a change
+          // to what the sync writes (Backer and Supporter used to be written) shows those old
+          // entries here until the next sync rewrites it.
+          const extraKeys = new Set();
+          const extraItems = new Map();
+          for (const e of remoteList) {
+            const k = `${e.guid}|${e.item}`;
+            if (want.has(k) || extraKeys.has(k)) continue;
+            extraKeys.add(k);
+            const item = String(e.item == null ? 'no item' : e.item).slice(0, 40);
+            extraItems.set(item, (extraItems.get(item) || 0) + 1);
+          }
+          const extra = extraKeys.size;
+          const extraText = extra
+            ? `: ${[...extraItems].slice(0, 4).map(([item, n]) => `${n} ${item}`).join(', ')}${extraItems.size > 4 ? ', ...' : ''}`
+            : '';
+          if (missing || extra) {
+            purchasesDiffer = true;
+            problems.push(`${s.id}: purchases.json does not match what the sync writes (${missing} missing, ${extra} extra${extraText})`);
+          }
           const cfg = JSON.parse((await remote.readRemoteFile(conn, s, s.configPath)).toString('utf8'));
           const admins = new Set(Array.isArray(cfg.game && cfg.game.admins) ? cfg.game.admins : []);
           const pqMissing = [...(pq[s.id] || [])].filter(g => !admins.has(g)).length;
           if (pqMissing) problems.push(`${s.id}: ${pqMissing} priority-queue GUIDs not in game.admins`);
-          else notes.push(`${s.id} exact (${want.size} entries, ${(pq[s.id] || new Set()).size} PQ)`);
+          else if (!missing && !extra) notes.push(`${s.id} exact (${want.size} entries, ${(pq[s.id] || new Set()).size} PQ)`);
         }
       } catch (e) {
         problems.push(`${s.id}: ${e.message.split('\n')[0]}`);
       }
     }
+    if (purchasesDiffer) problems.push('every sync (every 10 minutes) rewrites purchases.json, so a difference that is still there after the next sync means the writes are not landing');
   });
   if (problems.length) return fail(`${problems.join('; ')}${notes.length ? ' | ' + notes.join(', ') : ''}`);
   return sync.PINNED_FINGERPRINTS.length ? ok(`${servers.length} servers reachable; ${notes.join(', ')}`) : warn(`${servers.length} servers reachable; ${notes.join(', ')}`);

@@ -202,7 +202,7 @@ test('the ceiling card: silent at the limit, once when over, again only when the
 
 // ---- What the sync writes -------------------------------------------------------------
 
-test('the sync writes priority queue by the one rule: grants ignored, sandbox and undated left out, renewers kept, Backer and Supporter everywhere', () => {
+test('the sync writes priority queue by the one rule: grants ignored, sandbox and undated left out, renewers kept; Backer, Supporter and Custom Flag never reach a game server', () => {
   const now = 1800000000;
   const HOUR = 3600;
   const DAY = 86400;
@@ -225,8 +225,10 @@ test('the sync writes priority queue by the one rule: grants ignored, sandbox an
   const PQ = product('Priority Queue', 1, 1);
   const BACKER = product('ReforgedZ Backer', 0, 0);
   const SUPPORTER = product('ReforgedZ Supporter', 0, 0, 'one_time');
+  const FLAG = product('Custom Flag', 0, 1, 'one_time');
+  const LATER = product('A Later Perk', 0, 0, 'one_time');
 
-  const [g1, g2, g3, g4, g5, g6, g7] = [1, 2, 3, 4, 5, 6, 7].map(guid);
+  const [g1, g2, g3, g4, g5, g6, g7, g8, g9] = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(guid);
   const payer = user(g1);
   order(payer, PQ, { serverId: 'eu1', until: now + 5 * DAY });
   order(payer, PQ, { serverId: 'eu1', sub: null, until: now + 9 * DAY });
@@ -238,6 +240,11 @@ test('the sync writes priority queue by the one rule: grants ignored, sandbox an
   grant.run(g1, 'eu1', 1, 'staff', now);
   order(user(g6), BACKER, { serverId: null, until: now + 5 * DAY });
   order(user(g7), SUPPORTER, { serverId: null, sub: null, until: null });
+  order(user(g8), FLAG, { serverId: 'eu1', sub: null, until: null });
+  order(user(g9), LATER, { serverId: null, sub: null, until: null });
+  // The priority queue buyer also backs the server: only their priority queue is written.
+  order(payer, SUPPORTER, { serverId: null, sub: null, until: null });
+  order(payer, BACKER, { serverId: null, until: now + 5 * DAY });
 
   const tail = (g) => g.slice(-3);
   const pqSets = sync.buildPriorityQueueGuidsPerServer(now);
@@ -247,18 +254,40 @@ test('the sync writes priority queue by the one rule: grants ignored, sandbox an
 
   const buckets = sync.buildPerServerPurchaseBuckets(now);
   const items = (s) => buckets[s].map(e => `${tail(e.guid)}|${e.item}`).sort();
-  assert.deepEqual(items('eu1'), ['001|Priority Queue', '006|ReforgedZ Backer', '007|ReforgedZ Supporter'], 'two live orders for one ID are one entry');
-  assert.deepEqual(items('eu2'), ['002|Priority Queue', '006|ReforgedZ Backer', '007|ReforgedZ Supporter']);
-  for (const s of ['na1', 'na2', 'dev1']) assert.deepEqual(items(s), ['006|ReforgedZ Backer', '007|ReforgedZ Supporter'], s);
-  assert.equal(buckets.eu1.find(e => e.guid === g1).name, 'Player1');
-
-  // Every priority queue ID in game.admins has its purchases.json entry, so the mod
-  // never takes a buyer for a real admin.
-  for (const [s, set] of Object.entries(pqSets)) {
-    for (const g of set) assert.ok(buckets[s].some(e => e.guid === g && e.item === 'Priority Queue'), `${s} ${tail(g)}`);
+  assert.deepEqual(items('eu1'), ['001|Priority Queue'], 'two live orders for one ID are one entry; no Backer, Supporter or Custom Flag');
+  assert.deepEqual(items('eu2'), ['002|Priority Queue']);
+  for (const s of ['na1', 'na2', 'dev1']) assert.deepEqual(items(s), [], s);
+  assert.deepEqual(Object.keys(buckets), SOLD);
+  assert.deepEqual(buckets.eu1[0], { name: 'Player1', guid: g1, item: 'Priority Queue' }, 'the entry the mod reads is unchanged');
+  for (const s of SOLD) {
+    assert.ok(buckets[s].every(e => e.item === 'Priority Queue'), `${s}: priority queue only`);
+    for (const g of [g6, g7, g8, g9]) assert.equal(buckets[s].some(e => e.guid === g), false, `${s} ${tail(g)}`);
   }
+
+  // purchases.json and game.admins' priority queue part are the same IDs, both ways:
+  // the mod never takes a buyer for a real admin, and the file names nobody else.
+  for (const [s, set] of Object.entries(pqSets)) {
+    assert.deepEqual(buckets[s].map(e => e.guid).sort(), [...set].sort(), s);
+  }
+  assert.equal(sync.purchaseSyncSummary(buckets, pqSets), '[sync] eu1=1 eu2=1 na1=0 na2=0 dev1=0');
 
   const later = now + 4 * HOUR;
   assert.equal(sync.buildPriorityQueueGuidsPerServer(later).eu2.size, 0, 'the renewal window closed');
   assert.equal(sync.buildPerServerPurchaseBuckets(later).eu2.some(e => e.item === 'Priority Queue'), false);
+});
+
+test('the sync log line: priority queue holders per server, and the file length only where the two differ', () => {
+  const g = (k) => `0000abcd-0000-4000-8000-${String(k).padStart(12, '0')}`;
+  const pq = { eu1: new Set([g(1), g(2)]), eu2: new Set([g(3)]), na1: new Set(), na2: new Set(), dev1: new Set() };
+  const buckets = {
+    eu1: [{ guid: g(1), item: 'Priority Queue' }, { guid: g(2), item: 'Priority Queue' }],
+    // One ID holding two differently named priority queue products: two file entries, one admin entry.
+    eu2: [{ guid: g(3), item: 'Priority Queue' }, { guid: g(3), item: 'Priority Queue 30 days' }],
+    na1: [], na2: [], dev1: []
+  };
+  const line = sync.purchaseSyncSummary(buckets, pq);
+  assert.equal(line, '[sync] eu1=2 eu2=1 (file 2) na1=0 na2=0 dev1=0');
+  assert.ok(line.startsWith('[sync] eu1='), 'existing checks find the line by its start');
+  assert.doesNotMatch(line, /pq=|0000abcd/);
+  assert.equal(sync.purchaseSyncSummary({}, {}, ['eu1', 'na1']), '[sync] eu1=0 na1=0');
 });
