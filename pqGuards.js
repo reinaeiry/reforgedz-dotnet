@@ -253,7 +253,7 @@ function clearLeftoverPqDenies(db, { guid, serverIds, orderId = null, now = Math
 function recordRevokedRenewal(db, { saleId, subscriptionId, amountCents = null, now = Math.floor(Date.now() / 1000) }) {
   if (!saleId || !subscriptionId) return null;
   const orders = db.prepare(`
-    SELECT id, status, steam_id, test_mode FROM orders
+    SELECT id, status, steam_id, test_mode, revoked_without_refund_at FROM orders
     WHERE paypal_subscription_id = ? ORDER BY id ASC
   `).all(String(subscriptionId));
   if (!orders.length || orders.some(o => o.status === 'completed' || o.status === 'pending')) return null;
@@ -271,19 +271,49 @@ function recordRevokedRenewal(db, { saleId, subscriptionId, amountCents = null, 
 // on a subscription meant to carry on, and the shop cannot tell the two apart,
 // so the renewal is still booked (a player never pays for nothing on a guess)
 // and staff are told. Call it BEFORE the new cycle's row is inserted, which would
-// otherwise be the newest. Returns { id } of that refunded cycle, or null.
+// otherwise be the newest. Returns { id, noRefund } of that revoked cycle, or null.
+// noRefund: staff revoked it without returning money (the status is 'refunded'
+// either way, so entitlement readers see no perks), which the cards must not call
+// a refund.
 function refundedLatestCycle(db, subscriptionId) {
   if (!subscriptionId) return null;
   const row = db.prepare(`
-    SELECT id, status FROM orders
+    SELECT id, status, revoked_without_refund_at FROM orders
     WHERE paypal_subscription_id = ? AND status IN ('completed', 'refunded')
     ORDER BY id DESC LIMIT 1
   `).get(String(subscriptionId));
-  return row && row.status === 'refunded' ? { id: row.id } : null;
+  return row && row.status === 'refunded' ? { id: row.id, noRefund: row.revoked_without_refund_at != null } : null;
+}
+
+// ---- Where a moved holder's priority queue really is ------------------------
+// A staff move leaves the order naming the server it was bought for, and writes a
+// block (removed = 1) there plus a grant (removed = 0) on the new server. Cards that
+// print the order's server told staff the queue was where the sync hides it.
+//
+// For a priority queue order tied to one server whose buyer's in-game ID is blocked
+// on that server, returns { boughtFor, queueOn }: queueOn is a server with a live
+// grant for the ID (the first by id when there are several), or null when the ID
+// has no live grant anywhere. Returns null for any other order.
+function queueMoveForOrder(db, orderId, now = Math.floor(Date.now() / 1000)) {
+  if (orderId == null) return null;
+  const o = db.prepare(`
+    SELECT o.server_id, u.bi_uid, p.grants_priority_queue, p.server_specific
+    FROM orders o JOIN users u ON u.steam_id = o.steam_id JOIN products p ON p.id = o.product_id
+    WHERE o.id = ?
+  `).get(orderId);
+  if (!o || !o.grants_priority_queue || !o.server_specific || !o.server_id) return null;
+  if (!blockedOnServer(db, { biUid: o.bi_uid, serverId: o.server_id })) return null;
+  const grant = db.prepare(`
+    SELECT server_id FROM priority_queue_grants
+    WHERE lower(guid) = ? AND removed = 0 AND server_id != ?
+      AND (expires_at IS NULL OR expires_at > ?)
+    ORDER BY server_id LIMIT 1
+  `).get(lowerId(o.bi_uid), o.server_id, now);
+  return { boughtFor: o.server_id, queueOn: grant ? grant.server_id : null };
 }
 
 module.exports = {
   ownLiveSubscription, blockedOnServer, alreadySubscribedRefusal, otherAccountLivePq, sharedIdRefusal,
-  duplicateLiveSubscription, clearLeftoverPqDenies, recordRevokedRenewal, refundedLatestCycle,
+  duplicateLiveSubscription, clearLeftoverPqDenies, recordRevokedRenewal, refundedLatestCycle, queueMoveForOrder,
   dayMonth, ACTIVATION_GAP_S
 };

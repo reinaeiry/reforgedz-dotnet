@@ -235,26 +235,63 @@ const WEBHOOK_EVENTS = [
   // A suspended agreement PayPal brings back. Without this the shop kept it
   // marked as ended forever, even while PayPal billed it again.
   'BILLING.SUBSCRIPTION.RE-ACTIVATED',
-  'PAYMENT.SALE.COMPLETED'
+  'PAYMENT.SALE.COMPLETED',
+  // Money leaving after the fact. A refund of a subscription cycle can arrive as a
+  // SALE event rather than a CAPTURE one, and without the dispute and reversal
+  // events a chargeback reached nobody.
+  'PAYMENT.SALE.REFUNDED',
+  'PAYMENT.SALE.REVERSED',
+  'CUSTOMER.DISPUTE.CREATED',
+  'CUSTOMER.DISPUTE.UPDATED',
+  'CUSTOMER.DISPUTE.RESOLVED',
+  // A refund PayPal accepted and then could not complete (a bank settlement that
+  // failed, for example). Without it the staff card said the money went back.
+  'PAYMENT.REFUND.FAILED'
 ];
 
+function eventTypeNames(eventTypes) {
+  const names = [];
+  for (const e of Array.isArray(eventTypes) ? eventTypes : []) {
+    const name = e && typeof e === 'object' ? e.name : e;
+    if (typeof name === 'string' && name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+// The events a registered webhook does not receive yet. PayPal's event_types come
+// as [{ name }]; a webhook subscribed to '*' receives everything.
+function missingWebhookEvents(eventTypes, desired = WEBHOOK_EVENTS) {
+  const have = new Set(eventTypeNames(eventTypes));
+  if (have.has('*')) return [];
+  return desired.filter((n) => !have.has(n));
+}
+
+// The PATCH body that adds them, or null when nothing is missing. PayPal's update
+// replaces the whole list, so the events already there go back in with ours: a
+// list of only ours would unsubscribe anything added in the dashboard.
+function webhookEventsPatch(eventTypes, desired = WEBHOOK_EVENTS) {
+  if (!missingWebhookEvents(eventTypes, desired).length) return null;
+  const names = eventTypeNames(eventTypes);
+  for (const n of desired) if (!names.includes(n)) names.push(n);
+  return [{ op: 'replace', path: '/event_types', value: names.map((name) => ({ name })) }];
+}
+
+// Brings an existing webhook up to WEBHOOK_EVENTS, so events added in a release
+// are delivered from the first boot after it. Returns { added } (and error).
 async function syncWebhookEvents(testMode, webhookId, desired) {
-  if (!webhookId) return;
+  if (!webhookId) return { added: [] };
+  const mode = testMode ? 'sandbox' : 'live';
   try {
     const cur = await ppFetch(testMode, `/v1/notifications/webhooks/${webhookId}`);
-    const have = new Set((cur?.event_types || []).map((e) => e.name));
-    const want = desired.filter((n) => !have.has(n));
-    if (!want.length) return;
-    await ppFetch(testMode, `/v1/notifications/webhooks/${webhookId}`, {
-      method: 'PATCH',
-      body: [{
-        op: 'replace',
-        path: '/event_types',
-        value: desired.map((name) => ({ name }))
-      }]
-    });
+    const patch = webhookEventsPatch(cur?.event_types, desired);
+    if (!patch) return { added: [] };
+    const added = missingWebhookEvents(cur?.event_types, desired);
+    await ppFetch(testMode, `/v1/notifications/webhooks/${webhookId}`, { method: 'PATCH', body: patch });
+    console.log(`[paypal] webhook ${webhookId} (${mode}) now also receives ${added.join(', ')}`);
+    return { added };
   } catch (e) {
-    console.error(`[paypal] syncWebhookEvents (${testMode ? 'sandbox' : 'live'}) failed:`, e.message);
+    console.error(`[paypal] syncWebhookEvents (${mode}) failed:`, e.message);
+    return { added: [], error: e.message };
   }
 }
 
@@ -344,6 +381,26 @@ async function listTransactions(testMode, { days = 31 } = {}) {
   } catch (e) {
     return { error: e.message, transactions: [] };
   }
+}
+
+// One page of Transaction Search, exactly as PayPal returns it. Unlike
+// listTransactions above it throws when the call fails, so a reconciliation can
+// tell "no payments" from "could not ask". Only transaction_info is requested by
+// default: the payer block holds the buyer's email and name, and nothing that
+// reconciles money needs them.
+// PayPal allows at most 31 days per call and 500 rows per page, and a transaction
+// takes up to a few hours to appear.
+async function searchTransactions(testMode, { start, end, page = 1, pageSize = 500, transactionStatus = 'S', fields = 'transaction_info' } = {}) {
+  const fmt = (d) => new Date(d).toISOString().replace(/\.\d+Z$/, '-0000');
+  const qs = new URLSearchParams({
+    start_date: fmt(start),
+    end_date: fmt(end),
+    fields,
+    page_size: String(pageSize),
+    page: String(page)
+  });
+  if (transactionStatus) qs.set('transaction_status', transactionStatus);
+  return ppFetch(testMode, `/v1/reporting/transactions?${qs}`);
 }
 
 // ─── Subscriptions (Billing Plans v1) ───────────────────────────────────────
@@ -528,6 +585,11 @@ async function getSubscription(testMode, subscriptionId) {
   return ppFetch(testMode, `/v1/billing/subscriptions/${subscriptionId}`);
 }
 
+// A billing plan, for its billing interval (paymentEvents.planInterval).
+async function getPlan(testMode, planId) {
+  return ppFetch(testMode, `/v1/billing/plans/${encodeURIComponent(planId)}`);
+}
+
 async function cancelSubscription(testMode, subscriptionId, reason = 'Cancelled by user') {
   await ppFetch(testMode, `/v1/billing/subscriptions/${subscriptionId}/cancel`, {
     method: 'POST',
@@ -548,12 +610,16 @@ module.exports = {
   listWebhooks,
   getWebhook,
   WEBHOOK_EVENTS,
+  missingWebhookEvents,
+  webhookEventsPatch,
   getBalance,
   listTransactions,
+  searchTransactions,
   listActiveSubscriptions,
   createCatalogProduct,
   createPlan,
   createSubscription,
   getSubscription,
+  getPlan,
   cancelSubscription
 };

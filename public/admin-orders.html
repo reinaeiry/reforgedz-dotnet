@@ -934,6 +934,10 @@
         allOrders = [];
       }
 
+      // Staff cards link here as /admin/orders?q=%23<order id>.
+      const linkedSearch = new URLSearchParams(location.search).get('q');
+      if (linkedSearch) document.getElementById('searchInput').value = linkedSearch;
+
       renderStats();
       renderOrders();
       bindFilters();
@@ -1519,12 +1523,22 @@
     }
 
     function renderOrders() {
-      const search = document.getElementById('searchInput').value.toLowerCase();
+      const search = document.getElementById('searchInput').value.trim().toLowerCase();
+      // "#123", as the order link on a #Payment-Processor card fills it in, and a
+      // bare "123" both find exactly that order rather than every id containing 123.
+      // A bare number that is no order id (a pasted Steam or BattleMetrics id) is
+      // still searched as text.
+      const idMatch = search.match(/^(#?)(\d+)$/);
+      const exactId = idMatch && (idMatch[1] === '#' || allOrders.some(x => String(x.id) === idMatch[2])) ? idMatch[2] : null;
       const filtered = allOrders.filter(o => {
         if (currentFilter !== 'all' && o.status !== currentFilter) return false;
         if (search) {
-          const haystack = `${o.persona} ${o.steam_id} ${o.bi_uid || ''} ${o.title}`.toLowerCase();
-          if (!haystack.includes(search)) return false;
+          if (exactId) {
+            if (String(o.id) !== exactId) return false;
+          } else {
+            const haystack = `#${o.id} ${o.persona} ${o.steam_id} ${o.bi_uid || ''} ${o.title}`.toLowerCase();
+            if (!haystack.includes(search)) return false;
+          }
         }
         return true;
       });

@@ -12,11 +12,15 @@ const consoleIdentity = require('../consoleIdentity');
 const webAuth = require('../webAuth');
 const pqGuards = require('../pqGuards');
 const { adminActor, staffSetBiUid } = require('../adminAudit');
-const { postCard, COLORS } = require('../tools/lib/discordCard');
+const { postCard, buildCard, sendCard } = require('../tools/lib/discordCard');
+const cards = require('../paymentCards');
+const paymentEvents = require('../paymentEvents');
+const staffRevoke = require('../staffRevoke');
 const funnel = require('../funnel');
 const inGameId = require('../inGameId');
 const { windowLimit } = require('../windowLimit');
 const reminders = require('../tools/reminders');
+const reconcile = require('../tools/reconcile');
 
 // ---- PayPal setup ----
 const paypal = require('../paypal');
@@ -96,8 +100,6 @@ function detectImageExt(buf) {
   return null;
 }
 
-const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation', web: 'Website' };
-
 // The name to call a player by, or null. A website account is "Player" until its
 // in-game ID is found, which is no name at all.
 function playerNameOf(u) {
@@ -106,76 +108,10 @@ function playerNameOf(u) {
   return persona || u.gamertag || null;
 }
 
-function sendDiscordNotification({ eventType, user, biUid, productTitle, amountCents, currency, status, serverId, extraFields }) {
-  if (!DISCORD_WEBHOOK_URL) return;
-
-  const colors = {
-    pending: 0xfbbf24,
-    completed: 0x4ade80,
-    active: 0x4ade80,
-    cancelled: 0xf87171,
-    suspended: 0xf59e0b,
-    expired: 0x6b7280,
-    failed: 0xf87171,
-    refunded: 0xc084fc
-  };
-
-  // One title per PayPal outcome. These used to share "Subscription Cancelled",
-  // which had staff reading a wave of payment-failure suspensions as players
-  // walking away.
-  const titles = {
-    'payment_completed': 'Payment Completed',
-    'payment_failed': 'Payment Failed',
-    'subscription_started': 'Subscription Started',
-    'subscription_renewed': 'Subscription Renewed',
-    'subscription_cancelled': 'Subscription Cancelled',
-    'subscription_suspended': 'Subscription Suspended (payments failed)',
-    'subscription_expired': 'Subscription Expired',
-    'subscription_reactivated': 'Subscription Reactivated',
-    'order_revoked': 'Order Revoked'
-  };
-
-  const amount = amountCents ? `$${(amountCents / 100).toFixed(2)} ${(currency || 'usd').toUpperCase()}` : 'N/A';
-  const platform = (user && user.platform) || 'steam';
-  const platformLabel = PLATFORM_LABELS[platform] || platform;
-
-  const fields = [];
-  if (platform === 'steam') {
-    fields.push({ name: 'Player', value: (user && user.persona) || 'Unknown', inline: true });
-    fields.push({ name: 'Steam ID', value: (user && user.steam_id) || 'Unknown', inline: true });
-  } else if (platform === 'web') {
-    fields.push({ name: 'Player', value: playerNameOf(user) || 'In-game name not known yet', inline: true });
-    fields.push({ name: 'Website account', value: (user && user.steam_id) || 'Unknown', inline: true });
-  } else {
-    fields.push({ name: 'Gamertag', value: (user && user.gamertag) || 'Unknown', inline: true });
-    fields.push({ name: 'BM Player ID', value: (user && user.bm_player_id) || 'Unknown', inline: true });
-  }
-  fields.push({ name: 'Platform', value: platformLabel, inline: true });
-  fields.push({ name: 'BI UID', value: biUid || 'SET LATER', inline: false });
-  fields.push({ name: 'Product', value: productTitle || 'Unknown', inline: false });
-  if (serverId) {
-    fields.push({ name: 'Server', value: SERVER_LABELS[serverId] || String(serverId).toUpperCase(), inline: true });
-  }
-  fields.push(
-    { name: 'Amount', value: amount, inline: true },
-    { name: 'Status', value: status || 'unknown', inline: true }
-  );
-  if (Array.isArray(extraFields)) fields.push(...extraFields);
-
-  const embed = {
-    title: titles[eventType] || eventType,
-    color: colors[status] || 0x888888,
-    fields,
-    timestamp: new Date().toISOString(),
-    footer: { text: 'ReforgedZ Shop' }
-  };
-
-  fetch(DISCORD_WEBHOOK_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ embeds: [embed] })
-  }).catch(err => console.error('Discord webhook error:', err.message));
-}
+// Staff cards about orders go through paymentCards.js (what each card says) and
+// tools/lib/discordCard.js (layout, colour, who is notified, posting). One title
+// per PayPal outcome: they once shared "Subscription Cancelled", which had staff
+// reading a wave of payment-failure suspensions as players walking away.
 
 function parseImagesJson(raw) {
   if (!raw) return [];
@@ -812,6 +748,21 @@ function getOrderWithContext(orderId) {
   `).get(orderId);
 }
 
+// The row plus where a moved holder's priority queue really is
+// (pqGuards.queueMoveForOrder), for the staff cards. Takes an order row (id) or a
+// billing issue row (order_id). A failed lookup leaves the row as it was, so the
+// card names the order's own server.
+function withQueue(row) {
+  if (!row) return row;
+  const id = row.id != null ? row.id : row.order_id;
+  try {
+    return { ...row, pq_queue: pqGuards.queueMoveForOrder(db, id) };
+  } catch (e) {
+    console.error(`[pq-guard] order #${id}: queue server lookup failed: ${e.message}`);
+    return row;
+  }
+}
+
 // The lines under "What happens next" on the receipt. Queue priority only
 // takes effect when a server restarts, and a role only lands if Discord is
 // linked; until now the buyer was told neither.
@@ -869,16 +820,13 @@ function fulfillOrder(orderId, cap) {
   // them. Before the sync below, so that write already goes without the block.
   if (order.grants_priority_queue && order.bi_uid) clearLeftoverBlocksForOrder(order);
 
-  sendDiscordNotification({
-    eventType: 'payment_completed',
-    user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
-    biUid: order.bi_uid,
-    productTitle: order.product_title,
-    amountCents: order.amount_cents,
-    currency: order.currency,
-    status: 'completed',
-    serverId: order.server_id
-  });
+  // One card per purchase: a Custom Flag order gets its own card below, with the
+  // flag attached. A subscription's first payment and a one-time purchase are
+  // different news for staff, so they have different titles.
+  if (order.type !== 'custom_flag') {
+    const isSubscription = !!order.paypal_subscription_id || order.type === 'subscription' || order.type === 'recurring_custom';
+    sendCard(() => cards.orderEventCard(isSubscription ? 'subscription_started' : 'payment_completed', order));
+  }
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
   tryAssignDiscordRoleForOrder(orderId);
@@ -941,44 +889,20 @@ function clearLeftoverBlocksForOrder(order) {
   }
   const { cleared, kept } = result;
   if (!cleared.length && !kept.length) return;
-  const label = (id) => SERVER_LABELS[id] || id;
   const idHead = `${String(order.bi_uid).slice(0, 8)}...`;
-  const setBy = (r) => `by ${r.granted_by || 'unknown'}${r.granted_at ? `, <t:${r.granted_at}:D>` : ''}`;
-  const orderFields = [
-    { name: 'Order', value: `#${order.id} ${order.product_title}`, inline: true },
-    { name: 'Player', value: playerNameOf(order) || order.steam_id, inline: true },
-    { name: 'In-game ID', value: order.bi_uid, inline: false }
-  ];
   if (cleared.length) {
     console.log(`[pq-guard] order #${order.id}: cleared a leftover priority queue block for in-game ID ${idHead} on ${cleared.map(r => r.server_id).join(', ')}`);
-    postCard({
-      title: 'Leftover priority queue block cleared',
-      color: COLORS.amber,
-      description: `A new purchase covers ${cleared.map(r => label(r.server_id)).join(', ')}, where an earlier block was hiding this player's priority queue. The block was removed so the purchase works.`,
-      fields: [
-        ...orderFields,
-        { name: 'Block was set', value: cleared.map(r => `${label(r.server_id)}: ${setBy(r)}`).join('\n'), inline: false }
-      ],
-      footer: 'Takes effect at the next restart of each server'
-    }).catch(() => {});
   }
   if (kept.length) {
-    const why = {
-      moved: 'part of a server move (this in-game ID has a staff grant on another server)',
-      other_order: 'set on purpose (another live order for this in-game ID covers that server)'
-    };
     console.log(`[pq-guard] order #${order.id}: kept a staff priority queue block for in-game ID ${idHead} on ${kept.map(r => `${r.server_id} (${r.reason})`).join(', ')}`);
-    postCard({
-      title: 'Purchase hidden by a staff block',
-      color: COLORS.amber,
-      description: `A new purchase covers ${kept.map(r => label(r.server_id)).join(', ')}, where a staff block hides this player's priority queue. The block was kept, so this purchase gives no priority queue there until staff remove the block or refund the order.`,
-      fields: [
-        ...orderFields,
-        { name: 'Block kept', value: kept.map(r => `${label(r.server_id)}: ${why[r.reason] || r.reason}, ${setBy(r)}`).join('\n'), inline: false }
-      ],
-      footer: 'Check with the player which server they meant to buy'
-    }).catch(() => {});
   }
+  let specs = [];
+  try {
+    specs = cards.leftoverBlockCards(order, { cleared, kept });
+  } catch (e) {
+    console.error(`[pq-guard] order #${order.id}: block card not built: ${e.message}`);
+  }
+  for (const spec of specs) sendCard(spec);
 }
 
 // Posts a Custom Flag order to the shop-orders Discord webhook with the
@@ -989,49 +913,26 @@ function clearLeftoverBlocksForOrder(order) {
 async function sendCustomFlagDiscordNotification({ orderId, order, customFields }) {
   if (!DISCORD_WEBHOOK_URL) return;
 
-  const embed = {
-    title: 'Custom Flag Order',
-    color: 0x4ade80,
-    fields: [
-      { name: 'Player Name', value: customFields.playerName || 'Unknown', inline: true },
-      { name: 'In-Game Name', value: customFields.inGameName || 'Unknown', inline: true },
-      { name: 'GUID', value: customFields.guid || 'Unknown', inline: false },
-      { name: 'Discord ID', value: customFields.discordId || 'Not provided', inline: true },
-      { name: 'Receipt', value: `RFGZ-${String(orderId).padStart(6, '0')}`, inline: true },
-      { name: 'Amount', value: `$${(order.amount_cents / 100).toFixed(2)} ${(order.currency || 'usd').toUpperCase()}`, inline: true }
-    ],
-    timestamp: new Date().toISOString(),
-    footer: { text: 'ReforgedZ Shop' }
-  };
-
   let fileBuffer = null;
   let fileName = null;
   if (order.custom_file_path) {
     try {
       fileName = path.basename(order.custom_file_path);
       fileBuffer = fs.readFileSync(path.join(CUSTOM_FLAG_UPLOAD_DIR, fileName));
-      embed.image = { url: `attachment://${fileName}` };
     } catch (e) {
       console.error('[custom-flag] could not read flag image for Discord:', e.message);
+      fileBuffer = null;
     }
   }
 
+  let body;
   try {
-    if (fileBuffer) {
-      const form = new FormData();
-      form.append('payload_json', JSON.stringify({ embeds: [embed] }));
-      form.append('files[0]', new Blob([fileBuffer]), fileName);
-      await fetch(DISCORD_WEBHOOK_URL, { method: 'POST', body: form });
-    } else {
-      await fetch(DISCORD_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ embeds: [embed] })
-      });
-    }
+    body = buildCard(cards.customFlagCard({ orderId, order, customFields, imageName: fileBuffer ? fileName : null }));
   } catch (e) {
-    console.error('[custom-flag] Discord webhook error:', e.message);
+    console.error('[custom-flag] card not built:', e.message);
+    return;
   }
+  await postCard(body, fileBuffer ? { files: [{ name: fileName, data: fileBuffer }] } : {});
 }
 
 // PayPal returns the buyer here after they approve. We capture the order,
@@ -1209,15 +1110,9 @@ router.post('/api/shop/priority-queue/move', requireAuth, (req, res) => {
     db.prepare('INSERT INTO priority_queue_moves (steam_id, guid, from_server, to_server, moved_at) VALUES (?, ?, ?, ?, unixepoch())')
       .run(req.user.steam_id, guid, from.join(',') || null, to);
   })();
-  console.log(`[pq-move] ${req.user.steam_id} moved ${guid} ${from.join(',') || '(none)'} -> ${to}`);
+  console.log(`[pq-move] ${req.user.steam_id} moved ${String(guid).slice(0, 8)}... ${from.join(',') || '(none)'} -> ${to}`);
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  require('../tools/lib/discordCard').postCard({
-    title: 'Priority queue moved by the player',
-    color: 0x6b7280,
-    description: `${name || req.user.steam_id} moved their queue priority ${from.map(f => (SERVER_LABELS[f] || f)).join(', ') || '(nowhere)'} → ${SERVER_LABELS[to] || to}`,
-    fields: [{ name: 'In-game id', value: guid, inline: true }, { name: 'Order', value: `#${order.id} ${order.title}`, inline: true }],
-    footer: 'Self-service from the account page; takes effect at each server\'s next restart'
-  }).catch(() => {});
+  sendCard(() => cards.playerQueueMoveCard({ name, accountId: req.user.steam_id, guid, from, to, order }));
   res.json({ ok: true, from, to, nextRestart: describeNextRestart().text, nextMoveAt: now + PQ_MOVE_COOLDOWN_DAYS * 86400 });
 });
 
@@ -1437,6 +1332,10 @@ router.post('/api/shop/cancel-subscription', requireAuth, async (req, res) => {
       markSubscriptionCancelledLocally(order.paypal_subscription_id, status.toLowerCase());
       return res.json({ ok: true, alreadyCancelled: true });
     }
+    // The player is cancelling, so the CANCELLED webhook must email them and post
+    // its card, even if a shop cancel PayPal never answered left a marker behind
+    // (PayPal still says ACTIVE, so that cancel did not happen).
+    paymentEvents.clearShopCancel(db, order.paypal_subscription_id);
     await paypal.cancelSubscription(useTest, order.paypal_subscription_id, 'Cancelled by customer');
     markSubscriptionCancelledLocally(order.paypal_subscription_id, 'cancelled');
     res.json({ ok: true });
@@ -1810,14 +1709,16 @@ router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res
     WHERE product_id = ? AND paypal_subscription_id IS NOT NULL AND status = 'completed'
   `).all(req.params.id);
 
+  // Each cancel is marked as the shop's own first, so the CANCELLED webhooks that
+  // follow post no card per buyer while the orders are being deleted.
   let cancelledSubs = 0;
   for (const s of subsToCancel) {
-    try {
-      await paypal.cancelSubscription(!!s.test_mode, s.subId, 'Product deleted by admin');
-      cancelledSubs++;
-    } catch (e) {
-      console.error('[hard-delete] Failed to cancel PayPal subscription %s: %s', s.subId, e.message);
-    }
+    const r = await paymentEvents.cancelAtPayPal({
+      db, paypal, testMode: !!s.test_mode, subscriptionId: s.subId, reason: 'Product deleted by admin', source: 'hard_delete'
+    });
+    if (r.outcome === 'cancelled') cancelledSubs++;
+    else if (r.outcome === 'failed') console.error('[hard-delete] Failed to cancel PayPal subscription %s: %s', s.subId, r.error);
+    else if (r.outcome === 'unknown') console.error('[hard-delete] PayPal did not answer the cancel of subscription %s, check it in PayPal: %s', s.subId, r.error);
   }
 
   // Snapshot (user, role) pairs before the rows disappear — we'll need them
@@ -1855,26 +1756,16 @@ router.delete('/api/shop/admin/products/:id/hard', requireAdmin, async (req, res
   res.json({ ok: true, deletedOrders, cancelledSubs });
 });
 
-// Refund a PayPal capture for an order. Returns the refunded amount in cents.
-async function refundCaptureForOrder(order) {
-  const useTest = !!order.test_mode;
-  let captureId = order.paypal_capture_id;
-  // Backfill the capture id from PayPal if we only stored the order id.
-  if (!captureId && order.paypal_order_id) {
-    const pp = await paypal.getOrder(useTest, order.paypal_order_id);
-    const norm = paypal.normalizeCapture(pp);
-    captureId = norm.captureId;
-  }
-  if (!captureId) throw new Error('Order has no PayPal capture to refund');
-  const { refundedCents } = await paypal.refundCapture(useTest, captureId, {
-    amountCents: order.amount_cents,
-    currency: order.currency || 'USD'
-  });
-  return refundedCents;
-}
+// Orders a staff revoke is running for right now (staffRevoke.createRevokeTracker).
+// PayPal's refund webhook can land before the refund call returns; for an order in
+// here the webhook is answered 500 so PayPal delivers it again once the revoke has
+// finished, and a second revoke of the same order is refused.
+const revokesInFlight = staffRevoke.createRevokeTracker();
 
 // Revoke an order (admin only). With { refund: true } also issues a PayPal
-// refund of the original capture.
+// refund of the original capture. staffRevoke.revokeOrder has the rules: one staff
+// action, one card, and the refund and cancel it makes stay quiet when their
+// webhooks arrive.
 router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
   const { orderId, refund } = req.body;
   if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
@@ -1888,70 +1779,36 @@ router.post('/api/shop/admin/revoke', requireAdmin, async (req, res) => {
 
   if (!order) return res.status(404).json({ error: 'Completed order not found' });
 
-  let refundedCents = 0;
-  if (refund) {
-    if (!order.paypal_capture_id && !order.paypal_order_id) {
-      return res.status(400).json({ error: 'This is a legacy (Stripe) order — refund it from the PayPal/Stripe dashboard manually.' });
-    }
-    try {
-      refundedCents = await refundCaptureForOrder(order);
-    } catch (e) {
-      const msg = String(e && e.message || '');
-      console.error('Refund failed:', msg);
-      return res.status(502).json({ error: 'Refund failed: ' + msg });
-    }
+  let result;
+  try {
+    result = await staffRevoke.revokeOrder(db, { order, refund: !!refund }, {
+      paypal,
+      tracker: revokesInFlight,
+      markCancelledLocally: (subId) => markSubscriptionCancelledLocally(subId, 'cancelled'),
+      sendCard: (specFn) => sendCard(specFn),
+      sendRefundEmail: ({ order: o, amountCents }) => {
+        sendRefundConfirmation({
+          to: o.payer_email,
+          displayName: playerNameOf(o),
+          productTitle: o.product_title,
+          amountCents,
+          currency: o.currency,
+          captureId: o.paypal_capture_id,
+          orderId: o.id,
+          dateMs: Date.now()
+        }).catch(e => console.error('[refund-mail] send failed:', e.message));
+      },
+      afterRevoke: (id) => {
+        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
+        tryRemoveDiscordRoleForOrder(id);
+      },
+      withQueue
+    });
+  } catch (e) {
+    console.error(`[revoke] order #${order.id}: revoke failed: ${e.message}`);
+    return res.status(500).json({ error: 'Revoke failed: ' + e.message });
   }
-
-  db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(orderId);
-
-  // If this order came from a recurring PayPal subscription, cancel the
-  // billing agreement too — otherwise PayPal keeps auto-billing the buyer
-  // on the next cycle even though we've already pulled their access.
-  let subscriptionCancelled = false;
-  let subscriptionCancelError = null;
-  if (order.paypal_subscription_id) {
-    try {
-      await paypal.cancelSubscription(!!order.test_mode, order.paypal_subscription_id,
-        refund ? 'Revoked with refund by admin' : 'Revoked by admin');
-      markSubscriptionCancelledLocally(order.paypal_subscription_id, 'cancelled');
-      subscriptionCancelled = true;
-    } catch (e) {
-      subscriptionCancelError = e.message;
-      console.error('[revoke] Failed to cancel PayPal subscription %s: %s', order.paypal_subscription_id, e.message);
-    }
-  }
-
-  sendDiscordNotification({
-    eventType: 'order_revoked',
-    user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
-    biUid: order.bi_uid,
-    productTitle: order.product_title,
-    amountCents: refundedCents || order.amount_cents,
-    currency: order.currency,
-    status: 'refunded',
-    serverId: order.server_id
-  });
-
-  // Refund confirmation email. Sent from the admin path because the PayPal
-  // webhook handler short-circuits once status flips to 'refunded' — and
-  // admin-initiated refunds beat the webhook there.
-  if (refund && order.payer_email) {
-    sendRefundConfirmation({
-      to: order.payer_email,
-      displayName: playerNameOf(order),
-      productTitle: order.product_title,
-      amountCents: refundedCents || order.amount_cents,
-      currency: order.currency,
-      captureId: order.paypal_capture_id,
-      orderId: order.id,
-      dateMs: Date.now()
-    }).catch(e => console.error('[refund-mail] send failed:', e.message));
-  }
-
-  syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-  tryRemoveDiscordRoleForOrder(orderId);
-
-  res.json({ ok: true, refundedCents, subscriptionCancelled, subscriptionCancelError });
+  res.status(result.status).json(result.body);
 });
 
 // Read-only resolver behind the Discord /refund command: turn an in-game GUID
@@ -2670,7 +2527,7 @@ router.post('/api/shop/admin/priority-queue/switch', requireAdmin, (req, res) =>
     applyPqGrant(guid, to, name, by);
     if (fromId) applyPqDeny(guid, fromId, name, by);
   })();
-  console.log(`[pq-switch] ${by} moved ${guid} ${fromId || '(none)'} -> ${to}`);
+  console.log(`[pq-switch] ${by} moved ${String(guid).slice(0, 8)}... ${fromId || '(none)'} -> ${to}`);
 
   syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
 
@@ -2782,9 +2639,12 @@ function startOfYearUnix() {
 
 // All revenue queries filter out orders we've marked as test_mode so historical
 // sandbox runs don't pollute the rollups. New orders are tagged at checkout.
+// "Refunded" money leaves out orders staff revoked without returning anything
+// (revoked_without_refund_at): their status is 'refunded' so they grant nothing,
+// but no money went back.
 function revenueSummary() {
   const lifetime = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND test_mode = 0`).get();
-  const refunded = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'refunded' AND test_mode = 0`).get();
+  const refunded = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'refunded' AND test_mode = 0 AND revoked_without_refund_at IS NULL`).get();
   const thisMonth = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND test_mode = 0 AND completed_at >= ?`).get(startOfMonthUnix());
   const thisYear = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(amount_cents), 0) cents FROM orders WHERE status = 'completed' AND test_mode = 0 AND completed_at >= ?`).get(startOfYearUnix());
   return {
@@ -2910,7 +2770,7 @@ function refundsByProduct(limit = 10) {
       COALESCE(SUM(o.amount_cents), 0) AS cents
     FROM products p
     JOIN orders o ON o.product_id = p.id
-    WHERE o.status = 'refunded' AND o.test_mode = 0
+    WHERE o.status = 'refunded' AND o.test_mode = 0 AND o.revoked_without_refund_at IS NULL
     GROUP BY p.id
     HAVING refunds > 0
     ORDER BY cents DESC
@@ -3559,12 +3419,12 @@ function recordBillingIssue(fields) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(subId, orderId, steamId, paypalStatus, failedCount, outstandingCents,
            currency, lastPaymentAt, nextBillingAt, now, now, source);
-    return { escalated: true, previousCount: 0, prevEmailedAt: null, firstSeenAt: now };
+    // A count of 0 is not news for staff (paymentEvents.billingIssueEscalates).
+    return { escalated: paymentEvents.billingIssueEscalates({ prev: null, failedCount }), previousCount: 0, prevEmailedAt: null, firstSeenAt: now };
   }
 
   // A row that was resolved and is failing again reopens rather than
   // inserting a second row -- the subscription id is the primary key.
-  const reopened = prev.resolved_at != null;
   db.prepare(`
     UPDATE subscription_billing_issues SET
       order_id = COALESCE(?, order_id),
@@ -3577,7 +3437,7 @@ function recordBillingIssue(fields) {
          lastPaymentAt, nextBillingAt, now, source, subId);
 
   return {
-    escalated: reopened || failedCount > (prev.failed_count || 0),
+    escalated: paymentEvents.billingIssueEscalates({ prev, failedCount }),
     previousCount: prev.failed_count || 0,
     prevEmailedAt: prev.player_emailed_at || null,
     firstSeenAt: prev.first_seen_at || now
@@ -3605,64 +3465,28 @@ function resolveBillingIssue(subId, reason) {
 // Staff alert into #Payment-Processor. Best-effort: a Discord outage must not
 // break webhook processing, so this never throws.
 async function postBillingIssueAlert(opts) {
-  const { subId, ctx, failedCount, outstandingCents, currency,
-          nextBillingAt, lastPaymentAt, source } = opts;
   if (!DISCORD_WEBHOOK_URL && !PAYMENT_PROCESSOR_CHANNEL_ID) return false;
-  const money = (c) => '$' + ((c || 0) / 100).toFixed(2) + ' ' + (currency || 'usd').toUpperCase();
-  const when = (u) => (u ? '<t:' + u + ':D>' : 'Never');
-  const platform = (ctx && ctx.platform) || 'steam';
-
-  const fields = [
-    { name: 'Player', value: playerNameOf(ctx) || 'Unknown', inline: true },
-    { name: 'Platform', value: PLATFORM_LABELS[platform] || platform, inline: true },
-    { name: 'Discord', value: ctx && ctx.discord_id ? '<@' + ctx.discord_id + '>' : 'Not linked', inline: true },
-    { name: 'Product', value: (ctx && ctx.product_title) || 'Unknown', inline: true },
-    { name: 'Failed attempts', value: String(failedCount || 0), inline: true },
-    { name: 'Outstanding', value: money(outstandingCents), inline: true },
-    { name: 'Last successful payment', value: when(lastPaymentAt), inline: true },
-    { name: 'Access ended', value: when(ctx && ctx.effective_until), inline: true },
-    { name: 'Next retry', value: when(nextBillingAt), inline: true },
-    { name: 'Subscription', value: '`' + subId + '`', inline: false }
-  ];
-  if (ctx && ctx.payer_email) {
-    fields.push({ name: 'PayPal email', value: ctx.payer_email, inline: false });
+  let body;
+  try {
+    body = buildCard(cards.billingFailureCard({ ...opts, ctx: withQueue(opts.ctx) }));
+  } catch (e) {
+    console.error('[billing] alert not built:', e.message);
+    return false;
   }
-  if (ctx && ctx.discord_role_id) {
-    fields.push({ name: 'Role affected', value: '<@&' + ctx.discord_role_id + '>', inline: true });
-  }
-
-  const embed = {
-    title: 'Subscription payment failed',
-    description: source === 'rescan'
-      ? 'Found by a rescan of PayPal -- this failure predates failure tracking.'
-      : 'PayPal could not take payment. The subscription still shows ACTIVE to the player, but their access has stopped renewing.',
-    color: 0xf87171,
-    fields,
-    timestamp: new Date().toISOString(),
-    footer: { text: 'ReforgedZ Shop - billing' }
-  };
 
   // Preferred path: the "ReforgedZ Payments" webhook, which already delivers
   // purchase notifications into this same channel. Keeps one identity for
   // everything payment-related instead of introducing a second poster.
   if (DISCORD_WEBHOOK_URL) {
-    try {
-      const res = await fetch(DISCORD_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ embeds: [embed] })
-      });
-      if (res.ok) return true;
-      console.error('[billing] webhook alert failed: HTTP %s', res.status);
-    } catch (e) {
-      console.error('[billing] webhook alert failed:', e.message);
-    }
+    const posted = await postCard(body);
+    if (posted.ok) return true;
+    console.error('[billing] webhook alert failed: HTTP %s', posted.status);
   }
 
-  // Fallback: post as the bot. Only reached when the webhook is unset or
-  // broken -- a staff alert about lost revenue is worth a second attempt.
+  // Fallback: post the same card as the bot. Only reached when the webhook is
+  // unset or broken: a staff alert about lost revenue is worth a second attempt.
   try {
-    await discord.postToChannel(PAYMENT_PROCESSOR_CHANNEL_ID, { embeds: [embed] });
+    await discord.postToChannel(PAYMENT_PROCESSOR_CHANNEL_ID, body);
     return true;
   } catch (e) {
     console.error('[billing] channel alert failed:', e.message);
@@ -3679,8 +3503,10 @@ async function postBillingIssueAlert(opts) {
 // that declined once cost someone their queue and role the same morning.
 const BILLING_GRACE_SECONDS = 3 * 86400;
 
+// postAlert false (the rescan) posts no card here and returns the card's facts as
+// `alert`, so the caller can post one card for many subscriptions.
 async function handleBillingFailure(opts) {
-  const { subId, billingInfo, paypalStatus, source, emailPlayer } = opts;
+  const { subId, billingInfo, paypalStatus, source, emailPlayer, postAlert = true } = opts;
   if (!subId) return { escalated: false };
 
   // PayPal delivers the third PAYMENT.FAILED *after* the SUSPENDED event that
@@ -3699,12 +3525,19 @@ async function handleBillingFailure(opts) {
   // warn and nothing for staff to do. If a charge ever lands, ACTIVATED
   // fulfils the order like any first payment. Tracking these only filled the
   // channel and /billing with names nobody could act on.
-  const everPaid = db.prepare(
+  // PayPal's own billing_info decides whenever it says anything
+  // (paymentEvents.everPaid): a buyer whose paid order rows were lost still paid,
+  // and still needs telling when a renewal fails.
+  const localPaid = !!db.prepare(
     "SELECT 1 FROM orders WHERE paypal_subscription_id = ? AND status IN ('completed', 'refunded') LIMIT 1"
   ).get(subId);
-  if (!everPaid) {
+  const paid = paymentEvents.everPaid({ localPaid, billingInfo });
+  if (!paid.paid) {
     resolveBillingIssue(subId, 'payment failed on an agreement that never paid');
     return { escalated: false };
+  }
+  if (!localPaid) {
+    console.warn('[billing] %s: PayPal shows a payment the shop has no paid order for; handled as a paying subscription', subId);
   }
 
   const bi = billingInfo || {};
@@ -3753,14 +3586,16 @@ async function handleBillingFailure(opts) {
   if (!escalated && !needsEmail) return { escalated: false };
 
   const now = Math.floor(Date.now() / 1000);
+  let alert = null;
   if (escalated) {
-    const posted = await postBillingIssueAlert({
-      subId, ctx, failedCount, outstandingCents, currency,
-      nextBillingAt, lastPaymentAt, source
-    });
-    if (posted) {
-      db.prepare('UPDATE subscription_billing_issues SET notified_at = ? WHERE paypal_subscription_id = ?')
-        .run(now, subId);
+    // localPaid false: the card says the shop holds no paid order for it.
+    alert = { subId, ctx, failedCount, outstandingCents, currency, nextBillingAt, lastPaymentAt, source, localPaid };
+    if (postAlert) {
+      const posted = await postBillingIssueAlert(alert);
+      if (posted) {
+        db.prepare('UPDATE subscription_billing_issues SET notified_at = ? WHERE paypal_subscription_id = ?')
+          .run(now, subId);
+      }
     }
   }
 
@@ -3782,7 +3617,7 @@ async function handleBillingFailure(opts) {
       console.error('[billing] player email failed:', e.message);
     }
   }
-  return { escalated };
+  return { escalated, alert };
 }
 
 // Sweep every subscription we believe is live and reconcile it against
@@ -3791,41 +3626,36 @@ async function handleBillingFailure(opts) {
 // and this runs detached, so wall-clock does not matter.
 async function rescanBillingIssues(opts) {
   const { emailPlayers = false } = opts || {};
-  // 'completed' only. A 'pending' row is an abandoned checkout: the shop
-  // reserved a subscription id that the buyer never approved, so PayPal never
-  // created it and every lookup 404s forever. Including them made `errors`
-  // permanently non-zero and hid real lookup failures.
-  const subs = db.prepare(`
-    SELECT DISTINCT o.paypal_subscription_id AS sub_id, o.test_mode
-    FROM orders o
-    WHERE o.paypal_subscription_id IS NOT NULL
-      AND o.status = 'completed'
-      AND o.subscription_cancelled_at IS NULL
-  `).all();
+  // Live subscriptions, plus every one with a billing issue on record that is not
+  // marked ended (paymentEvents.billingRescanTargets). Not 'pending' rows on their
+  // own: an abandoned checkout reserved a subscription id the buyer never
+  // approved, PayPal never created it and every lookup 404s forever, which made
+  // `errors` permanently non-zero and hid real lookup failures. An issue row only
+  // exists for an agreement PayPal reported on, so those lookups work.
+  const subs = paymentEvents.billingRescanTargets(db);
 
   const summary = { scanned: 0, failing: 0, newIssues: 0, resolved: 0, errors: 0 };
+  const alerts = [];
 
-  // Two kinds of open issue the loop above can never reach, because it only
-  // walks subscriptions we still believe are live:
-  //  - the agreement has since ended (cancelled / suspended / expired), so
-  //    the row is history, not a task;
-  //  - the agreement never took a payment at all (an approved checkout whose
-  //    first charge failed), so there is no entitlement to protect and
-  //    nothing for anyone to do.
-  // Both sat in /billing and the admin tab as if actionable. No PayPal call
-  // needed for either; the answer is already in our own tables.
+  // Open issues the walk below can never reach:
+  //  - the agreement has since ended (cancelled / suspended / expired), so the
+  //    row is history, not a task;
+  //  - the shop holds no order rows for the agreement at all.
+  // Whether an agreement ever took a payment is NOT decided here from our own
+  // rows. Those subscriptions are walked, and handleBillingFailure asks PayPal's
+  // billing_info, because order rows lost for paying buyers made them look as if
+  // they never paid. A failed lookup leaves the issue open.
   const unreachable = db.prepare(`
     SELECT b.paypal_subscription_id AS sub_id,
            EXISTS (SELECT 1 FROM orders o WHERE o.paypal_subscription_id = b.paypal_subscription_id
                      AND o.subscription_cancelled_at IS NOT NULL) AS ended,
-           EXISTS (SELECT 1 FROM orders o WHERE o.paypal_subscription_id = b.paypal_subscription_id
-                     AND o.status IN ('completed', 'refunded')) AS ever_paid
+           EXISTS (SELECT 1 FROM orders o WHERE o.paypal_subscription_id = b.paypal_subscription_id) AS has_orders
     FROM subscription_billing_issues b
     WHERE b.resolved_at IS NULL
   `).all();
   for (const u of unreachable) {
     if (u.ended) { resolveBillingIssue(u.sub_id, 'rescan: agreement already ended'); summary.resolved++; }
-    else if (!u.ever_paid) { resolveBillingIssue(u.sub_id, 'rescan: agreement never took a payment'); summary.resolved++; }
+    else if (!u.has_orders) { resolveBillingIssue(u.sub_id, 'rescan: no orders for this agreement'); summary.resolved++; }
   }
 
   for (const row of subs) {
@@ -3851,9 +3681,10 @@ async function rescanBillingIssues(opts) {
       ).get(row.sub_id);
       const res = await handleBillingFailure({
         subId: row.sub_id, billingInfo: bi, paypalStatus: status,
-        source: 'rescan', emailPlayer: emailPlayers
+        source: 'rescan', emailPlayer: emailPlayers, postAlert: false
       });
       if (res.escalated && (!before || before.resolved_at != null)) summary.newIssues++;
+      if (res.alert) alerts.push(res.alert);
     } else {
       const open = db.prepare(
         'SELECT 1 FROM subscription_billing_issues WHERE paypal_subscription_id = ? AND resolved_at IS NULL'
@@ -3862,6 +3693,17 @@ async function rescanBillingIssues(opts) {
         resolveBillingIssue(row.sub_id, 'rescan: ' + (status || 'unknown'));
         summary.resolved++;
       }
+    }
+  }
+
+  // One card for the whole rescan. A rescan that re-opens many issues used to post
+  // a card for each, a burst nobody could read.
+  if (alerts.length) {
+    const posted = await sendCard(() => cards.billingRescanSummaryCard({ items: alerts.map(a => ({ ...a, ctx: withQueue(a.ctx) })) }));
+    if (posted && posted.ok) {
+      const at = Math.floor(Date.now() / 1000);
+      const mark = db.prepare('UPDATE subscription_billing_issues SET notified_at = ? WHERE paypal_subscription_id = ?');
+      for (const a of alerts) mark.run(at, a.subId);
     }
   }
   return summary;
@@ -4142,6 +3984,31 @@ router.get('/api/shop/admin/reminders/preview', requireAdmin, async (req, res) =
   }
 });
 
+// What the 08:30 UTC PayPal reconciliation would report right now
+// (tools/reconcile.js): payments PayPal took in the last three days that nothing in
+// the shop accounts for, and the ones already reported. Nothing is posted or
+// recorded, and PayPal is asked for no payer details. Single-flight, like the
+// doctor, because it pages through PayPal.
+let reconcilePreviewInFlight = null;
+router.get('/api/shop/admin/reconcile/preview', requireAdmin, async (req, res) => {
+  try {
+    if (!reconcilePreviewInFlight) {
+      reconcilePreviewInFlight = reconcile.runReconcile({ db, paypal, dryRun: true })
+        .finally(() => { reconcilePreviewInFlight = null; });
+    }
+    const out = await reconcilePreviewInFlight;
+    res.status(out.error ? 502 : 200).json({
+      enabled: !reconcile.reconcileOff(),
+      nextRunAt: reconcile.nextRunAt(),
+      lastRun: reconcile.lastReconcileRun(),
+      ...reconcile.previewOf(out)
+    });
+  } catch (e) {
+    console.error('[reconcile] preview failed:', e.message);
+    res.status(500).json({ error: 'Could not build the reconciliation preview.' });
+  }
+});
+
 // ---- Discord role reconciliation -------------------------------------------
 //  Roles were granted on fulfilment and removed on revoke/refund/hard-delete,
 //  but nothing removed one when a subscription simply LAPSED -- expiry is the
@@ -4397,10 +4264,11 @@ async function webhookHandler(req, res) {
   // The event doesn't tell us which environment it came from, so try live
   // first then sandbox — whichever webhook id verifies the signature wins.
   let verified = false;
+  let verifiedTestMode = false;
   for (const testMode of [false, true]) {
     const wid = getWebhookId(testMode);
     if (!wid) continue;
-    if (await paypal.verifyWebhook(testMode, req.headers, event, wid)) { verified = true; break; }
+    if (await paypal.verifyWebhook(testMode, req.headers, event, wid)) { verified = true; verifiedTestMode = testMode; break; }
   }
   if (!verified) {
     console.error('[paypal] webhook signature verification failed:', event.event_type);
@@ -4411,8 +4279,16 @@ async function webhookHandler(req, res) {
   const orderId = parseInt(resource.custom_id, 10);
 
   try {
-    await dispatchPayPalEvent(event, resource, orderId);
+    // testMode is which webhook verified the event: the only way to mark a card
+    // [TEST] when no order row says so.
+    await dispatchPayPalEvent(event, resource, orderId, { testMode: verifiedTestMode });
   } catch (e) {
+    if (e && e.retryLater) {
+      // Expected, not a bug: answered 500 on purpose so PayPal delivers the event
+      // again later (a refund webhook that lands while staff are revoking the order).
+      console.warn(`[paypal] ${event.event_type} left for PayPal to deliver again: ${e.message}`);
+      return res.sendStatus(500);
+    }
     // Never let a webhook bug crash the process — PayPal aggressively
     // retries on non-2xx, so a single bad event would loop-kill the box.
     console.error(`[paypal] webhook handler threw on ${event.event_type}:`, e.stack || e.message);
@@ -4421,60 +4297,71 @@ async function webhookHandler(req, res) {
   return res.sendStatus(200);
 }
 
+// A subscription payment for a subscription the shop holds no order rows for at
+// all (paymentEvents.recordUnmatchedSale). Grants nothing; records the sale once
+// and posts a red card. The webhook still answers 200.
+function reportUnmatchedSale(subId, resource, { amountCents = null, testMode = false, now = Math.floor(Date.now() / 1000) } = {}) {
+  const currency = String((resource.amount && resource.amount.currency) || 'usd').toUpperCase();
+  const named = parseInt(resource.custom != null ? resource.custom : resource.custom_id, 10);
+  const customId = Number.isInteger(named) && named > 0 ? named : null;
+  let recorded;
+  try {
+    recorded = paymentEvents.recordUnmatchedSale(db, { saleId: resource.id, subscriptionId: subId, amountCents, currency, customId, now });
+  } catch (e) {
+    // Not recorded, but staff still hear about the money.
+    console.error(`[billing] payment ${resource.id} on subscription ${subId}: not recorded: ${e.message}`);
+    recorded = true;
+  }
+  if (!recorded) return;
+  const money = Number.isFinite(amountCents) ? `$${(amountCents / 100).toFixed(2)} ${currency}` : 'amount not given';
+  console.error(`[billing] payment ${resource.id} (${money}${testMode ? ', sandbox' : ''}) on subscription ${subId} matches no order at all; nothing granted`);
+  sendCard(() => cards.unmatchedSaleCard({ subId, saleId: resource.id, amountCents, currency, customId, testMode }));
+}
+
 // A renewal PayPal took on a subscription whose orders were all revoked or
 // refunded (pqGuards.recordRevokedRenewal says how that happens). Grants nothing;
 // records the sale once and tells staff, who decide whether to cancel and refund.
-function reportRevokedRenewal(subId, resource) {
+// A subscription with no order rows at all goes to reportUnmatchedSale instead.
+function reportRevokedRenewal(subId, resource, { testMode = false } = {}) {
   const amountCents = resource.amount && resource.amount.total != null ? ppValueToCents(resource.amount.total) : null;
+  const now = Math.floor(Date.now() / 1000);
   const recorded = pqGuards.recordRevokedRenewal(db, {
-    saleId: resource.id, subscriptionId: subId, amountCents, now: Math.floor(Date.now() / 1000)
+    saleId: resource.id, subscriptionId: subId, amountCents, now
   });
+  if (recorded === null) {
+    reportUnmatchedSale(subId, resource, { amountCents, testMode, now });
+    return;
+  }
   if (!recorded) return;
   const { orders } = recorded;
   const currency = String((resource.amount && resource.amount.currency) || 'usd').toUpperCase();
   const money = amountCents != null ? `$${(amountCents / 100).toFixed(2)} ${currency}` : 'amount not given';
   const sandbox = orders.every(o => o.test_mode);
   const orderList = orders.map(o => `#${o.id} ${o.status}`).join(', ');
-  const accounts = Array.from(new Set(orders.map(o => o.steam_id))).join(', ');
   console.error(`[billing] renewal ${resource.id} (${money}${sandbox ? ', sandbox' : ''}) on subscription ${subId} matched no live order (${orderList}); nothing granted. Cancel it in PayPal and refund if the player should not be billed.`);
-  postCard({
-    title: 'Renewal received for a revoked subscription',
-    color: COLORS.red,
-    description: 'PayPal billed a subscription whose orders were all revoked or refunded. Nothing was granted.',
-    fields: [
-      { name: 'Orders', value: orderList, inline: false },
-      { name: 'Subscription', value: '`' + subId + '`', inline: true },
-      { name: 'Amount', value: money + (sandbox ? ' (sandbox)' : ''), inline: true },
-      { name: 'Account', value: accounts, inline: false },
-      { name: 'Sale', value: '`' + resource.id + '`', inline: true }
-    ],
-    footer: 'Cancel the agreement in PayPal, and refund this payment if the player should not be billed.'
-  }).catch(() => {});
+  // The newest order names the product, server and player on the card.
+  let context = null;
+  try {
+    context = withQueue(getOrderWithContext(orders[orders.length - 1].id)) || null;
+  } catch (e) {
+    console.error(`[billing] renewal ${resource.id}: order context not loaded: ${e.message}`);
+  }
+  sendCard(() => cards.revokedRenewalCard({ subId, saleId: resource.id, orders, amountCents, currency, context }));
 }
 
-// A renewal booked on a subscription whose newest cycle had been refunded
-// (pqGuards.refundedLatestCycle says why it is still booked). Once per sale: the
-// caller only gets here after inserting the new cycle, which PayPal's retries skip.
-function reportRenewalAfterRefund(subId, resource, { refundedOrderId, newOrderId, original, amountCents }) {
+// A renewal booked on a subscription whose newest cycle had been revoked, with or
+// without a refund (pqGuards.refundedLatestCycle says why it is still booked). Once
+// per sale: the caller only gets here after inserting the new cycle, which PayPal's
+// retries skip. This is the sale's only card; the caller posts no renewed card.
+function reportRenewalAfterRefund(subId, resource, { refundedOrderId, newOrderId, original, amountCents, noRefund = false, nextCharge = null }) {
   const money = Number.isFinite(amountCents)
     ? `$${(amountCents / 100).toFixed(2)} ${String(original.currency || 'usd').toUpperCase()}`
     : 'amount not given';
   const sandbox = !!original.test_mode;
-  console.error(`[billing] renewal ${resource.id} (${money}${sandbox ? ', sandbox' : ''}) on subscription ${subId} came after order #${refundedOrderId} was refunded; booked as order #${newOrderId}. Revoke it with a refund if the subscription was meant to end.`);
-  postCard({
-    title: 'Renewal after a refund',
-    color: COLORS.red,
-    description: `PayPal billed a subscription whose latest cycle was revoked or refunded. The renewal was booked and its perks given as normal, because a refund made on PayPal's side can leave a subscription that is meant to carry on.`,
-    fields: [
-      { name: 'Refunded cycle', value: `#${refundedOrderId}`, inline: true },
-      { name: 'New cycle', value: `#${newOrderId} ${original.product_title}`, inline: true },
-      { name: 'Amount', value: money + (sandbox ? ' (sandbox)' : ''), inline: true },
-      { name: 'Player', value: playerNameOf(original) || original.steam_id, inline: true },
-      { name: 'Subscription', value: '`' + subId + '`', inline: false },
-      { name: 'Sale', value: '`' + resource.id + '`', inline: true }
-    ],
-    footer: 'If the subscription was meant to end, revoke the new cycle with a refund: that also cancels it at PayPal.'
-  }).catch(() => {});
+  console.error(`[billing] renewal ${resource.id} (${money}${sandbox ? ', sandbox' : ''}) on subscription ${subId} came after order #${refundedOrderId} was ${noRefund ? 'revoked without a refund' : 'refunded'}; booked as order #${newOrderId}. Revoke it with a refund if the subscription was meant to end.`);
+  sendCard(() => cards.renewalAfterRefundCard({
+    subId, saleId: resource.id, refundedOrderId, newOrderId, original: withQueue({ ...original, id: newOrderId }), amountCents, noRefund, nextCharge
+  }));
 }
 
 // A second live priority queue subscription for the same account and server,
@@ -4489,24 +4376,37 @@ function reportDuplicateSubscription(orderId) {
     if (!order) return;
     const where = order.server_specific && order.server_id ? (SERVER_LABELS[order.server_id] || order.server_id) : 'every server';
     console.error(`[pq-guard] order #${order.id}: ${order.steam_id} now has two live priority queue subscriptions for ${where} (order #${other.id} already live); nothing cancelled`);
-    postCard({
-      title: 'Duplicate priority queue subscription',
-      color: COLORS.red,
-      description: `This account now pays for two auto-renewing priority queue subscriptions for ${where}. Nothing was cancelled or refunded. Check with the player, then cancel and refund the one they did not mean to buy.`,
-      fields: [
-        { name: 'Player', value: playerNameOf(order) || order.steam_id, inline: true },
-        { name: 'Account', value: order.steam_id, inline: true },
-        { name: 'New', value: `#${order.id} \`${order.paypal_subscription_id}\``, inline: false },
-        { name: 'Already live', value: `#${other.id} \`${other.paypal_subscription_id}\`${other.effective_until ? `, paid up to <t:${other.effective_until}:D>` : ''}`, inline: false }
-      ],
-      footer: order.test_mode ? 'Sandbox' : 'Revoke with refund also cancels that subscription at PayPal'
-    }).catch(() => {});
+    sendCard(() => cards.duplicateSubscriptionCard(order, other));
   } catch (e) {
     console.error(`[pq-guard] order #${orderId}: duplicate subscription check failed: ${e.message}`);
   }
 }
 
-async function dispatchPayPalEvent(event, resource, orderId) {
+// The effects the refund and dispute handlers in paymentEvents.js use.
+function paymentEffects() {
+  return {
+    getOrderWithContext: (id) => withQueue(getOrderWithContext(id)),
+    removeRole: tryRemoveDiscordRoleForOrder,
+    sync: () => syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message)),
+    sendCard: (specFn) => sendCard(specFn),
+    sendRefundEmail: ({ order, amountCents, resource }) => {
+      const to = order.payer_email || (resource && resource.payer && resource.payer.email_address) || null;
+      if (!to) return;
+      sendRefundConfirmation({
+        to,
+        displayName: playerNameOf(order),
+        productTitle: order.product_title,
+        amountCents,
+        currency: order.currency,
+        captureId: order.paypal_capture_id,
+        orderId: order.id,
+        dateMs: Date.now()
+      }).catch(e => console.error('[refund-mail] send failed:', e.message));
+    }
+  };
+}
+
+async function dispatchPayPalEvent(event, resource, orderId, { testMode = false } = {}) {
   switch (event.event_type) {
     case 'PAYMENT.CAPTURE.COMPLETED': {
       if (orderId) {
@@ -4529,13 +4429,7 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(orderId);
         const order = getOrderWithContext(orderId);
         if (order) {
-          sendDiscordNotification({
-            eventType: 'payment_failed',
-            user: { platform: order.platform, persona: order.persona, steam_id: order.steam_id, gamertag: order.gamertag, bm_player_id: order.bm_player_id },
-            biUid: order.bi_uid, productTitle: order.product_title,
-            amountCents: order.amount_cents, currency: order.currency,
-            status: 'failed', serverId: order.server_id
-          });
+          sendCard(() => cards.orderEventCard('payment_declined', withQueue(order)));
         }
       }
       break;
@@ -4567,10 +4461,15 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         if (nextBilling) {
           const untilUnix = Math.floor(new Date(nextBilling).getTime() / 1000);
           if (isFinite(untilUnix) && untilUnix > 0) {
-            const upd = db.prepare(
-              "UPDATE orders SET effective_until = ? WHERE id = ? AND status = 'completed'"
-            ).run(untilUnix, found.id);
-            if (upd.changes === 0) {
+            // Only ever moves the date later: a retried ACTIVATED still carries the
+            // first billing date, which must not undo a later cycle or extension.
+            const current = db.prepare("SELECT effective_until FROM orders WHERE id = ? AND status = 'completed'").get(found.id);
+            if (current) {
+              db.prepare(
+                "UPDATE orders SET effective_until = ? WHERE id = ? AND status = 'completed' AND (effective_until IS NULL OR effective_until < ?)"
+              ).run(untilUnix, found.id, untilUnix);
+            }
+            if (!current) {
               console.error(`[paypal] sub ${subId} activated but order ${found.id} is not completed — entitlement NOT set. Buyer has paid; investigate.`);
             } else {
               // Keep a moved holder's grant alive from the first cycle too.
@@ -4616,43 +4515,49 @@ async function dispatchPayPalEvent(event, resource, orderId) {
           if (!existing) {
             // PAYMENT.SALE.COMPLETED doesn't include next_billing_time, but
             // the sub does — one extra API call gets us the cycle end so
-            // mid-cycle cancellations honour the paid period.
-            let effectiveUntil = null;
-            try {
-              const sub = await paypal.getSubscription(!!original.test_mode, subId);
-              const next = sub?.billing_info?.next_billing_time;
-              if (next) {
-                const u = Math.floor(new Date(next).getTime() / 1000);
-                if (isFinite(u) && u > 0) effectiveUntil = u;
-              }
-            } catch (e) {
-              console.warn('[paypal] renewal next_billing_time lookup failed:', e.message);
-            }
+            // mid-cycle cancellations honour the paid period. When PayPal gives
+            // none (a failed lookup, or a sale arriving after the agreement ended),
+            // the sale time plus one billing period stands in: a completed row
+            // with no date would never expire (paymentEvents.renewalCycleEnd).
+            const cycleEnd = await paymentEvents.renewalCycleEnd({
+              paypal, testMode: !!original.test_mode, subscriptionId: subId, resource
+            });
+            const effectiveUntil = cycleEnd.effectiveUntil;
+            const nextBillingAt = cycleEnd.nextBillingAt;
             // First-cycle case: BILLING.SUBSCRIPTION.ACTIVATED already
             // promoted the buyer's pending order to completed with no
             // capture id (or a legacy capture_id == subId placeholder). Fill
-            // it in here instead of inserting a duplicate row.
-            const placeholder = db.prepare(`
-              SELECT id FROM orders
-              WHERE paypal_subscription_id = ? AND status = 'completed'
-                AND (paypal_capture_id IS NULL OR paypal_capture_id = paypal_subscription_id)
-              ORDER BY id ASC LIMIT 1
-            `).get(subId);
+            // it in here instead of inserting a duplicate row, but only for a
+            // sale in the first billing cycle (paymentEvents.isFirstCycleSale).
+            // A later sale finding that row unpaid is a renewal whose first sale
+            // never arrived: it gets its own row, card and invoice.
+            const unpaidFirst = paymentEvents.unpaidFirstCycleRow(db, subId);
+            const placeholder = unpaidFirst && paymentEvents.isFirstCycleSale(unpaidFirst, paymentEvents.saleTimeOf(resource))
+              ? unpaidFirst : null;
+            if (unpaidFirst && !placeholder) {
+              console.warn(`[paypal] sale ${resource.id} on ${subId} is outside the first cycle of order #${unpaidFirst.id}, which has no payment booked; booked as a renewal`);
+            }
             let newOrderId;
+            let refundedBefore = null;
             if (placeholder) {
+              // effective_until only moves later here, to PayPal's own date; the
+              // stand-in date only fills a row that has none.
               db.prepare(`
                 UPDATE orders SET
                   paypal_capture_id = ?,
                   payer_email = COALESCE(?, payer_email),
                   fee_cents = ?,
-                  effective_until = COALESCE(?, effective_until),
+                  effective_until = CASE WHEN ? IS NOT NULL AND (effective_until IS NULL OR effective_until < ?)
+                                         THEN ?
+                                         WHEN effective_until IS NULL THEN ?
+                                         ELSE effective_until END,
                   amount_cents = ?
                 WHERE id = ?
               `).run(
                 resource.id,
                 resource.payer?.email_address || null,
                 feeCents,
-                effectiveUntil,
+                nextBillingAt, nextBillingAt, nextBillingAt, effectiveUntil,
                 cycleAmount,
                 placeholder.id
               );
@@ -4660,8 +4565,8 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             } else {
               // True renewal cycle — buyer's been on the sub for ≥1 month and
               // this is a fresh billing. Insert a new row. Asked first, while the
-              // new row is not yet the newest: was the latest cycle refunded?
-              const refundedBefore = pqGuards.refundedLatestCycle(db, subId);
+              // new row is not yet the newest: was the latest cycle revoked?
+              refundedBefore = pqGuards.refundedLatestCycle(db, subId);
               const ins = db.prepare(`
                 INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
                                     paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
@@ -4676,7 +4581,8 @@ async function dispatchPayPalEvent(event, resource, orderId) {
               newOrderId = ins.lastInsertRowid;
               if (refundedBefore) {
                 reportRenewalAfterRefund(subId, resource, {
-                  refundedOrderId: refundedBefore.id, newOrderId, original, amountCents: cycleAmount
+                  refundedOrderId: refundedBefore.id, newOrderId, original, amountCents: cycleAmount,
+                  noRefund: !!refundedBefore.noRefund, nextCharge: nextBillingAt
                 });
               }
             }
@@ -4690,22 +4596,15 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             // here would mean two notifications and two invoice emails for
             // a single payment.
             if (!placeholder) {
-              sendDiscordNotification({
-                eventType: 'subscription_renewed',
-                user: {
-                  platform: original.platform,
-                  persona: original.persona,
-                  steam_id: original.steam_id,
-                  gamertag: original.gamertag,
-                  bm_player_id: original.bm_player_id
-                },
-                biUid: original.bi_uid,
-                productTitle: original.product_title,
-                amountCents: cycleAmount,
-                currency: original.currency,
-                status: 'completed',
-                serverId: original.server_id
-              });
+              // The card is about the new cycle's row, so its link and footer
+              // point at that order, not the subscription's first one. A renewal
+              // after a revoked cycle already has its red card, which carries these
+              // facts: one sale, one card.
+              if (!refundedBefore) {
+                sendCard(() => cards.orderEventCard('subscription_renewed',
+                  withQueue({ ...original, id: newOrderId, amount_cents: cycleAmount, paypal_subscription_id: subId }),
+                  { nextCharge: nextBillingAt }));
+              }
               syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
               tryAssignDiscordRoleForOrder(newOrderId);
               if (resource.payer?.email_address || original.payer_email) {
@@ -4724,9 +4623,10 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             }
           }
         } else {
-          // No completed or pending order: the subscription was revoked, yet
-          // PayPal billed it. Still 200, so PayPal does not retry.
-          reportRevokedRenewal(subId, resource);
+          // No completed or pending order: the subscription was revoked, or the
+          // shop has no order for it at all, yet PayPal billed it. Still 200, so
+          // PayPal does not retry.
+          reportRevokedRenewal(subId, resource, { testMode });
         }
       }
       break;
@@ -4738,38 +4638,47 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       const subId = resource.id;
       if (!subId) break;
 
-      // Buyer paid for the current cycle — they keep their entitlement
-      // through the end of it. Pin effective_until on the most recent
-      // completed cycle to PayPal's next_billing_time (or the event-supplied
-      // next billing date), and stop accepting future cycles by cancelling
-      // any pending row. Status on completed cycles stays 'completed' so
-      // sync.js's effective_until check is what eventually removes them.
-      const next = resource.billing_info?.next_billing_time;
-      let until = null;
-      if (next) {
-        const u = Math.floor(new Date(next).getTime() / 1000);
-        if (isFinite(u) && u > 0) until = u;
+      // Buyer paid for the current cycle, so they keep their entitlement
+      // through the end of it, and a cancel, suspension or expiry never cuts it
+      // short: dates only move later (paymentEvents.applyPaidThroughFloor). When
+      // PayPal shows the last payment, access runs at least to that payment plus
+      // one billing interval of the plan. Future cycles stop by cancelling any
+      // pending row. Status on completed cycles stays 'completed' so sync.js's
+      // effective_until check is what eventually removes them.
+      const newestRow = db.prepare('SELECT test_mode FROM orders WHERE paypal_subscription_id = ? ORDER BY id DESC LIMIT 1').get(subId);
+      const endedTestMode = newestRow ? !!newestRow.test_mode : testMode;
+      const hasPaidCycle = !!db.prepare("SELECT 1 FROM orders WHERE paypal_subscription_id = ? AND status = 'completed' LIMIT 1").get(subId);
+      let billingInfo = resource.billing_info || null;
+      let planId = resource.plan_id || null;
+      if (hasPaidCycle && !(billingInfo && billingInfo.last_payment)) {
+        // The event is a snapshot and can leave billing_info out.
+        try {
+          const sub = await paypal.getSubscription(endedTestMode, subId);
+          if (sub && sub.billing_info) billingInfo = sub.billing_info;
+          planId = planId || (sub && sub.plan_id) || null;
+        } catch (e) {
+          console.warn(`[paypal] ${subId} ended: subscription lookup failed, so access stays where it is: ${e.message}`);
+        }
       }
-      // Fallback: most recent cycle's completed_at + 31 days (approx monthly).
-      if (!until) {
-        const last = db.prepare(`
-          SELECT completed_at FROM orders
-          WHERE paypal_subscription_id = ? AND status = 'completed'
-          ORDER BY id DESC LIMIT 1
-        `).get(subId);
-        if (last?.completed_at) until = last.completed_at + 31 * 86400;
+      let floor = null;
+      let lastPaymentAt = null;
+      if (hasPaidCycle && billingInfo && billingInfo.last_payment) {
+        const interval = await paymentEvents.planInterval(paypal, { testMode: endedTestMode, planId });
+        floor = paymentEvents.paidThroughOf(billingInfo, interval);
+        lastPaymentAt = paymentEvents.unixOf(billingInfo.last_payment.time);
       }
 
       // Drop any pending cycle (buyer abandoned approval or sub never activated)
       db.prepare(`UPDATE orders SET status = 'cancelled' WHERE paypal_subscription_id = ? AND status = 'pending'`).run(subId);
 
-      if (until) {
-        db.prepare(`
-          UPDATE orders SET effective_until = ?
-          WHERE paypal_subscription_id = ? AND status = 'completed'
-            AND (effective_until IS NULL OR effective_until > ?)
-        `).run(until, subId, until);
+      const access = paymentEvents.applyPaidThroughFloor(db, { subscriptionId: subId, floor, lastPaymentAt });
+      if (access.raised) {
+        console.log(`[paypal] ${subId} ended: order #${access.raised.id} keeps access until ${new Date(access.raised.to * 1000).toISOString()} (the last payment plus one billing period)`);
       }
+      if (access.skipped) {
+        console.log(`[paypal] ${subId} ended: its newest cycle was revoked, so access was not extended`);
+      }
+      const until = access.accessUntil;
       // This is the authoritative "PayPal says this billing agreement is
       // dead" signal — separate from effective_until, which only tracks how
       // long the buyer keeps access. Without this, the order row stays
@@ -4795,36 +4704,34 @@ async function dispatchPayPalEvent(event, resource, orderId) {
         WHERE o.paypal_subscription_id = ?
         ORDER BY o.id DESC LIMIT 1
       `).get(subId);
+      // A cancel the shop itself asked PayPal for (a staff revoke, closing a
+      // suspended agreement, deleting a product) was reported by that action, so
+      // this webhook still changes the state above but posts no card and sends no
+      // email. Keyed on the marker the shop wrote when it cancelled, never on
+      // subscription_ended_reason: the player's own cancel sets that first too,
+      // and this webhook is what emails that player.
+      const shopCancel = endedReason === 'cancelled' ? paymentEvents.shopCancelFor(db, subId) : null;
+      // Which notices go out (paymentEvents.endedNotices): a staff revoke that
+      // returned no money still emails the player, with no promise about access.
+      const notices = paymentEvents.endedNotices({ shopCancel });
+      if (ctx && shopCancel) {
+        console.log(`[paypal] ${subId} cancelled by the shop itself (${shopCancel.source}); that action already reported it, so no card${notices.email ? '' : ' or email'}`);
+      }
       if (ctx) {
-        const bi = resource.billing_info || {};
+        const bi = resource.billing_info || billingInfo || {};
         const failedCount = bi.failed_payments_count || 0;
         const outstandingCents = ppValueToCents(bi.outstanding_balance && bi.outstanding_balance.value);
-        const extraFields = [];
-        if (endedReason === 'cancelled') {
-          // PayPal records who ended it. "Cancelled by customer" is written
-          // only by our own cancel endpoint; an empty note means the buyer did
-          // it from PayPal's side. Staff kept reading one as the other.
-          const note = resource.status_change_note || null;
-          extraFields.push({ name: 'Cancelled via', value: note || 'PayPal, by the buyer (no note)', inline: false });
-        } else if (endedReason === 'suspended') {
-          extraFields.push({ name: 'Why', value: `PayPal stopped retrying after ${failedCount} failed payment${failedCount === 1 ? '' : 's'}`, inline: false });
-          if (outstandingCents) {
-            extraFields.push({ name: 'Outstanding', value: `$${(outstandingCents / 100).toFixed(2)} ${(ctx.currency || 'usd').toUpperCase()}`, inline: true });
-          }
+        // No Amount on an ended card: nothing was paid or returned. Access until
+        // shows what the player keeps; "Cancelled via" is PayPal's note on who
+        // ended it (paymentCards.subscriptionEndedCard).
+        if (notices.card) {
+          sendCard(() => cards.subscriptionEndedCard(endedReason, withQueue(ctx), {
+            accessUntil: until, note: resource.status_change_note || null, failedCount, outstandingCents
+          }));
         }
-        // Use what this order actually charged (o.amount_cents), not the
-        // product's current listed price — those can drift apart if the
-        // price changes after the order was placed.
-        sendDiscordNotification({
-          eventType: 'subscription_' + endedReason,
-          user: { platform: ctx.platform, persona: ctx.persona, steam_id: ctx.steam_id, gamertag: ctx.gamertag, bm_player_id: ctx.bm_player_id },
-          biUid: ctx.bi_uid, productTitle: ctx.product_title,
-          amountCents: ctx.amount_cents, currency: ctx.currency,
-          status: endedReason,
-          serverId: ctx.server_id,
-          extraFields
-        });
-        const to = resource.subscriber?.email_address || ctx.payer_email;
+        const to = notices.email ? (resource.subscriber?.email_address || ctx.payer_email) : null;
+        // After a no-refund revoke, only access an older cycle still gives is mentioned.
+        const showAccess = notices.claimAccess || (until != null && until > Math.floor(Date.now() / 1000));
         if (to) {
           const displayName = playerNameOf(ctx);
           const mail = endedReason === 'suspended'
@@ -4838,9 +4745,10 @@ async function dispatchPayPalEvent(event, resource, orderId) {
             : sendSubscriptionCancelled({
                 to, displayName,
                 productTitle: ctx.product_title,
-                accessEndsAtMs: until ? until * 1000 : null,
+                accessEndsAtMs: showAccess && until ? until * 1000 : null,
                 priceCents: ctx.amount_cents,
-                currency: ctx.currency
+                currency: ctx.currency,
+                showAccess
               });
           mail.catch(e => console.error('[cancel-mail] send failed:', e.message));
         }
@@ -4855,8 +4763,23 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       // anyone has to reason about. No money is given up: PayPal does not
       // collect an outstanding balance on a suspended agreement either.
       if (endedReason === 'suspended') {
-        paypal.cancelSubscription(!!(ctx && ctx.test_mode), subId, 'Closed automatically after PayPal stopped retrying failed payments')
-          .then(() => console.log(`[paypal] suspended agreement ${subId} closed`))
+        // Marked as the shop's own close before PayPal is asked
+        // (paymentEvents.cancelAtPayPal), so the CANCELLED webhook it causes posts
+        // no second card and sends no second email: the suspended card and email
+        // above are the report.
+        paymentEvents.cancelAtPayPal({
+          db, paypal, testMode: endedTestMode, subscriptionId: subId,
+          reason: 'Closed automatically after PayPal stopped retrying failed payments', source: 'auto_close_suspended'
+        })
+          .then((r) => {
+            if (r.outcome === 'failed' || r.outcome === 'unknown') {
+              // The Suspended card said the shop is closing it; staff must hear it did not.
+              console.error(`[paypal] could not close suspended agreement ${subId} (${r.outcome === 'unknown' ? 'no answer from PayPal' : 'refused'}): ${r.error}`);
+              sendCard(() => cards.closeSuspendedFailedCard({ subId, ctx: ctx ? withQueue(ctx) : null, cancel: r }));
+            } else {
+              console.log(`[paypal] suspended agreement ${subId} ${r.outcome === 'cancelled' ? 'closed' : 'was already closed'}`);
+            }
+          })
           .catch(e => console.error(`[paypal] could not close suspended agreement ${subId}: ${e.message}`));
       }
       break;
@@ -4872,14 +4795,8 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       clearSubscriptionEndedLocally(subId);
       const ctx = getBillingIssueContext(subId);
       if (ctx) {
-        sendDiscordNotification({
-          eventType: 'subscription_reactivated',
-          user: { platform: ctx.platform, persona: ctx.persona, steam_id: ctx.steam_id, gamertag: ctx.gamertag, bm_player_id: ctx.bm_player_id },
-          biUid: ctx.bi_uid, productTitle: ctx.product_title,
-          amountCents: ctx.amount_cents, currency: ctx.currency,
-          status: 'active',
-          serverId: ctx.server_id
-        });
+        // No Amount: bringing an agreement back moves no money.
+        sendCard(() => cards.orderEventCard('subscription_reactivated', withQueue(ctx), { subscriptionId: subId, amountCents: null }));
       }
       break;
     }
@@ -4902,45 +4819,39 @@ async function dispatchPayPalEvent(event, resource, orderId) {
       break;
     }
 
+    // Money going back: a refund (by staff here, or in PayPal) or a reversal. The
+    // order is found by the refunded payment's own id, never by custom_id, which
+    // for a subscription names its FIRST order. Each refund is recorded once, so a
+    // retry or the echo of a staff refund posts nothing. A partial refund leaves the
+    // order as it is, and a reversal never changes it. paymentEvents.js has the rules.
     case 'PAYMENT.CAPTURE.REFUNDED':
-    case 'PAYMENT.CAPTURE.REVERSED': {
-      // The refunded capture id is in resource.links / supplementary; match
-      // by our stored capture id when custom_id isn't present on refunds.
-      const capId = resource.id || null;
-      let order = orderId
-        ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId)
-        : null;
-      if (!order && capId) {
-        order = db.prepare('SELECT * FROM orders WHERE paypal_capture_id = ?').get(capId);
-      }
-      if (order && order.status === 'completed') {
-        db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(order.id);
-        tryRemoveDiscordRoleForOrder(order.id);
-        syncPurchasesToServers().catch(e => console.error('[sync] Error:', e.message));
-        const full = getOrderWithContext(order.id);
-        if (full) {
-          sendDiscordNotification({
-            eventType: 'order_revoked',
-            user: { platform: full.platform, persona: full.persona, steam_id: full.steam_id, gamertag: full.gamertag, bm_player_id: full.bm_player_id },
-            biUid: full.bi_uid, productTitle: full.product_title,
-            amountCents: full.amount_cents, currency: full.currency,
-            status: 'refunded', serverId: full.server_id
-          });
-          const to = full.payer_email || resource.payer?.email_address || null;
-          if (to) {
-            sendRefundConfirmation({
-              to,
-              displayName: playerNameOf(full),
-              productTitle: full.product_title,
-              amountCents: full.amount_cents,
-              currency: full.currency,
-              captureId: full.paypal_capture_id,
-              orderId: full.id,
-              dateMs: Date.now()
-            }).catch(e => console.error('[refund-mail] send failed:', e.message));
-          }
-        }
-      }
+    case 'PAYMENT.CAPTURE.REVERSED':
+    case 'PAYMENT.SALE.REFUNDED':
+    case 'PAYMENT.SALE.REVERSED': {
+      await paymentEvents.handleRefundEvent(db, {
+        eventType: event.event_type,
+        event,
+        resource,
+        customId: orderId,
+        testMode,
+        inFlight: (id) => revokesInFlight.has(id)
+      }, paymentEffects());
+      break;
+    }
+
+    // A refund PayPal accepted and then could not complete: the money never reached
+    // the buyer. Recorded and carded; the order is not changed.
+    case 'PAYMENT.REFUND.FAILED': {
+      await paymentEvents.handleRefundFailure(db, { event, resource, testMode }, paymentEffects());
+      break;
+    }
+
+    // Disputes and chargebacks: recorded, and staff get a card when one opens,
+    // moves or closes. Nothing changes on the order or its perks automatically.
+    case 'CUSTOMER.DISPUTE.CREATED':
+    case 'CUSTOMER.DISPUTE.UPDATED':
+    case 'CUSTOMER.DISPUTE.RESOLVED': {
+      await paymentEvents.handleDisputeEvent(db, { eventType: event.event_type, resource, testMode }, paymentEffects());
       break;
     }
   }

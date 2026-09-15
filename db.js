@@ -742,4 +742,81 @@ db.exec(`
   );
 `);
 
+// PayPal money events, recorded by paymentEvents.js (which says how each is used).
+//  - paypal_refunds: one row per PayPal refund or reversal id, so a webhook retry,
+//    or the webhook for a refund staff made through the revoke route, is recognised
+//    and reported once. kind: refund | reversal. source: staff | webhook. order_id
+//    is NULL when no order owns the refunded payment. A refund PayPal later reports
+//    as failed (PAYMENT.REFUND.FAILED) keeps its row with kind refund_failed.
+//  - paypal_disputes: one row per dispute, with the last status and outcome seen,
+//    so a card goes out when a dispute opens, moves or closes, and never twice.
+//  - subscription_cancels: the shop's own cancels at PayPal (staff revoke, closing a
+//    suspended agreement, deleting a product), written before PayPal is asked, so
+//    the CANCELLED webhook that follows stays quiet. A player's own cancel is not
+//    written here.
+//  - unmatched_sales: subscription payments PayPal took for a subscription with no
+//    order rows at all, once per sale id.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS paypal_refunds (
+    refund_id     TEXT PRIMARY KEY,
+    order_id      INTEGER,
+    payment_id    TEXT,
+    amount_cents  INTEGER,
+    currency      TEXT,
+    kind          TEXT NOT NULL DEFAULT 'refund',
+    source        TEXT NOT NULL DEFAULT 'webhook',
+    received_at   INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_paypal_refunds_order ON paypal_refunds(order_id);
+
+  CREATE TABLE IF NOT EXISTS paypal_disputes (
+    dispute_id    TEXT PRIMARY KEY,
+    order_id      INTEGER,
+    payment_id    TEXT,
+    status        TEXT,
+    outcome       TEXT,
+    reason        TEXT,
+    stage         TEXT,
+    amount_cents  INTEGER,
+    currency      TEXT,
+    respond_by    INTEGER,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_paypal_disputes_order ON paypal_disputes(order_id);
+
+  CREATE TABLE IF NOT EXISTS subscription_cancels (
+    subscription_id  TEXT PRIMARY KEY,
+    source           TEXT NOT NULL,
+    requested_at     INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS unmatched_sales (
+    sale_id          TEXT PRIMARY KEY,
+    subscription_id  TEXT NOT NULL,
+    amount_cents     INTEGER,
+    currency         TEXT,
+    custom_id        TEXT,
+    received_at      INTEGER NOT NULL
+  );
+`);
+
+// When staff revoked an order WITHOUT returning money. A revoke stores status
+// 'refunded' either way, because every entitlement reader treats that status as
+// "no perks"; this column is what tells the money readers (finance totals, the
+// staff cards) that nothing went back. A later refund of the order in PayPal
+// clears it. NULL for every order revoked before the column existed.
+if (!orderHasColumn('revoked_without_refund_at')) {
+  db.exec("ALTER TABLE orders ADD COLUMN revoked_without_refund_at INTEGER");
+}
+
+// PayPal payments the daily reconciliation (tools/reconcile.js) has already
+// reported to staff as booked by nothing in the shop, so each one is reported once.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reconcile_seen (
+    transaction_id  TEXT PRIMARY KEY,
+    reported_at     INTEGER NOT NULL
+  );
+`);
+
 module.exports = db;

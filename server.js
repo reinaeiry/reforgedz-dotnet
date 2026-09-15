@@ -1481,6 +1481,13 @@ try {
 } catch (e) {
   console.error('[backup] could not schedule:', e.message);
 }
+// The 08:30 UTC PayPal reconciliation (tools/reconcile.js): payments PayPal took
+// that nothing in the shop accounts for, in one card before the health card.
+try {
+  require('./tools/reconcile').scheduleDailyReconcile();
+} catch (e) {
+  console.error('[reconcile] could not schedule:', e.message);
+}
 // The morning health card in #Payment-Processor (tools/healthReport.js): heals
 // missing entitlement roles, runs the deep doctor, posts one embed.
 try {

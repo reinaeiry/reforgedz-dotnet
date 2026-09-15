@@ -273,7 +273,9 @@ async function sendSubscriptionInvite({ to, displayName, productTitle, priceCent
 // Confirmation that an auto-renewing subscription was cancelled. The buyer
 // keeps their entitlement through the end of the current paid cycle — the
 // email surfaces that end date so they don't think they lost access.
-async function sendSubscriptionCancelled({ to, displayName, productTitle, accessEndsAtMs, priceCents, currency }) {
+// showAccess false leaves the access sentence out: after a staff revoke the paid
+// period was taken away, and the email must not promise it.
+async function sendSubscriptionCancelled({ to, displayName, productTitle, accessEndsAtMs, priceCents, currency, showAccess = true }) {
   const tx = getTransport();
   if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
   if (!to) return { ok: false, skipped: 'no_recipient' };
@@ -285,6 +287,10 @@ async function sendSubscriptionCancelled({ to, displayName, productTitle, access
     ? new Date(accessEndsAtMs).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC'
     : 'the end of your current paid period';
   const priceLine = priceCents ? ` (${money(priceCents, currency)}/month)` : '';
+  const accessHtml = showAccess === false ? ''
+    : `<p style="margin:0 0 12px">You keep your access through <strong>${esc(endsStr)}</strong> — that's the end of the period you already paid for.</p>`;
+  const accessText = showAccess === false ? []
+    : [`You keep your access through ${endsStr} — that's the end of the period`, 'you already paid for.', ''];
 
   const html = `<!doctype html>
 <html>
@@ -296,7 +302,7 @@ async function sendSubscriptionCancelled({ to, displayName, productTitle, access
         <tr><td style="padding:28px 24px;font-size:15px;color:#1a1a1a;line-height:1.55">
           <p style="margin:0 0 12px">Hi ${esc(name)},</p>
           <p style="margin:0 0 12px">Your <strong>${esc(item)}</strong>${esc(priceLine)} subscription has been cancelled. You won't be charged again.</p>
-          <p style="margin:0 0 12px">You keep your access through <strong>${esc(endsStr)}</strong> — that's the end of the period you already paid for.</p>
+          ${accessHtml}
           <p style="margin:24px 0">
             <a href="${esc(base)}/shop" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">Re-subscribe anytime</a>
           </p>
@@ -317,9 +323,7 @@ async function sendSubscriptionCancelled({ to, displayName, productTitle, access
     `Your ${item}${priceLine} subscription has been cancelled. You won't be`,
     'charged again.',
     '',
-    `You keep your access through ${endsStr} — that's the end of the period`,
-    'you already paid for.',
-    '',
+    ...accessText,
     `Re-subscribe anytime: ${base}/shop`,
     '',
     'Changed your mind, or cancelled by accident? Email contact@reforgedz.net',

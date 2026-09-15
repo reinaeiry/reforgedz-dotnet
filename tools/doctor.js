@@ -114,7 +114,9 @@ check('db.file', 'database', { offline: true }, async () => withDb((db) => {
   const users = c('SELECT COUNT(*) c FROM users');
   const orders = c('SELECT COUNT(*) c FROM orders');
   const active = c("SELECT COUNT(*) c FROM orders WHERE status='completed' AND (effective_until IS NULL OR effective_until > unixepoch())");
-  const detail = `integrity ok, journal ${mode}, ${users} users, ${orders} orders, ${active} active entitlements`;
+  // Order rows, not entitlements: one player can hold several live rows. The health
+  // card counts entitlements itself, as distinct in-game IDs per server.
+  const detail = `integrity ok, journal ${mode}, ${users} users, ${orders} orders, ${active} live completed orders`;
   return mode === 'wal' ? ok(detail) : warn(detail + ' (expected wal)');
 }));
 
@@ -202,7 +204,9 @@ async function paypalCheck(testMode) {
   if (!mine) return fail(`${label}: signed in, but no webhook registered for ${url} (${hooks.length} others). Boot the app once to register it.`);
   const have = new Set((mine.event_types || []).map(e => e.name));
   const missing = paypal.WEBHOOK_EVENTS.filter(n => !have.has(n));
-  if (missing.length) return fail(`${label}: webhook ${mine.id} lacks ${missing.join(', ')}`);
+  // The expected list is paypal.WEBHOOK_EVENTS itself, so a release that adds events
+  // fails here until the shop has booted once and added them (syncWebhookEvents).
+  if (missing.length) return fail(`${label}: webhook ${mine.id} lacks ${missing.length} of ${paypal.WEBHOOK_EVENTS.length} events (${missing.join(', ')}). The shop adds missing events when it starts: restart it once, then check again.`);
   // A stray webhook URL can itself be a credential (a Discord webhook, say); show where it points, not its token.
   const strays = hooks.filter(h => h.url !== url).map(h => String(h.url).replace(/\/([^/]{16,})$/, '/…'));
   return strays.length ? warn(`${label}: webhook ${mine.id} bound with all ${have.size} events; other webhooks on this app: ${strays.join(', ')}`) : ok(`${label}: webhook ${mine.id}, ${have.size} events`);

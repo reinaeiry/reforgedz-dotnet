@@ -401,7 +401,7 @@ test('a renewal after the newest paid cycle was refunded is flagged, even with a
   order(buyer, PQ_EU, { sub, status: 'completed' });
   const refunded = order(buyer, PQ_EU, { sub, status: 'refunded' });
   order(buyer, PQ_EU, { sub, status: 'cancelled' });
-  assert.deepEqual(guards.refundedLatestCycle(db, sub), { id: refunded }, 'a cancelled (abandoned) row is not a cycle');
+  assert.deepEqual(guards.refundedLatestCycle(db, sub), { id: refunded, noRefund: false }, 'a cancelled (abandoned) row is not a cycle');
   assert.equal(guards.recordRevokedRenewal(db, { saleId: 'SALE-LR', subscriptionId: sub, now: NOW }), null,
     'the older completed cycle keeps it out of the all-revoked case, which is why this check exists');
 
@@ -411,4 +411,32 @@ test('a renewal after the newest paid cycle was refunded is flagged, even with a
   assert.equal(guards.refundedLatestCycle(db, fine), null, 'a refund on an older cycle only');
   assert.equal(guards.refundedLatestCycle(db, 'I-NOT-OURS'), null);
   assert.equal(guards.refundedLatestCycle(db, null), null);
+
+  const revoked = 'I-LATEST-REVOKED';
+  order(buyer, PQ_EU, { sub: revoked, status: 'completed' });
+  const noMoney = order(buyer, PQ_EU, { sub: revoked, status: 'refunded' });
+  db.prepare('UPDATE orders SET revoked_without_refund_at = ? WHERE id = ?').run(NOW, noMoney);
+  assert.deepEqual(guards.refundedLatestCycle(db, revoked), { id: noMoney, noRefund: true }, 'revoked with no money back');
+  assert.equal(guards.recordRevokedRenewal(db, { saleId: 'SALE-RV-X', subscriptionId: revoked, now: NOW }), null);
+});
+
+// ---- Where a moved holder's queue is ----------------------------------------
+
+test("a moved holder's order resolves to the server their queue is on, and nothing else does", () => {
+  const g = guidN(700);
+  const buyer = user({ biUid: g });
+  const moved = order(buyer, PQ_EU, { serverId: 'eu2' });
+  addGrant.run(g, 'eu2', 1, 'staff', NOW - 5 * DAY, null);
+  addGrant.run(g.toUpperCase(), 'eu1', 0, 'staff', NOW - 5 * DAY, NOW + 10 * DAY);
+  assert.deepEqual(guards.queueMoveForOrder(db, moved, NOW), { boughtFor: 'eu2', queueOn: 'eu1' });
+  assert.deepEqual(guards.queueMoveForOrder(db, moved, NOW + 11 * DAY), { boughtFor: 'eu2', queueOn: null }, 'the grant has lapsed: blocked, and on no server');
+
+  const notMoved = order(buyer, PQ_EU, { serverId: 'eu1' });
+  assert.equal(guards.queueMoveForOrder(db, notMoved, NOW), null, 'no block on the server it was bought for');
+  assert.equal(guards.queueMoveForOrder(db, order(buyer, PQ_GLOBAL, { serverId: 'eu2' }), NOW), null, 'not tied to one server');
+  assert.equal(guards.queueMoveForOrder(db, order(buyer, ROLE_SUB, { serverId: 'eu2' }), NOW), null, 'no priority queue');
+  const other = user({ biUid: guidN(701) });
+  assert.equal(guards.queueMoveForOrder(db, order(other, PQ_EU, { serverId: 'eu2' }), NOW), null, 'another in-game ID');
+  assert.equal(guards.queueMoveForOrder(db, 999999, NOW), null);
+  assert.equal(guards.queueMoveForOrder(db, null, NOW), null);
 });

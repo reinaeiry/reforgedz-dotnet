@@ -124,13 +124,13 @@ async function runBackup({ reason = 'manual' } = {}) {
   // not a line in a log nobody reads until the day it matters.
   if (!status.ok || status.errors.length) {
     try {
-      const { postCard, COLORS } = require('./lib/discordCard');
-      await postCard({
-        title: status.ok ? 'Shop backup: offsite copy failed' : 'Shop backup FAILED',
-        color: COLORS.red,
-        description: status.errors.join('\n').slice(0, 1500) || 'no detail',
-        fields: [{ name: 'Local snapshot', value: status.file ? `${path.basename(status.file)} (${status.bytes} bytes)` : 'not written', inline: true }, { name: 'Run', value: reason, inline: true }],
-        footer: 'npm run backup to retry · npm run doctor for the full picture'
+      const { sendCard } = require('./lib/discordCard');
+      await sendCard({
+        kind: 'action',
+        what: status.ok ? 'Shop backup: offsite copy failed' : 'Shop backup failed',
+        description: status.errors.join('\n').slice(0, 1500) || 'No detail',
+        fields: [{ name: 'Local snapshot', value: status.file ? `${path.basename(status.file)} (${status.bytes} bytes)` : 'Not written', inline: true }, { name: 'Run', value: reason, inline: true }],
+        footerExtra: 'npm run backup to retry · npm run doctor for the full picture'
       });
     } catch { /* best effort */ }
   }

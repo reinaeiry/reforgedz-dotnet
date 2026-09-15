@@ -24,6 +24,7 @@ const VARS = [
   { name: 'PAYPAL_TEST_SECRET', group: 'PayPal', secret: true, outbound: true, doc: '', example: '' },
   { name: 'PAYPAL_WEBHOOK_ID', group: 'PayPal', doc: 'Normally left blank: the webhook is found by URL and registered on boot. Set only to pin one managed in the dashboard.', example: '' },
   { name: 'PAYPAL_TEST_WEBHOOK_ID', group: 'PayPal', doc: '', example: '' },
+  { name: 'RECONCILE', group: 'PayPal', doc: 'off stops the daily 08:30 UTC check that compares PayPal Transaction Search with the shop\'s orders and posts one red card listing payments nothing in the shop accounts for. Blank = on. Nothing is checked without live PayPal credentials either.', example: '' },
 
   // ---- Billing email --------------------------------------------------------
   { name: 'SMTP_HOST', group: 'Email', required: true, outbound: true, doc: 'SMTP server for receipts and billing notices. mailcow today; any relay works with the same five variables.', example: 'mail.reforgedz.net' },
@@ -39,6 +40,8 @@ const VARS = [
   { name: 'DISCORD_GUILD_ID', group: 'Discord', doc: 'The ReforgedZ guild. Defaults to the live guild in code.', example: '1352364195211120660' },
   { name: 'DISCORD_WEBHOOK_URL', group: 'Discord', required: true, secret: true, outbound: true, doc: 'The "ReforgedZ Payments" webhook into #Payment-Processor. Purchase, refund and subscription cards go through it.', example: '' },
   { name: 'DISCORD_PAYMENT_CHANNEL_ID', group: 'Discord', doc: 'Channel for billing alerts posted as the bot. Defaults to #Payment-Processor in code; point it at a test channel on a non-production copy.', example: '' },
+  { name: 'PAYMENTS_ALERT_ROLE_ID', group: 'Discord', doc: 'Role mentioned on the red cards in #Payment-Processor, the ones where someone has to act (a reversed payment, a failed backup, a renewal on a revoked subscription). Blank = red cards post without a mention. Every other card arrives silently or without a mention.', example: '' },
+  { name: 'HEALTH_PARKED_WARNINGS', group: 'Discord', doc: 'Warnings the daily health card lists under "Known, parked" instead of turning amber. A JSON array of {"check": doctor check id, "match": pattern the whole warning text must match, "note": the line staff read}. Blank = nothing parked. A value that cannot be read parks nothing and shows as a warning.', example: '' },
   { name: 'DISCORD_CLIENT_ID', group: 'Discord', doc: 'Application id of the bot application (Discord developer portal, OAuth2). With the secret below, players link Discord with a Connect button instead of pasting a user id. Add BASE_URL/auth/discord/callback to the application\'s OAuth2 redirects.', example: '' },
   { name: 'DISCORD_CLIENT_SECRET', group: 'Discord', secret: true, doc: 'OAuth2 client secret of the same application. Unset = the Connect Discord button is hidden and the paste box remains.', example: '' },
   { name: 'STAFF_DISCORD_ROLE_IDS', group: 'Discord', doc: 'Comma-separated role ids of staff (Founder, admins, Gamemasters). A player holding one is never removed from a server\'s game.admins by the shop, even after their priority queue lapses. Defaults to the ticket bot\'s staff roles in code.', example: '' },

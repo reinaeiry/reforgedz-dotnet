@@ -116,17 +116,34 @@ async function closeSuspended({ apply = false } = {}) {
     return report;
   }
 
-  // Pass 2: close them.
-  for (const e of report.suspended) {
-    try {
-      await paypal.cancelSubscription(e.testMode, e.sub, REASON);
-      report.closed.push(e);
-      console.log(`  closed ${e.sub} (${e.persona}, owed $${e.owed}, last paid ${e.lastPaid})`);
-    } catch (err) {
-      report.failed.push({ ...e, error: (err.message || String(err)).slice(0, 120) });
-      console.error(`  FAILED ${e.sub} (${e.persona}): ${err.message}`);
+  // Pass 2: close them. Each close is marked as the shop's own before PayPal is
+  // asked (paymentEvents.cancelAtPayPal), so the CANCELLED webhook PayPal sends back
+  // posts no card per player and sends no second email; the summary card below is
+  // the one report. That needs a writable handle, opened only here.
+  const { cancelAtPayPal } = require('../paymentEvents');
+  const writer = new Database(dataPath('shop.db'));
+  try {
+    writer.pragma('busy_timeout = 5000');
+    if (!writer.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subscription_cancels'").get()) {
+      report.aborted = true;
+      report.abortReason = 'schema';
+      return report;
     }
-    await sleep(400);
+    for (const e of report.suspended) {
+      const r = await cancelAtPayPal({ db: writer, paypal, testMode: e.testMode, subscriptionId: e.sub, reason: REASON, source: 'close_suspended_tool' });
+      if (r.outcome === 'cancelled' || r.outcome === 'already_ended') {
+        report.closed.push(e);
+        console.log(`  ${r.outcome === 'cancelled' ? 'closed' : 'already closed at PayPal'} ${e.sub} (${e.persona}, owed $${e.owed}, last paid ${e.lastPaid})`);
+      } else {
+        // unknown: PayPal gave no answer, so it may have closed; check it there.
+        const error = (r.outcome === 'unknown' ? 'no answer from PayPal, check it there: ' : '') + String(r.error || `HTTP ${r.status}`).slice(0, 120);
+        report.failed.push({ ...e, error });
+        console.error(`  FAILED ${e.sub} (${e.persona}): ${error}`);
+      }
+      await sleep(400);
+    }
+  } finally {
+    writer.close();
   }
   return report;
 }
@@ -145,6 +162,11 @@ function printReport(r, apply) {
   console.log(`  suspended and finished:        ${r.suspended.length}`);
   for (const e of r.suspended) {
     console.log(`    ${String(e.persona).substring(0, 18).padEnd(18)} owed $${String(e.owed).padEnd(6)} last paid ${e.lastPaid}  fails=${e.fails}${e.testMode ? '  [test mode]' : ''}`);
+  }
+  if (r.aborted && r.abortReason === 'schema') {
+    console.log('');
+    console.log('  ⛔ REFUSED TO APPLY: this database has no subscription_cancels table yet. Start the shop once on this release, then run again.');
+    return;
   }
   if (r.aborted) {
     console.log('');
@@ -172,18 +194,18 @@ if (require.main === module) {
   closeSuspended({ apply }).then(async (r) => {
     printReport(r, apply);
     if (apply && !r.aborted && (r.closed.length || r.failed.length)) {
-      const { postCard, COLORS } = require('./lib/discordCard');
-      await postCard({
-        title: 'Suspended subscriptions closed',
-        color: r.failed.length ? COLORS.amber : COLORS.grey,
+      const { sendCard } = require('./lib/discordCard');
+      await sendCard({
+        kind: r.failed.length ? 'attention' : 'info',
+        what: 'Suspended subscriptions closed',
         description: `${r.closed.length} agreement${r.closed.length === 1 ? '' : 's'} PayPal had given up on are now properly cancelled, so none can sit in limbo or be revived. No access changed: all of these had already lost their perks.`,
         fields: [
           { name: 'Closed', value: String(r.closed.length), inline: true },
           { name: 'Failed', value: String(r.failed.length), inline: true },
           { name: 'Players', value: r.closed.map((e) => e.persona).join(', ').slice(0, 1000) || '-' }
         ],
-        footer: 'npm run close-suspended -- --apply'
-      }).catch(() => {});
+        footerExtra: 'npm run close-suspended -- --apply'
+      });
     }
     process.exit(r.aborted || r.failed.length ? 1 : 0);
   }).catch((e) => { console.error('failed:', e.stack || e.message); process.exit(2); });
