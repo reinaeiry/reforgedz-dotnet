@@ -186,6 +186,31 @@ async function readConfigWithHash(conn, server) {
   return { config, hash };
 }
 
+// Some servers' config.json, read-only, over one SSH session (the homepage needs each server's
+// query port from it). Returns { serverId: parsedConfig }; a server that could not be read is left
+// out, so one unreachable box never hides the other's numbers.
+async function readServerConfigs(servers) {
+  const privateKey = getPrivateKey();
+  const list = (servers || []).filter((s) => s && s.configPath);
+  if (!privateKey || list.length === 0) return {};
+  const entry = list.find((s) => s.region === 'eu') || list[0];
+  const conn = await sshOpen(privateKey, entry.host, entry.port, entry.user);
+  const out = {};
+  try {
+    for (const server of list) {
+      try {
+        const read = await readConfigWithHash(conn, server);
+        if (read) out[server.id] = read.config;
+      } catch (e) {
+        console.warn(`[status] ${server.id} config.json read failed: ${e.message}`);
+      }
+    }
+  } finally {
+    conn.end();
+  }
+  return out;
+}
+
 // Write config.json under an flock on <config>.lock, but ONLY if its on-disk
 // SHA-256 still matches `expectedHash` (compare-and-swap) — so a concurrent
 // write from the admin page (GM Management) is never clobbered. tmp+mv keeps the
@@ -1486,6 +1511,7 @@ module.exports = {
   // doctor's parity checks and the nightly backup's copy to the NA box) so
   // there is exactly one way the shop talks to a game host.
   sshOpen, sshRun, getPrivateKey, wrapForRegion, hostKeyFingerprint, PINNED_FINGERPRINTS, SSH_STRICT,
+  readServerConfigs,
   buildPerServerPurchaseBuckets, planAdmins, previewAdminsSync, protectedStaffGuids,
   // Pure pieces of the admins sync, for test/syncAdmins.test.js.
   DEFAULT_STAFF_ROLE_SERVERS, DEFAULT_STAFF_ROLE_IDS, staffRoleServers, staffRoleCovering, staffProtection,

@@ -65,12 +65,11 @@ const VARS = [
   { name: 'GAME_SERVER_STRICT_HOSTKEYS', group: 'Game servers', doc: '1 to make the nested NA hop refuse unknown host keys instead of recording them on first use.', example: '' },
   { name: 'ADMIN_CEILING', group: 'Game servers', doc: 'Maximum size of game.admins per server. Priority queue stock is ceiling minus the GMs already listed. Default 50.', example: '' },
 
-  // ---- Panel and BattleMetrics ---------------------------------------------
+  // ---- Panel and player index -----------------------------------------------
   { name: 'PTERODACTYL_PANEL_URL', group: 'Panel', required: true, doc: 'Panel origin for the homepage status tiles and the restart helper.', example: 'https://panel.reforgedz.net' },
   { name: 'PTERODACTYL_CLIENT_API_KEY', group: 'Panel', required: true, secret: true, doc: 'A client API key (Account, API Credentials) that can see the game servers.', example: '' },
-  { name: 'BATTLEMETRICS_TOKEN', group: 'Panel', required: true, secret: true, doc: 'BattleMetrics API token: player counts and the console gamertag lookup.', example: '' },
-  { name: 'REFORGEDZ_BM_SERVER_IDS', group: 'Panel', doc: 'Comma-separated BattleMetrics server ids, numbers only, searched FIRST for a console gamertag until the panel has verified its own records (for example while the panel is unreachable). Trusted as given; records the panel discovers are checked against the organisation instead.', example: '' },
-  { name: 'REFORGEDZ_BM_ORG_ID', group: 'Panel', doc: 'BattleMetrics organisation searched when today\'s servers find nobody, so players whose history sits on an older server record can still sign in. A number; anything else is ignored and the default 112993 (ReforgedZ) is used. Lookups are never unscoped.', example: '' },
+  { name: 'PLAYER_INDEX_URL', group: 'Panel', required: true, doc: 'The ban controller\'s player index (every player the game servers have seen): Find me and the in-game ID check. From the shop container on the EU box it is the host\'s docker address.', example: 'http://172.17.0.1:8090' },
+  { name: 'PLAYER_INDEX_KEY', group: 'Panel', required: true, secret: true, doc: 'Read-only key for the player index: api.players_key in the controller\'s controller_config.json.', example: '' },
 
   // ---- Staff integrations ---------------------------------------------------
   { name: 'SHOP_ADMIN_API_KEY', group: 'Staff', required: true, secret: true, doc: 'Shared bearer for /api/shop/admin/* from the admin page and the ticket bot. Must match SHOP_ADMIN_API_KEY in the ticket bot\'s .env.', example: '' },
@@ -94,7 +93,9 @@ const VARS = [
 const DEAD = [
   'STRIPE_PUBLISHABLE_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_TEST_PUBLISHABLE_KEY',
   'STRIPE_TEST_SECRET_KEY', 'STRIPE_TEST_WEBHOOK_SECRET', 'STRIPE_WEBHOOK_SECRET',
-  'GAME_SERVER_NA_KEY_PATH'
+  'GAME_SERVER_NA_KEY_PATH',
+  // BattleMetrics, replaced by our own player index and server queries on 2026-09-28
+  'BATTLEMETRICS_TOKEN', 'REFORGEDZ_BM_SERVER_IDS', 'REFORGEDZ_BM_ORG_ID'
 ];
 
 // Blanked on a rehearsal copy: everything outbound, plus the read-only
@@ -102,7 +103,7 @@ const DEAD = [
 // restore.js writes the copy's .env from this; the doctor judges it by it.
 const REHEARSAL_BLANK = [
   ...VARS.filter(v => v.outbound).map(v => v.name),
-  'PTERODACTYL_CLIENT_API_KEY', 'PTERODACTYL_PANEL_URL', 'BATTLEMETRICS_TOKEN',
+  'PTERODACTYL_CLIENT_API_KEY', 'PTERODACTYL_PANEL_URL', 'PLAYER_INDEX_KEY',
   'DISCORD_PAYMENT_CHANNEL_ID', 'BACKUP_OFFSITE', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'
 ];
 

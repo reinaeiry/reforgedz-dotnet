@@ -1,6 +1,6 @@
 // Helpers for finding a player and signing a console player in without dead ends.
 //
-// The identity finder (battlemetrics.js findPlayers) shows a player the accounts
+// The identity finder (playerLookup.js findPlayers) shows a player the accounts
 // their text could mean; they pick themselves. The picks a browser was shown are
 // remembered in its session, and only those can be confirmed, so a crafted
 // player id cannot sign in as someone the search never matched.

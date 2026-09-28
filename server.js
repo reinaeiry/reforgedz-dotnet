@@ -17,9 +17,9 @@ sessionDb.pragma('journal_mode = WAL');
 const passport = require('passport');
 const SteamStrategy = require('passport-steam').Strategy;
 const db = require('./db');
-const { cleanGamertag, orgId: bmOrgId, findPlayers, asReforgerUuid } = require('./battlemetrics');
+const { cleanGamertag, findPlayers, asReforgerUuid } = require('./playerLookup');
 const fx = require('./fx');
-const reforgedzServers = require('./reforgedzServers');
+const serverQuery = require('./serverQuery');
 const webAuth = require('./webAuth');
 const consoleIdentity = require('./consoleIdentity');
 const { sendAccountLink } = require('./invoiceMail');
@@ -40,7 +40,7 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ab, bb);
 }
 
-// fetch() with an abort timeout so a hung upstream (BattleMetrics / Pterodactyl)
+// fetch() with an abort timeout so a hung upstream (the panel, Discord, PayPal)
 // can never stall the status poller or pin an event-loop slot indefinitely.
 async function fetchWithTimeout(url, opts = {}, timeoutMs = 10000) {
   const ctrl = new AbortController();
@@ -720,7 +720,7 @@ app.post('/api/identity/find', findLimiter, async (req, res) => {
     return res.status(400).json({ error: 'That does not look like a player name or an in-game ID.' });
   }
   const result = await findPlayers(query, { wide: wide === true });
-  if (result.unavailable) return res.status(503).json({ error: 'We could not reach BattleMetrics to search. Please try again in a minute.' });
+  if (result.unavailable) return res.status(503).json({ error: 'We could not search the player list just now. Please try again in a minute.' });
   consoleIdentity.rememberCandidates(req.session, result.candidates);
   res.json({
     candidates: result.candidates.map((c) => ({
@@ -1074,80 +1074,7 @@ const PTERO_URL = (process.env.PTERODACTYL_PANEL_URL || '').replace(/\/+$/, '');
 const PTERO_KEY = process.env.PTERODACTYL_CLIENT_API_KEY || '';
 const STATUS_POLL_INTERVAL = 30000;
 
-// BattleMetrics IDs are resolved automatically per server (by IP, then port,
-// then by server name) and cached for the lifetime of the process.
-const bmIdCache = new Map();
-// What console sign-in searched first after the last poll, so a change is logged once.
-let lastSignInScope = null;
-// Per panel server: why its record is kept out of the sign-in scope (null = it is
-// in), and when a record outside the organisation was last looked up again.
-const signInRefusal = new Map();
-const signInRetryAt = new Map();
-
 let serverStatusCache = { servers: [], lastUpdate: null };
-
-// BattleMetrics stopped serving anonymous API requests (every endpoint now
-// 403s without a token), so all BM calls must carry the same token the
-// player-search already uses.
-function bmAuthHeaders() {
-  const tk = process.env.BATTLEMETRICS_TOKEN;
-  return tk ? { Authorization: `Bearer ${tk}` } : {};
-}
-
-async function fetchBattleMetricsPlayers(bmId) {
-  try {
-    const res = await fetchWithTimeout(`https://api.battlemetrics.com/servers/${bmId}`, { headers: bmAuthHeaders() }, 8000);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const a = data?.data?.attributes;
-    if (!a) return null;
-    // ip/port come back on the same request, so the caller can confirm this
-    // BattleMetrics record still belongs to the server we cached it for.
-    // The owning organisation tells console sign-in whether this record is ours
-    // (see pollServerStatus). Records outside it carry no organization relationship.
-    const org = data?.data?.relationships?.organization?.data?.id;
-    return { players: a.players ?? 0, max: a.maxPlayers ?? 0, ip: a.ip ?? null, port: a.port ?? null, orgId: org ? String(org) : null };
-  } catch {
-    return null;
-  }
-}
-
-async function resolveBattleMetricsId(rawIp, port, serverName) {
-  if (!rawIp) return null;
-  const portNum = Number(port);
-  try {
-    const ipUrl = `https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(rawIp)}&page[size]=10`;
-    const res = await fetchWithTimeout(ipUrl, { headers: bmAuthHeaders() }, 8000);
-    if (!res.ok) console.warn(`[bm] server search HTTP ${res.status} for ${rawIp}`);
-    if (res.ok) {
-      const list = (await res.json())?.data || [];
-      // More than one record can sit at one address (BattleMetrics can create a
-      // new record when a server moves). Prefer the one under our organisation:
-      // console sign-in only trusts that one.
-      const exacts = list.filter(s => s.attributes?.ip === rawIp && Number(s.attributes?.port) === portNum);
-      const exact = exacts.find(s => String(s.relationships?.organization?.data?.id || '') === bmOrgId()) || exacts[0];
-      if (exact?.id) return exact.id;
-      // Fall back to IP-only ONLY when that IP hosts a single Reforger server.
-      // Several of ours share a box (EU1/EU2/EU Dev on one IP), so an unqualified
-      // IP match would hand this server a different one's BattleMetrics id — that
-      // is how "eirys goonserver" ended up mirroring EU1's player count.
-      const ipMatches = list.filter(s => s.attributes?.ip === rawIp);
-      if (ipMatches.length === 1 && ipMatches[0].id) return ipMatches[0].id;
-    }
-    const tagMatch = (serverName || '').match(/\[([^\]]+)\]/);
-    const tag = tagMatch ? tagMatch[1] : null;
-    if (tag) {
-      const nameRes = await fetchWithTimeout(`https://api.battlemetrics.com/servers?filter[game]=reforger&filter[search]=${encodeURIComponent(tag)}&page[size]=5`, { headers: bmAuthHeaders() }, 8000);
-      if (nameRes.ok) {
-        const nd = (await nameRes.json())?.data || [];
-        const tagUpper = tag.toUpperCase();
-        const nameHit = nd.find(s => (s.attributes?.name || '').toUpperCase().includes(tagUpper));
-        if (nameHit?.id) return nameHit.id;
-      }
-    }
-  } catch {}
-  return null;
-}
 
 async function pteroFetch(endpoint) {
   const res = await fetchWithTimeout(`${PTERO_URL}${endpoint}`, {
@@ -1185,6 +1112,7 @@ async function pollServerStatus() {
     const listRes = await pteroFetch('/api/client?per_page=50');
     const servers = listRes.data || [];
     const statusList = [];
+    await serverQuery.queryPorts();
 
     for (const srv of servers) {
       const attr = srv.attributes;
@@ -1214,91 +1142,19 @@ async function pollServerStatus() {
         state = 'unknown';
       }
 
+      // The count is the server's own answer on its query port (serverQuery.js), the number the
+      // in-game server browser shows. null when it cannot be asked just now: no number beats a wrong one.
       let players = null;
       let max = null;
-      let bmId = bmIdCache.get(id);
-      if (!bmId) {
-        bmId = await resolveBattleMetricsId(def?.attributes?.ip, def?.attributes?.port, attr.name);
-        if (bmId) {
-          bmIdCache.set(id, bmId);
-          console.log(`Resolved BattleMetrics ID for ${attr.name}: ${bmId}`);
-        }
-      }
-      if (bmId) {
-        let bm = await fetchBattleMetricsPlayers(bmId);
-        // A cached id is only right until the server moves. When a server changes
-        // allocation the old id keeps resolving happily to somebody else's server
-        // -- that is how NA1 and NA2 both ended up reporting the NA Dev server's
-        // player count. Confirm the record still matches this allocation, and
-        // re-resolve once if it does not. Costs no extra request: the check uses
-        // the ip/port already returned above.
-        const wantIp = def?.attributes?.ip;
-        const wantAlias = def?.attributes?.ip_alias;
-        const wantPort = Number(def?.attributes?.port);
-        // The panel can hold a bind address in ip and the public one in ip_alias;
-        // BattleMetrics only ever sees the public one.
-        const pointsElsewhere = (b) => !!(b && wantIp && b.ip && ((b.ip !== wantIp && b.ip !== wantAlias) || Number(b.port) !== wantPort));
-        if (pointsElsewhere(bm)) {
-          console.warn(`[bm] cached id ${bmId} for ${attr.name} points at ${bm.ip}:${bm.port}, expected ${wantIp}:${wantPort} — re-resolving`);
-          bmIdCache.delete(id);
-          // Proven not to be this server: out of the sign-in scope now, even if
-          // the read of a replacement below fails.
-          reforgedzServers.forgetBmId(id);
-          const fresh = await resolveBattleMetricsId(wantIp, wantPort, attr.name);
-          if (fresh && fresh !== bmId) {
-            bmId = fresh;
-            bmIdCache.set(id, bmId);
-            console.log(`Re-resolved BattleMetrics ID for ${attr.name}: ${bmId}`);
-            bm = await fetchBattleMetricsPlayers(bmId);
-          }
-        }
-        if (bm) {
-          players = bm.players;
-          max = bm.max;
-          // Console sign-in searches these records first and trusts a gamertag
-          // found there without asking the organisation. So only a record at this
-          // server's own address that BattleMetrics lists under our organisation
-          // may join that scope: the tag fallback in resolveBattleMetricsId can
-          // pick another community's "[EU1]". When BattleMetrics could not be read
-          // (bm null) the scope is left as it was.
-          let refused = null;
-          if (pointsElsewhere(bm)) refused = `record ${bmId} is at ${bm.ip}:${bm.port}, not this server's address`;
-          else if (String(bm.orgId || '') !== bmOrgId()) refused = `record ${bmId} is not under BattleMetrics organisation ${bmOrgId()}`;
-          if (!refused) {
-            reforgedzServers.setBmId(id, bmId);
-          } else {
-            reforgedzServers.forgetBmId(id);
-            // A record at the right address but outside the organisation is never
-            // corrected by the address check above. Look again every 10 minutes:
-            // after a move, the organisation's own record can appear beside it.
-            if (!pointsElsewhere(bm) && Date.now() - (signInRetryAt.get(id) || 0) > 10 * 60 * 1000) {
-              signInRetryAt.set(id, Date.now());
-              bmIdCache.delete(id);
-            }
-          }
-          // Say why, once, whenever a server leaves or rejoins the scope.
-          const was = signInRefusal.get(id) || null;
-          if (refused !== was) {
-            if (refused) console.warn(`[bm] ${attr.name} is not in the console sign-in scope: ${refused}`);
-            else console.log(`[bm] ${attr.name} is back in the console sign-in scope (${bmId})`);
-            signInRefusal.set(id, refused);
-          }
-        }
-      }
-      if (state !== 'running') {
+      if (state === 'running') {
+        const count = await serverQuery.playerCount(attr.uuid, def?.attributes?.ip_alias || def?.attributes?.ip);
+        if (count) { players = count.players; max = count.max; }
+      } else {
         players = 0;
-        if (max == null) max = 64;
+        max = 64;
       }
 
       statusList.push({ name: attr.name, identifier: id, region, state, ip, uptime: formatUptime(uptime), players, max });
-    }
-
-    // A server the panel no longer lists leaves the sign-in scope too.
-    reforgedzServers.retainServers(statusList.map((s) => s.identifier));
-    const signInScope = reforgedzServers.getBmIds().join(',');
-    if (signInScope !== lastSignInScope) {
-      console.log(`[bm] console sign-in searches ${signInScope ? `these server records first: ${signInScope}` : 'the organisation only (no verified server records yet)'}`);
-      lastSignInScope = signInScope;
     }
 
     serverStatusCache = { servers: statusList, lastUpdate: new Date().toISOString() };

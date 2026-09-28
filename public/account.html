@@ -542,7 +542,7 @@
     // players the text could mean and picking one saves it, while a pasted ID saves
     // as it is. The saved ID shows with the player's name, so a mistyped or planted
     // ID is noticed. Built with the DOM rather than an HTML string, because the
-    // names come from BattleMetrics and the search results from whatever was typed.
+    // names come from the game and the search results from whatever was typed.
     const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     const ID_HELP = 'Find it in Arma Reforger: open the Main Menu and select your account name at the top right.';
 
@@ -714,7 +714,7 @@
         } else if (j.verified) {
           setHint('biUidHint', 'Saved. Priority queue and perks follow this ID from the next server restart.', 'ok');
         } else {
-          setHint('biUidHint', 'Saved, but BattleMetrics could not confirm it just now. Check it matches your profile in the game.');
+          setHint('biUidHint', 'Saved, but this ID has not played on a ReforgedZ server yet, so we could not confirm it. Check it matches your profile in the game.');
         }
       } catch (e) {
         setHint('biUidHint', 'Could not save: ' + e.message, 'error');
@@ -727,7 +727,7 @@
     }
 
     // The name behind an ID saved before names were kept, by staff, or while
-    // BattleMetrics was down. It changes nothing but the name shown.
+    // the player index was down. It changes nothing but the name shown.
     async function lookUpIdName(btn) {
       btn.disabled = true;
       btn.textContent = 'Looking up…';

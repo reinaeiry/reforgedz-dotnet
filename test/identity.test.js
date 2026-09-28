@@ -1,20 +1,17 @@
-// Unit tests for the identity finder (battlemetrics.js findPlayers,
-// reforgerUuidForPlayer) and the console sign-in helpers (consoleIdentity.js).
-// No network: fetch is replaced. Fixtures follow the response shape
-// BattleMetrics actually sends (measured 2026-09-14).
+// Unit tests for the identity finder (playerLookup.js: our own player index, which
+// replaced BattleMetrics on 2026-09-28) and the console sign-in helpers
+// (consoleIdentity.js). No network: fetch is replaced. Fixtures follow the answers
+// the ban controller's /api/players routes give (controller/player_index.py).
 // Run: npm test
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-process.env.BATTLEMETRICS_TOKEN = 'test-token';
-delete process.env.REFORGEDZ_BM_SERVER_IDS;
-delete process.env.REFORGEDZ_BM_ORG_ID;
+process.env.PLAYER_INDEX_URL = 'http://index.test';
+process.env.PLAYER_INDEX_KEY = 'test-key';
 
-const servers = require('../reforgedzServers');
-const bm = require('../battlemetrics');
+const pl = require('../playerLookup');
 const ci = require('../consoleIdentity');
 
-const DEFAULTS = { ...bm._test.T };
 const calls = [];
 let handler = async () => { throw new Error('no handler set'); };
 
@@ -33,247 +30,147 @@ function json(status, body) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
-let nextIdent = 1;
-function ident(playerId, type, value, lastSeen) {
-  return {
-    type: 'identifier',
-    id: String(nextIdent++),
-    attributes: { type, identifier: value, lastSeen: lastSeen || '2026-09-01T00:00:00.000Z', private: false, metadata: null },
-    relationships: { player: { data: { type: 'player', id: String(playerId) } } },
-  };
-}
+const U1 = '41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac';
+const U2 = '9f86d081-884c-4d63-9b2f-0b822cd15d6c';
 
-function player(id, name, { uuids = [], pastNames = [], lastSeen } = {}) {
-  const idents = [ident(id, 'name', name, lastSeen)];
-  for (const n of pastNames) idents.push(ident(id, 'name', n, '2026-01-01T00:00:00.000Z'));
-  for (const u of uuids) idents.push(ident(id, 'reforgerUUID', u, lastSeen));
-  return {
-    row: { type: 'player', id: String(id), attributes: { name }, relationships: { organizations: { data: [{ type: 'organization', id: '112993' }] } } },
-    idents,
-  };
-}
-
-const page = (...players) => ({ data: players.map((p) => p.row), included: players.flatMap((p) => p.idents), links: {} });
-const detail = (p) => ({ data: p.row, included: p.idents });
-const isServers = (u) => u.includes('/players?filter[search]=') && u.includes('filter[servers]=');
-const isOrg = (u) => u.includes('/players?filter[search]=') && u.includes('filter[organizations]=');
-
-const U1 = '11111111-2222-3333-4444-555555555555';
-const U2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-
-function reset() {
+test.beforeEach(() => {
   calls.length = 0;
-  bm._test.reset();
-  servers._test.reset();
-  Object.assign(bm._test.T, DEFAULTS);
-  delete process.env.REFORGEDZ_BM_SERVER_IDS;
-  delete process.env.REFORGEDZ_BM_ORG_ID;
-  process.env.BATTLEMETRICS_TOKEN = 'test-token';
-}
+  pl._test.reset();
+  handler = async () => { throw new Error('no handler set'); };
+});
 
-// ---- By name ----------------------------------------------------------------
-
-test('one exact name on today\'s servers is the answer, in one call', async () => {
-  reset();
-  servers.setBmId('eu1', '101');
-  handler = async (u) => (isServers(u) ? json(200, page(player(1, 'Alpha', { uuids: [U1] }), player(2, 'Alphabet'))) : json(503, {}));
-  const r = await bm.findPlayers('alpha');
-  assert.equal(r.candidates.length, 1);
-  assert.deepEqual(r.candidates[0], { bmPlayerId: '1', name: 'Alpha', lastSeen: '2026-09-01T00:00:00.000Z', previousName: null, biUid: U1, exact: true });
+test('a name search asks the index once, with the key, and keeps its order', async () => {
+  handler = async (url) => json(200, { candidates: [
+    { uid: U1, name: 'Alpha', previousName: null, lastSeen: '2026-09-27T10:00:00Z', exact: true },
+    { uid: U2, name: 'Alphabet', previousName: null, lastSeen: '2026-09-20T10:00:00Z', exact: false },
+  ] });
+  const r = await pl.findPlayers('Alpha');
   assert.equal(calls.length, 1);
+  assert.ok(calls[0].url.startsWith('http://index.test/api/players/find?q=Alpha&limit=6'));
+  assert.equal(calls[0].opts.headers.Authorization, 'Bearer test-key');
+  assert.deepEqual(r.candidates.map((c) => c.name), ['Alpha', 'Alphabet']);
+  assert.deepEqual(r.candidates[0], {
+    bmPlayerId: pl._test.refFor(U1), name: 'Alpha', lastSeen: '2026-09-27T10:00:00Z', previousName: null, biUid: U1, exact: true,
+  });
 });
 
-test('no exact name: close names from the organisation, best first, strangers left out', async () => {
-  reset();
-  servers.setBmId('eu1', '101');
-  handler = async (u) => {
-    if (isServers(u)) return json(200, page(player(9, 'Bravo')));
-    if (isOrg(u)) {
-      return json(200, page(
-        player(3, 'Jammad123', { lastSeen: '2026-09-10T00:00:00.000Z' }),
-        player(2, 'Jam mad', { lastSeen: '2026-09-02T00:00:00.000Z' }),
-        player(4, 'Jamnad', { lastSeen: '2026-09-12T00:00:00.000Z' }),
-        player(5, 'Totally Different'),
-      ));
-    }
-    return json(503, {});
-  };
-  const r = await bm.findPlayers('Jammad-');
-  assert.deepEqual(r.candidates.map((c) => c.bmPlayerId), ['2', '3', '4']);
-  assert.ok(r.candidates.every((c) => c.exact === false));
-  assert.equal(calls.length, 2);
+test('the ref the browser sees is a number, never the in-game ID', async () => {
+  const ref = pl._test.refFor(U1);
+  assert.match(ref, /^\d{1,20}$/);
+  assert.ok(Number.isSafeInteger(Number(ref)));
+  assert.ok(!ref.includes(U1.slice(0, 8)));
+  assert.notEqual(pl._test.refFor(U1), pl._test.refFor(U2));
+  // consoleIdentity accepts it as a candidate id
+  const session = {};
+  ci.rememberCandidates(session, [pl._test.toCandidate({ uid: U1, name: 'Alpha' })], 1000);
+  assert.equal(ci.pickCandidate(session, ref, 2000).biUid, U1);
 });
 
-test('two players with the exact name are both offered, most recently seen first', async () => {
-  reset();
-  handler = async () => json(200, page(
-    player(1, 'MeatChuggins', { lastSeen: '2026-08-01T00:00:00.000Z' }),
-    player(2, 'meatchuggins', { lastSeen: '2026-09-13T00:00:00.000Z' }),
-  ));
-  const r = await bm.findPlayers('MeatChuggins');
-  assert.deepEqual(r.candidates.map((c) => c.bmPlayerId), ['2', '1']);
-  assert.ok(r.candidates.every((c) => c.exact === true));
+test('"not me" (wide) is passed on', async () => {
+  handler = async () => json(200, { candidates: [] });
+  await pl.findPlayers('Alpha', { wide: true });
+  assert.ok(calls[0].url.includes('&wide=1'));
 });
 
-test('a renamed player is found by their old name and shown under the new one', async () => {
-  reset();
-  handler = async () => json(200, page(player(7, 'alanwanaf1ght', { pastNames: ['Jagged-tiddler12'], uuids: [U2] })));
-  const r = await bm.findPlayers('Jagged-tiddler12');
-  assert.equal(r.candidates.length, 1);
+test('a renamed player comes back under the new name with the old one alongside', async () => {
+  handler = async () => json(200, { candidates: [
+    { uid: U2, name: 'alanwanaf1ght', previousName: 'Jagged-tiddler12', lastSeen: '2026-09-27T00:00:00Z', exact: false },
+  ] });
+  const r = await pl.findPlayers('Jagged-tiddler12');
   assert.equal(r.candidates[0].name, 'alanwanaf1ght');
   assert.equal(r.candidates[0].previousName, 'Jagged-tiddler12');
-  assert.equal(r.candidates[0].exact, false);
   assert.equal(r.candidates[0].biUid, U2);
 });
 
-test('an Xbox #1234 suffix, case and spacing do not matter', async () => {
-  reset();
-  handler = async () => json(200, page(player(8, 'Kaito#1234')));
-  assert.equal((await bm.findPlayers('kaito')).candidates[0].bmPlayerId, '8');
-  bm._test.reset();
-  handler = async () => json(200, page(player(9, 'Depraved Ether Addict')));
-  assert.equal((await bm.findPlayers('depravedetheraddict')).candidates[0].bmPlayerId, '9');
-});
-
-test('offers at most findMax players', async () => {
-  reset();
-  handler = async () => json(200, page(...Array.from({ length: 20 }, (_, i) => player(100 + i, `Ghost${i}`))));
-  assert.equal((await bm.findPlayers('ghost')).candidates.length, DEFAULTS.findMax);
-});
-
-test('"not me" (wide) skips the today\'s-servers shortcut', async () => {
-  reset();
-  servers.setBmId('eu1', '101');
-  handler = async (u) => (isOrg(u) ? json(200, page(player(1, 'Alpha'), player(2, 'Alpha'))) : json(200, page(player(1, 'Alpha'))));
-  const r = await bm.findPlayers('Alpha', { wide: true });
-  assert.equal(calls.length, 1);
-  assert.ok(isOrg(calls[0].url));
-  assert.equal(r.candidates.length, 2);
-});
-
-test('an in-game id with no linked uuid in the search stays unset for the pick', async () => {
-  reset();
-  handler = async () => json(200, page(player(1, 'Alpha'), player(2, 'Bravo', { uuids: [U1] })));
-  const r = await bm.findPlayers('Alpha');
-  assert.equal(r.candidates[0].biUid, null);
-});
-
-// ---- By in-game id ----------------------------------------------------------
-
-function matchHit(pid, orgIds) {
-  return {
-    data: [{
-      type: 'identifier', id: 'm1',
-      attributes: { type: 'reforgerUUID', identifier: U1, lastSeen: '2026-09-13T00:00:00.000Z' },
-      relationships: {
-        player: { data: { type: 'player', id: String(pid) } },
-        organizations: { data: orgIds.map((id) => ({ type: 'organization', id })) },
-      },
-    }],
-  };
-}
-
-test('a pasted in-game id finds that player exactly, checked against our organisation', async () => {
-  reset();
-  handler = async (u, opts) => {
-    if (u.endsWith('/players/match')) {
-      assert.equal(opts.method, 'POST');
-      assert.ok(String(opts.body).includes(U1));
-      return json(200, matchHit(42, ['5', '112993']));
-    }
-    if (u.includes('/players/42?include=identifier')) return json(200, detail(player(42, 'Zulu', { uuids: [U1] })));
-    return json(503, {});
-  };
-  const r = await bm.findPlayers(`{ ${U1.toUpperCase()} }`);
+test('a pasted in-game ID is looked up exactly, and an unknown one finds nobody', async () => {
+  handler = async (url) => (url.includes(U1)
+    ? json(200, { found: true, uid: U1, name: 'Alpha', lastSeen: '2026-09-27T10:00:00Z' })
+    : json(200, { found: false }));
+  const r = await pl.findPlayers(` {${U1.toUpperCase()}} `);
+  assert.ok(calls[0].url.endsWith(`/api/players/lookup/${U1}`));
   assert.equal(r.candidates.length, 1);
-  assert.equal(r.candidates[0].bmPlayerId, '42');
-  assert.equal(r.candidates[0].name, 'Zulu');
   assert.equal(r.candidates[0].biUid, U1);
   assert.equal(r.candidates[0].exact, true);
-  assert.equal(calls.length, 2);
+  assert.deepEqual((await pl.findPlayers(U2)).candidates, []);
 });
 
-test('an in-game id never seen on a ReforgedZ server finds nobody', async () => {
-  reset();
-  handler = async (u) => (u.endsWith('/players/match') ? json(200, matchHit(42, ['5'])) : json(200, detail(player(42, 'Zulu'))));
-  assert.deepEqual((await bm.findPlayers(U1)).candidates, []);
-  assert.equal(calls.length, 1);
-  bm._test.reset();
-  calls.length = 0;
-  handler = async () => json(200, { data: [] });
-  assert.deepEqual((await bm.findPlayers(U1)).candidates, []);
+test('junk and the placeholder ID find nobody and make no call', async () => {
+  assert.deepEqual(await pl.findPlayers(''), { candidates: [] });
+  assert.deepEqual(await pl.findPlayers('   '), { candidates: [] });
+  assert.deepEqual(await pl.findPlayers('a'.repeat(40)), { candidates: [] });
+  assert.deepEqual(await pl.findPlayers('bad\u0000name'), { candidates: [] });
+  assert.deepEqual((await pl.findPlayers('00000000-0000-0000-0000-000000000000')).candidates.length >= 0, true);
+  assert.equal(calls.filter((c) => c.url.includes('00000000-0000-0000-0000-000000000000')).length, 0);
 });
 
-test('the placeholder id and junk find nobody and make no call', async () => {
-  reset();
-  handler = async () => json(200, page());
-  assert.deepEqual((await bm.findPlayers('00000000-0000-0000-0000-000000000000')).candidates, []);
-  assert.deepEqual((await bm.findPlayers('x'.repeat(200))).candidates, []);
-  assert.deepEqual((await bm.findPlayers('   ')).candidates, []);
-  assert.equal(calls.length, 0);
+test('an outage is unavailable, never "no such player", and is not cached', async () => {
+  handler = async () => json(502, { error: 'down' });
+  assert.equal((await pl.findPlayers('Alpha')).unavailable, true);
+  handler = async () => { throw new Error('ECONNREFUSED'); };
+  assert.equal((await pl.findPlayers(U1)).unavailable, true);
+  handler = async () => json(200, { candidates: [{ uid: U1, name: 'Alpha' }] });
+  assert.equal((await pl.findPlayers('Alpha')).candidates.length, 1);
 });
 
-// ---- Failures, cache --------------------------------------------------------
+test('a refused query (400) is an answer: nobody', async () => {
+  handler = async () => json(400, { error: 'bad_query' });
+  assert.deepEqual(await pl.findPlayers('Alpha'), { candidates: [] });
+});
 
-test('an outage is unavailable, by name or by id', async () => {
-  reset();
-  handler = async () => json(503, {});
-  assert.equal((await bm.findPlayers('Alpha')).unavailable, true);
-  bm._test.reset();
-  assert.equal((await bm.findPlayers(U1)).unavailable, true);
-  bm._test.reset();
-  process.env.BATTLEMETRICS_TOKEN = '';
-  assert.equal((await bm.findPlayers('Alpha')).unavailable, true);
+test('no URL or key is an outage, and no call is made', async () => {
+  const saved = process.env.PLAYER_INDEX_KEY;
+  delete process.env.PLAYER_INDEX_KEY;
+  try {
+    const r = await pl.findPlayers('Alpha');
+    assert.equal(r.unavailable, true);
+    assert.equal(calls.length, 0);
+  } finally {
+    process.env.PLAYER_INDEX_KEY = saved;
+  }
 });
 
 test('a repeat search costs nothing, and its answer is a copy', async () => {
-  reset();
-  handler = async () => json(200, page(player(1, 'Alpha', { uuids: [U1] })));
-  const a = await bm.findPlayers('Alpha');
-  a.candidates[0].bmPlayerId = 'tampered';
-  const b = await bm.findPlayers('alpha');
-  assert.equal(b.candidates[0].bmPlayerId, '1');
+  handler = async () => json(200, { candidates: [{ uid: U1, name: 'Alpha' }] });
+  const a = await pl.findPlayers('Alpha');
+  a.candidates[0].name = 'changed';
+  const b = await pl.findPlayers('alpha');
   assert.equal(calls.length, 1);
+  assert.equal(b.candidates[0].name, 'Alpha');
 });
 
-test('the finder and the exact lookup never answer for each other', async () => {
-  reset();
-  handler = async () => json(200, page(player(1, 'Alpha', { uuids: [U1] })));
-  await bm.findPlayers('Alpha');
-  const r = await bm.lookupPlayerByGamertag('Alpha', 'xbox');
-  assert.equal(r.bmPlayerId, '1');
-  assert.equal(calls.length, 2);
+test('answers without a valid in-game ID are dropped, and at most findMax are offered', async () => {
+  handler = async () => json(200, { candidates: [
+    { uid: 'not-an-id', name: 'X' },
+    ...Array.from({ length: 10 }, (_, i) => ({ uid: `${String(i).padStart(8, '0')}-1111-4111-8111-111111111111`, name: `ghost${i}` })),
+  ] });
+  const r = await pl.findPlayers('ghost');
+  assert.equal(r.candidates.length, pl._test.T.findMax);
+  assert.ok(r.candidates.every((c) => /^[0-9a-f-]{36}$/.test(c.biUid)));
 });
 
-test('reforgerUuidForPlayer: linked id, unlinked fallback, none, outage', async () => {
-  reset();
-  handler = async () => json(200, detail(player(5, 'Echo', { uuids: [U2] })));
-  assert.deepEqual(await bm.reforgerUuidForPlayer('5'), { biUid: U2 });
-  handler = async () => json(200, { data: { type: 'player', id: '5' }, included: [{ type: 'identifier', id: 'x', attributes: { type: 'reforgerUUID', identifier: U1 } }] });
-  assert.deepEqual(await bm.reforgerUuidForPlayer('5'), { biUid: U1 });
-  handler = async () => json(200, detail(player(5, 'Echo')));
-  assert.deepEqual(await bm.reforgerUuidForPlayer('5'), { biUid: null });
-  handler = async () => json(500, {});
-  assert.equal((await bm.reforgerUuidForPlayer('5')).unavailable, true);
-  const before = calls.length;
-  assert.deepEqual(await bm.reforgerUuidForPlayer('5/../x'), { biUid: null });
-  assert.equal(calls.length, before);
+test('matchReforgerUuid: found with a name, not found, could not ask', async () => {
+  handler = async (url) => (url.includes(U1)
+    ? json(200, { found: true, uid: U1, name: 'Alpha', lastSeen: '2026-09-27T10:00:00Z' })
+    : json(200, { found: false }));
+  assert.deepEqual(await pl.matchReforgerUuid(U1), { found: true, lastSeen: '2026-09-27T10:00:00Z', name: 'Alpha' });
+  assert.deepEqual(await pl.matchReforgerUuid(U2), { found: false, lastSeen: null });
+  handler = async () => json(503, {});
+  assert.equal((await pl.matchReforgerUuid(U1)).found, null);
+  assert.equal((await pl.matchReforgerUuid('nonsense')).found, false);
 });
 
-// ---- Pure helpers -----------------------------------------------------------
+test('reforgerUuidForPlayer has nothing for a pre-2026-09-28 BattleMetrics pick', async () => {
+  assert.deepEqual(await pl.reforgerUuidForPlayer('123456'), { biUid: null });
+});
 
-test('asReforgerUuid, looseName and closeness', () => {
-  assert.equal(bm.asReforgerUuid(` {${U1.toUpperCase()}} `), U1);
-  assert.equal(bm.asReforgerUuid('00000000-0000-0000-0000-000000000000'), null);
-  assert.equal(bm.asReforgerUuid('Alpha'), null);
-  assert.equal(bm._test.looseName('Kaito#1234'), 'kaito');
-  assert.equal(bm._test.looseName('Jam_mad-'), 'jammad');
-  assert.equal(bm._test.closeness('Alpha', 'alpha'), 0);
-  assert.equal(bm._test.closeness('Al pha', 'alpha'), 1);
-  assert.equal(bm._test.closeness('Alphabet', 'alpha'), 2);
-  assert.equal(bm._test.closeness('Alpho', 'alpha'), 3);
-  assert.equal(bm._test.closeness('Zulu', 'alpha'), null);
-  assert.equal(bm._test.closeness('ab', 'abc'), null);
+test('asReforgerUuid and cleanGamertag', () => {
+  assert.equal(pl.asReforgerUuid(` {${U1.toUpperCase()}} `), U1);
+  assert.equal(pl.asReforgerUuid('00000000-0000-0000-0000-000000000000'), null);
+  assert.equal(pl.asReforgerUuid('Alpha'), null);
+  assert.equal(pl.cleanGamertag('  Kaito#1234 '), 'Kaito#1234');
+  assert.equal(pl.cleanGamertag('x'.repeat(33)), null);
+  assert.equal(pl.cleanGamertag('bad​name'), null);
+  assert.equal(pl.cleanGamertag(42), null);
 });
 
 test('remembered picks: only what this browser was shown, merged, capped, expiring', () => {

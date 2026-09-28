@@ -350,20 +350,15 @@ check('panel', 'integrations', {}, async () => {
   return ok(`${url} lists ${r.json && r.json.meta && r.json.meta.pagination ? r.json.meta.pagination.total : '?'} servers`);
 });
 
-check('battlemetrics', 'integrations', {}, async () => {
-  const tk = process.env.BATTLEMETRICS_TOKEN;
-  if (!tk) return REHEARSAL ? skip('token blanked for rehearsal') : fail('BATTLEMETRICS_TOKEN not set: console sign-in and player counts break');
-  const r = await fetchJson('https://api.battlemetrics.com/servers?filter[search]=ReforgedZ&page[size]=1', { headers: { Authorization: `Bearer ${tk}` } });
-  if (!r.ok) return fail(`BattleMetrics answered ${r.status}`);
-  // BattleMetrics ignores a filter it cannot read and searches every player, so
-  // the sign-in scope settings must be numbers. The app ignores bad values; say so.
-  const notes = [];
-  const org = String(process.env.REFORGEDZ_BM_ORG_ID || '').trim();
-  if (org && !/^\d+$/.test(org)) notes.push('REFORGEDZ_BM_ORG_ID is not a number, so the default 112993 is used');
-  const ids = String(process.env.REFORGEDZ_BM_SERVER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (ids.some(s => !/^\d+$/.test(s))) notes.push('REFORGEDZ_BM_SERVER_IDS has entries that are not numbers, and they are ignored');
-  if (notes.length) return warn(`token accepted, but ${notes.join('; ')}`);
-  return ok('token accepted');
+check('player-index', 'integrations', {}, async () => {
+  const url = (process.env.PLAYER_INDEX_URL || '').replace(/\/+$/, '');
+  const key = process.env.PLAYER_INDEX_KEY;
+  if (!url || !key) return REHEARSAL ? skip('player index blanked for rehearsal') : fail('PLAYER_INDEX_URL / PLAYER_INDEX_KEY not set: Find me and the in-game ID check break');
+  // A well-formed ID nobody has: the index must answer "not found", which proves the key and the route.
+  const r = await fetchJson(`${url}/api/players/lookup/00000000-0000-4000-8000-000000000000`, { headers: { Authorization: `Bearer ${key}` } });
+  if (!r.ok) return fail(`the player index answered ${r.status}`);
+  if (!r.json || r.json.found !== false) return warn('the player index answered, but not as expected');
+  return ok('the player index answers');
 });
 
 check('steam', 'integrations', {}, async () => {

@@ -3,7 +3,7 @@
 //
 // users.bi_uid is where queue priority and every perk goes, and the account page
 // and receipts showed only a raw 36-character ID, so a mistyped or planted ID
-// went unnoticed until the queue did not work. Storing the BattleMetrics name
+// went unnoticed until the queue did not work. Storing the player's name
 // lets the account page, the confirmation and the receipt say who the priority
 // goes to. Storing how the ID was chosen (bi_uid_proof) is the first step towards
 // ever relying on one: today nothing does.
@@ -13,8 +13,8 @@
 
 // How an ID got onto an account:
 //   find_me            the player picked themselves from a Find me search
-//   pasted_verified    pasted, and BattleMetrics has seen that ID
-//   pasted_unverified  pasted while BattleMetrics could not be asked
+//   pasted_verified    pasted, and our player index has seen that ID (BattleMetrics before 2026-09-28)
+//   pasted_unverified  pasted, and the ID has not played on our servers yet (or the index could not be asked)
 //   staff              set by staff (adminAudit.staffSetBiUid)
 // None of these proves the ID belongs to the person typing: Find me and a paste
 // both show only that the player exists.

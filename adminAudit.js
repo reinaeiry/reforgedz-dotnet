@@ -8,7 +8,7 @@
 //
 // Takes the database handle as a parameter and does nothing on require, so the
 // tests run it against a throwaway copy of the real schema (test/adminAudit.test.js).
-const { asReforgerUuid } = require('./battlemetrics');
+const { asReforgerUuid } = require('./playerLookup');
 
 // Who acted, in the words requireAdmin logs: a signed-in admin by Steam id, else
 // the shared key (the ticket bot and the admin page backend hold it).

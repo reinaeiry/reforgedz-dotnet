@@ -1033,8 +1033,8 @@ async function setOwnBiUid(req, res) {
   }
 
   const body = req.body || {};
-  const bm = require('../battlemetrics');
-  const bmDown = 'We could not reach BattleMetrics. Please try again in a minute.';
+  const players = require('../playerLookup');
+  const indexDown = 'We could not check the player list just now. Please try again in a minute.';
   let cleaned = null;
   let playerName = null;
   let verified = false;
@@ -1045,12 +1045,12 @@ async function setOwnBiUid(req, res) {
     if (!cand) return res.status(400).json({ code: 'pick_expired', error: 'That choice has expired. Search for yourself again.' });
     cleaned = cand.biUid;
     if (!cleaned) {
-      const found = await bm.reforgerUuidForPlayer(cand.bmPlayerId);
-      if (found.unavailable) return res.status(503).json({ error: bmDown });
+      const found = await players.reforgerUuidForPlayer(cand.bmPlayerId);
+      if (found.unavailable) return res.status(503).json({ error: indexDown });
       cleaned = found.biUid;
     }
     if (!cleaned) {
-      return res.status(404).json({ code: 'not_recorded', error: 'BattleMetrics has not recorded an in-game ID for that player yet. Play one round on a ReforgedZ server, or paste your ID from the game.' });
+      return res.status(404).json({ code: 'not_recorded', error: 'We do not have an in-game ID for that player. Search for yourself again, or paste your ID from the game.' });
     }
     playerName = cand.name || null;
     verified = true;
@@ -1062,26 +1062,21 @@ async function setOwnBiUid(req, res) {
     }
     // Pasted from the game's profile screen; braces, spaces and capitals are the
     // usual noise around a correct id.
-    cleaned = bm.asReforgerUuid(raw);
+    cleaned = players.asReforgerUuid(raw);
     if (!cleaned) {
       return res.status(400).json({ error: 'That does not look like an in-game ID. It is 36 characters with dashes, like 41b8ec0d-f0bd-4c41-b2a9-8213ebe04aac.' });
     }
-    // Checked with BattleMetrics, so a typo cannot send every perk to nobody and
-    // the player sees whose ID it is. A player who has never got onto one of our
-    // servers (the queue is why they are buying) is still accepted when
-    // BattleMetrics has seen the ID anywhere. If BattleMetrics cannot be asked at
-    // all, the save goes through rather than blocking on someone else's outage.
-    const ours = await bm.findPlayers(cleaned);
-    if (!ours.unavailable && ours.candidates.length) {
-      playerName = ours.candidates[0].name || null;
+    // Checked against our player index, so the player sees whose ID it is. An ID
+    // our servers have never seen is still saved, unverified: a player who has
+    // never got onto a full server (the queue is why they are buying) must not be
+    // refused, and the account page asks them to check it against the game. If the
+    // index cannot be asked at all, the save goes through the same way.
+    const seen = await players.matchReforgerUuid(cleaned).catch(() => ({ found: null }));
+    if (seen.found === true) {
+      playerName = seen.name || null;
       verified = true;
-    } else {
-      const seen = await bm.matchReforgerUuid(cleaned).catch(() => ({ found: null }));
-      if (seen.found === false) {
-        return res.status(400).json({ error: 'BattleMetrics has never seen that ID on any server. Check it against your profile in the game. If you only just started playing, play one round and try again.' });
-      }
-      if (seen.found === true) verified = true;
-      else console.warn('[bi-uid] BattleMetrics check unavailable (%s); saving %s unverified for %s', seen.error, cleaned, req.user.steam_id);
+    } else if (seen.found === null) {
+      console.warn('[bi-uid] player index unavailable (%s); saving %s unverified for %s', seen.error, cleaned, req.user.steam_id);
     }
   }
 
@@ -1101,7 +1096,7 @@ async function setOwnBiUid(req, res) {
     });
   }
 
-  // With the ID go the player name BattleMetrics showed (or none) and how it was
+  // With the ID go the player name our index showed (or none) and how it was
   // chosen, so the account page and receipts can say who the priority goes to
   // (inGameId.js). A website account also takes that name as its display name.
   const picked = body.ref != null;
@@ -1117,10 +1112,9 @@ async function setOwnBiUid(req, res) {
 
 // The player name behind the account's current in-game ID, looked up on request
 // and stored (plan J13). IDs saved before names were stored, by staff, or while
-// BattleMetrics was down have none, and the account page offers this so the
-// player can see whose ID it is. BattleMetrics only names players seen on a
-// ReforgedZ server. Capped per account: each lookup spends the BattleMetrics
-// budget the Find me search and the homepage player counts share.
+// the player index was down have none, and the account page offers this so the
+// player can see whose ID it is. The index only names players seen on a
+// ReforgedZ server. Capped per account.
 const lookupNameLimit = windowLimit({ limit: 6, windowMs: 60 * 1000 });
 
 router.post('/api/shop/account/bi-uid/lookup-name', requireAuth, async (req, res) => {
@@ -1131,13 +1125,13 @@ router.post('/api/shop/account/bi-uid/lookup-name', requireAuth, async (req, res
   const biUid = me && me.bi_uid;
   if (!biUid) return res.status(400).json({ code: 'no_in_game_id', error: 'Add your in-game ID first.' });
   try {
-    const found = await require('../battlemetrics').findPlayers(biUid);
-    if (found.unavailable) {
-      return res.status(503).json({ error: 'We could not reach BattleMetrics. Please try again in a minute.' });
+    const found = await require('../playerLookup').matchReforgerUuid(biUid);
+    if (found.found === null) {
+      return res.status(503).json({ error: 'We could not check the player list just now. Please try again in a minute.' });
     }
-    const name = inGameId.cleanPlayerName(found.candidates[0] && found.candidates[0].name);
+    const name = inGameId.cleanPlayerName(found.found ? found.name : null);
     if (!name) {
-      return res.status(404).json({ code: 'not_found', error: 'BattleMetrics has not seen that in-game ID on a ReforgedZ server yet. Play one round, then try again.' });
+      return res.status(404).json({ code: 'not_found', error: 'That in-game ID has not played on a ReforgedZ server yet. Play one round, then try again.' });
     }
     inGameId.storeLookedUpName(db, { steamId: req.user.steam_id, biUid, name });
     res.json({ ok: true, name });
