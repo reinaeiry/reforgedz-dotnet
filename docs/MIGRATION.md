@@ -208,6 +208,10 @@ that is not there yet shows up before the first customer notices.
 One line each, so the move of the box is planned with them in view. None of these are part
 of the shop pack.
 
+> **Dated 2026-09-29:** this table describes the layout before the September 2026 move. Container and
+> server ids changed, and the web tunnel is now one tunnel run by two connectors. The current map is
+> `Server-Ops/INVENTORY.md` (private).
+
 | System | Where it lives | What has to travel |
 |---|---|---|
 | Ticket bot + transcripts | Pterodactyl `592fec9c`, repo `reinaeiry/Ticket-Bot` | its `.env`, `prisma/tixbot.db`, `web/transcripts.db`; `SHOP_BASE_URL` and `SHOP_ADMIN_API_KEY` stay |

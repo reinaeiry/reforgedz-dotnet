@@ -48,11 +48,11 @@ const VARS = [
 
   // ---- Game servers ---------------------------------------------------------
   { name: 'SSH_PRIVATE_KEY_B64', group: 'Game servers', required: true, secret: true, outbound: true, doc: 'base64 of the private key that logs in as GAME_SERVER_EU_USER on GAME_SERVER_EU_HOST. Its public half must be in that user\'s authorized_keys. NA is reached from the EU host with the EU host\'s own key.', example: '' },
-  { name: 'GAME_SERVER_EU_HOST', group: 'Game servers', required: true, doc: 'SSH entry host. Every server write starts here.', example: '162.19.127.130' },
+  { name: 'GAME_SERVER_EU_HOST', group: 'Game servers', required: true, doc: 'SSH entry host. Every server write starts here.', example: '203.0.113.10' },
   { name: 'GAME_SERVER_EU_PORT', group: 'Game servers', doc: 'Default 22.', example: '22' },
   { name: 'GAME_SERVER_EU_USER', group: 'Game servers', doc: 'Default root. Must be able to write the Pterodactyl volumes.', example: 'root' },
   { name: 'GAME_SERVER_EU_PATHS', group: 'Game servers', required: true, doc: 'Comma-separated shop paths for EU1,EU2: <volume>/profile/profile/eiry/reforgedz-dotnet-shop. The volume uuids change on a new panel.', example: '' },
-  { name: 'GAME_SERVER_NA_HOST', group: 'Game servers', required: true, doc: 'Reached by a nested ssh from the EU host as GAME_SERVER_NA_USER.', example: '51.222.254.40' },
+  { name: 'GAME_SERVER_NA_HOST', group: 'Game servers', required: true, doc: 'Reached by a nested ssh from the EU host as GAME_SERVER_NA_USER.', example: '203.0.113.20' },
   { name: 'GAME_SERVER_NA_PORT', group: 'Game servers', doc: '', example: '22' },
   { name: 'GAME_SERVER_NA_USER', group: 'Game servers', doc: '', example: 'root' },
   { name: 'GAME_SERVER_NA_PATHS', group: 'Game servers', required: true, doc: 'Comma-separated shop paths for NA1,NA2.', example: '' },

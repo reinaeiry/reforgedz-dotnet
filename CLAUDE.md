@@ -1,6 +1,6 @@
 # reforgedz-dotnet — working notes for Claude
 
-**First run:** there is no build, lint or test suite. Read the memory `reforgedz-shop-repo`
+**First run:** there is no build or lint step; `npm test` runs the `node:test` suite in `test/`. Read the memory `reforgedz-shop-repo`
 (the file map and the two traps), then `git status` — and stop if `shop.db-wal` /
 `shop.db-shm` show as modified, that is normal and must never be "cleaned up".
 
