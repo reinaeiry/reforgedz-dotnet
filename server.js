@@ -216,12 +216,19 @@ function sendWifiBlob(res, mib) {
   })();
 }
 
+// The hostname the visitor asked for, as the Cloudflare tunnel delivers it in Host. Not req.hostname: with
+// trust proxy on, that reads X-Forwarded-Host, which the client sets and Cloudflare passes through, so one
+// request to reforgedz.net could be answered (and edge-cached) as the wiki or wifi host.
+function tunnelHost(req) {
+  return String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+}
+
 // ---- wiki.reforgedz.net: the retired wiki's host, every request 301s to the new wiki ----
 // Served from this box (it used to be a Cloudflare Worker, which bots on the old host pushed past the free daily
 // request cap). Any method; the target only ever comes from lib/wiki-aliases.json.
 const wikiRedirect = require('./lib/wiki-redirect');
 app.use((req, res, next) => {
-  if (req.hostname !== 'wiki.reforgedz.net') return next();
+  if (tunnelHost(req) !== 'wiki.reforgedz.net') return next();
   res.writeHead(301, {
     Location: wikiRedirect.locationFor(`https://wiki.reforgedz.net${req.originalUrl}`),
     // A day, not forever, so browsers pick up a changed table or a removed redirect.
@@ -232,7 +239,7 @@ app.use((req, res, next) => {
 });
 
 app.use((req, res, next) => {
-  if (req.hostname !== 'wifi.reforgedz.net') return next();
+  if (tunnelHost(req) !== 'wifi.reforgedz.net') return next();
 
   if (req.method === 'POST' && req.path === '/upload') {
     let received = 0;
