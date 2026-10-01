@@ -211,7 +211,11 @@
     function curServer(){ return $('server').value; }
     // Drops/edits are always allowed — no running-server block. Live entities just
     // get re-saved by the server (log the player off first); dead/dormant records drop clean.
-    function forceWrite(){ return true; }
+    // force (skip the box's running-server check) goes only with what the banner shows: when
+    // it says RUNNING the edit goes through as before; when it says STOPPED or is still
+    // checking, the box checks again, so a server started since the page looked is not
+    // edited under the impression that it is stopped. Refresh shows the new state.
+    function forceWrite(){ return serverRunning === true; }
     function canWrite(){ return true; }
     function applyWriteState(){
       document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
