@@ -303,6 +303,8 @@
     function once(){
       if (stopped.v) return Promise.resolve();
       return fetch(url, { cache: "no-store", signal: ctrl.signal }).then(function(res){
+        // A refusal (429) is not data: stop this stream rather than refetch in a tight loop.
+        if (!res.ok || !res.body) return;
         var reader = res.body.getReader();
         function pump(){
           return reader.read().then(function(r){

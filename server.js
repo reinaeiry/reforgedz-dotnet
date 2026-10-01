@@ -199,6 +199,16 @@ const wifiPage = path.join(__dirname, 'public', 'wifi', 'index.html');
 const wifiChunk = crypto.randomBytes(1024 * 1024);
 const WIFI_BLOBS = { '/blob-1m.bin': 1, '/blob-10m.bin': 10, '/blob-25m.bin': 25 };
 const WIFI_UPLOAD_CAP = 40 * 1024 * 1024;
+// Blob requests that reach this process are edge misses: a speed test misses only on a cold PoP, a handful
+// of times, then reads from the edge. More than this per minute from one address is someone pulling bulk
+// data through the tunnel on purpose.
+const wifiBlobLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down.' }
+});
 
 function sendWifiBlob(res, mib) {
   res.writeHead(200, {
@@ -253,6 +263,11 @@ app.use((req, res, next) => {
   }
 
   if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).end();
+  const mib = WIFI_BLOBS[req.path];
+  // The edge caches by full URL, so /blob-25m.bin?<anything new> was a guaranteed miss that streamed 25 MiB
+  // out of this box, over the NIC the game servers use. The page never adds a query; send any request that
+  // does to the bare, cached URL.
+  if ((mib || req.path === '/ping.bin') && req.originalUrl.includes('?')) return res.redirect(301, req.path);
   if (req.path === '/ping.bin') {
     res.writeHead(200, {
       'Content-Type': 'application/octet-stream',
@@ -261,8 +276,7 @@ app.use((req, res, next) => {
     });
     return res.end(wifiChunk.subarray(0, 32));
   }
-  const mib = WIFI_BLOBS[req.path];
-  if (mib) return sendWifiBlob(res, mib);
+  if (mib) return wifiBlobLimiter(req, res, () => sendWifiBlob(res, mib));
   res.sendFile(wifiPage);
 });
 
