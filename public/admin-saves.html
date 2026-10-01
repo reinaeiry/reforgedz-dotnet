@@ -217,6 +217,9 @@
     // edited under the impression that it is stopped. Refresh shows the new state.
     function forceWrite(){ return serverRunning === true; }
     function canWrite(){ return true; }
+    // The box's command wrapper (rz-web-ssh) refuses the save download (S6) and Copy DB
+    // (S23) by design, so their controls stay hidden until it has fixed verbs for them.
+    const SAVE_EXPORT = false;
     function applyWriteState(){
       document.querySelectorAll('.si-act.del, .si-act.save').forEach(el => el.classList.toggle('disabled', !canWrite()));
       updateOrphBtn(); updateDeadBtn();
@@ -282,6 +285,7 @@
       let user=null; try { user = await (await fetch('/api/auth/me')).json(); } catch {}
       if (!user || user.role !== 'admin'){ $('denied').style.display='block'; return; }
       $('content').style.display='block';
+      if (!SAVE_EXPORT){ $('dlAllBtn').style.display='none'; document.querySelector('.si-tab[data-tab="copy"]').style.display='none'; }
       try {
         const servers = await (await fetch('/api/shop/admin/save-servers')).json();
         const opts = servers.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
@@ -329,7 +333,7 @@
         const r = await (await fetch(`/api/shop/admin/save-players?server=${encodeURIComponent(curServer())}`)).json();
         if (r.error){ $('playersErr').textContent=r.error; $('playersNote').textContent=''; return; }
         playersLoaded=true; playersData=r.players||[];
-        $('playersNote').innerHTML=`<b>${(r.count||0).toLocaleString()}</b> player${r.count===1?'':'s'} on ${curServer().toUpperCase()}. Click a row to open their file (drop / edit / download).`;
+        $('playersNote').innerHTML=`<b>${(r.count||0).toLocaleString()}</b> player${r.count===1?'':'s'} on ${curServer().toUpperCase()}. Click a row to open their file (drop / edit${SAVE_EXPORT?' / download':''}).`;
         renderPlayers();
       } catch { $('playersErr').textContent='Could not load players.'; $('playersNote').textContent=''; }
     }
@@ -417,7 +421,7 @@
         const cats=(data.categories||[]).slice().sort((a,b)=>b.count-a.count);
         const total=cats.reduce((a,c)=>a+c.count,0);
         const max=Math.max(1,...cats.map(c=>c.count));
-        $('statBar').innerHTML = `<div class="si-note"><b>${cats.length}</b> collections · <b>${total.toLocaleString()}</b> total records on ${curServer().toUpperCase()} — click ↓ to download a collection.</div>`;
+        $('statBar').innerHTML = `<div class="si-note"><b>${cats.length}</b> collections · <b>${total.toLocaleString()}</b> total records on ${curServer().toUpperCase()}${SAVE_EXPORT?' — click ↓ to download a collection':''}.</div>`;
         $('statCats').innerHTML = cats.map(c=>`
           <div class="si-catcard" onclick="openCollection('${esc(c.category)}')" title="Click to browse ${esc(c.category)}">
             <span class="si-badge" style="background:${catColor(c.category)}22;color:${catColor(c.category)}">${esc(c.category)}</span>
@@ -425,7 +429,7 @@
               <div class="cc">${c.count.toLocaleString()} record${c.count===1?'':'s'}</div>
               <div class="bar"><i style="width:${Math.round(c.count/max*100)}%;background:${catColor(c.category)}"></i></div>
             </div>
-            <span class="si-act dl" onclick="event.stopPropagation();download('${esc(c.rel)}')">↓</span>
+            ${SAVE_EXPORT?`<span class="si-act dl" onclick="event.stopPropagation();download('${esc(c.rel)}')">↓</span>`:''}
           </div>`).join('');
       } catch { $('statErr').textContent='Stats failed.'; $('statBar').innerHTML=''; }
     }
@@ -589,7 +593,7 @@
             ${linkedId?`<span class="si-act" onclick="loadLinked(this,'${esc(linkedId)}')">Character</span>`:''}
             <span class="si-act" onclick="toggleEdit(this)">Edit</span>
             <span class="si-act del${dis}" onclick="dropRecord(this)">Drop</span>
-            <span class="si-act dl" onclick="download(this.closest('.si-card').dataset.rel)">Download</span>
+            ${SAVE_EXPORT?`<span class="si-act dl" onclick="download(this.closest('.si-card').dataset.rel)">Download</span>`:''}
           </span>
         </div>
         ${playerSummary(rec.data)}
