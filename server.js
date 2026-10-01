@@ -461,12 +461,22 @@ function safeReturnTo(raw) {
   return raw;
 }
 
-app.get('/auth/steam', authLimiter, (req, res, next) => {
+// Only Steam may be the OpenID provider: without this, ?openid_identifier= or a forged callback made this process
+// fetch an outside URL and could redirect the visitor to an imitation Steam login (lib/steam-openid-gate.js).
+const { steamOpenidProblem } = require('./lib/steam-openid-gate');
+function steamOnly(req, res, next) {
+  const problem = steamOpenidProblem(req);
+  if (!problem) return next();
+  console.warn('[auth] Steam sign-in request refused:', problem);
+  res.redirect('/shop');
+}
+
+app.get('/auth/steam', authLimiter, steamOnly, (req, res, next) => {
   const dest = safeReturnTo(req.query.next);
   if (dest) req.session.returnTo = dest; else delete req.session.returnTo;
   next();
 }, passport.authenticate('steam'));
-app.get('/auth/steam/callback', authLimiter,
+app.get('/auth/steam/callback', authLimiter, steamOnly,
   // passport ≥0.6 regenerates the session on login and would drop returnTo
   // without keepSessionInfo.
   // authMethod reaches the sign-in wrapper below: admin rights need a Steam session.
