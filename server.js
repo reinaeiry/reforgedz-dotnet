@@ -1326,6 +1326,13 @@ app.get('/radio', (req, res) => {
   res.send(html);
 });
 
+// ---- Async route errors ----
+// Every route is registered by now. An async route that threw (a crafted ?order[toString]=1 on the PayPal return
+// pages, for one) left its request with no answer: only the process logger below saw the error. Its rejection now
+// goes to the catch-all handler, which answers 500 JSON (lib/async-routes.js).
+const asyncRoutes = require('./lib/async-routes').routeAsyncRejections(app._router.stack);
+console.log(`[express] ${asyncRoutes} async route handlers answer through the error handler when they throw`);
+
 // ---- Not found ----
 // Every route and static file has had its turn. API callers get JSON; people get a
 // page with the site's own look and a way back, instead of Express's bare "Cannot GET"
