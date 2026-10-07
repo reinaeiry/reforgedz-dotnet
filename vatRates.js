@@ -20,10 +20,15 @@ const EU_STANDARD = Object.freeze({
 });
 const UK_STANDARD = 20;
 
+// Territories inside another country's VAT area: Monaco is in French VAT, the Isle
+// of Man in UK VAT.
+const VAT_AREA_OF = Object.freeze({ MC: 'FR', IM: 'GB' });
+
 // { scheme, rate } for a country: 'EU-OSS' (filed through the One Stop Shop),
 // 'UK' (filed with HMRC), or 'none' (no VAT registration covers it; rate null).
 function vatFor(country) {
-  const c = String(country || '').toUpperCase();
+  const raw = String(country || '').toUpperCase();
+  const c = VAT_AREA_OF[raw] || raw;
   if (Object.prototype.hasOwnProperty.call(EU_STANDARD, c)) return { scheme: 'EU-OSS', rate: EU_STANDARD[c] };
   if (c === 'GB') return { scheme: 'UK', rate: UK_STANDARD };
   return { scheme: 'none', rate: null };

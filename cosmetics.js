@@ -11,10 +11,13 @@
 // revokes set status 'refunded', so those drop out at the next sync.
 //
 // Until some product carries a cosmetic_key the sync writes no cosmetics.json at
-// all, so shipping this code changes nothing on a game server by itself.
+// all, so shipping this code changes nothing on a game server by itself. From the
+// first time one does, it writes the file on every run, an empty list included.
 //
 // Takes the database as a parameter and does nothing on require
 // (test/cosmetics.test.js).
+
+const crypto = require('crypto');
 
 // Lowercase letters, digits, dot, dash and underscore; starts with a letter or digit.
 // The mod matches keys exactly, so one spelling rule keeps the two sides in step.
@@ -44,6 +47,17 @@ function cosmeticsConfigured(db) {
   return !!db.prepare("SELECT 1 FROM products WHERE cosmetic_key IS NOT NULL AND cosmetic_key != '' LIMIT 1").get();
 }
 
+// Whether the sync writes cosmetics.json: from the first run that finds a cosmetic
+// key, for good. Without the record, clearing the last key would stop the writes and
+// leave every server holding the last list it got, ended entitlements included.
+function cosmeticsInUse(db, now = Math.floor(Date.now() / 1000)) {
+  if (cosmeticsConfigured(db)) {
+    db.prepare('INSERT OR IGNORE INTO cosmetics_sync_state (id, first_configured_at) VALUES (1, ?)').run(now);
+    return true;
+  }
+  return !!db.prepare('SELECT 1 FROM cosmetics_sync_state WHERE id = 1').get();
+}
+
 // Every server gets the same list (cosmetics are not tied to a server): one entry per
 // in-game ID and key, oldest order first, in purchases.json's shape.
 function buildCosmeticEntries(db, now = Math.floor(Date.now() / 1000)) {
@@ -70,22 +84,42 @@ function buildCosmeticEntries(db, now = Math.floor(Date.now() / 1000)) {
   return out;
 }
 
-// The remote command that writes one server's cosmetics.json. Same pattern as
-// purchases.json: the content travels base64-encoded, lands in a sibling temp file and
-// is renamed over the target, so a server reading it sees the old list or the new one,
-// never half of one. Each server confirms on its own line, because the commands are
-// chained with ';' and the exit code only reflects the last.
-function buildWriteCosmeticsCmd(server, json) {
+// Base64 characters per command. Each command travels as one argument to the remote
+// shell, which Linux caps at 128 KiB, and a server reached through the NA hop gets it
+// base64-encoded once more (sync.wrapForRegion), so 32 KiB keeps every command near
+// 44 KiB whatever the list's size. One command, in the usual case.
+const CHUNK_B64 = 32 * 1024;
+
+// The remote commands that write one server's cosmetics.json, to run in order, each
+// as its own SSH command. The content travels base64-encoded in chunks appended to a
+// sibling file; the last command decodes it, checks its SHA-256 and only then renames
+// it over the target, so a server reading the file sees the old list or the new one,
+// never half of one, and a lost chunk leaves the old list in place. The last command
+// prints '[cosmetics] <id> OK' only once the rename is done.
+function buildWriteCosmeticsCmds(server, json, chunkSize = CHUNK_B64) {
   const b64 = Buffer.from(json).toString('base64');
-  const remotePath = server.path + '/cosmetics.json';
-  const tmpPath = remotePath + '.tmp';
-  return [
-    `mkdir -p '${server.path}'`,
-    `echo '${b64}' | base64 -d > '${tmpPath}'`,
+  const sha = crypto.createHash('sha256').update(json).digest('hex');
+  const target = server.path + '/cosmetics.json';
+  const tmpPath = target + '.tmp';
+  const partPath = target + '.b64';
+  const cmds = [];
+  for (let i = 0; i < b64.length || i === 0; i += chunkSize) {
+    cmds.push(`printf '%s' '${b64.slice(i, i + chunkSize)}' >> '${partPath}'`);
+  }
+  cmds[0] = `mkdir -p '${server.path}' && : > '${partPath}' && ${cmds[0]}`;
+  cmds[cmds.length - 1] = [
+    cmds[cmds.length - 1],
+    `base64 -d '${partPath}' > '${tmpPath}'`,
+    `echo '${sha}  ${tmpPath}' | sha256sum -c --status`,
     `{ chmod --reference='${server.path}/purchases.json' '${tmpPath}' 2>/dev/null || true; }`,
-    `mv -f '${tmpPath}' '${remotePath}'`,
+    `mv -f '${tmpPath}' '${target}'`,
+    `rm -f '${partPath}'`,
     `echo '[cosmetics] ${server.id} OK'`
   ].join(' && ');
+  return cmds;
 }
 
-module.exports = { isCosmeticKey, normalizeCosmeticKey, deliveredInGame, cosmeticsConfigured, buildCosmeticEntries, buildWriteCosmeticsCmd };
+module.exports = {
+  CHUNK_B64, isCosmeticKey, normalizeCosmeticKey, deliveredInGame, cosmeticsConfigured, cosmeticsInUse,
+  buildCosmeticEntries, buildWriteCosmeticsCmds
+};

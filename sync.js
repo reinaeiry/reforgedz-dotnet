@@ -725,24 +725,6 @@ async function runPurchaseSync() {
       console.error('[sync] purchases.json failed for ALL servers:', e.message);
     }
 
-    // 1b) cosmetics.json (cosmetics.js), only once some product carries a cosmetic:
-    // until then nothing new is written to any server. Confirmed per server, as above.
-    if (cosmetics.cosmeticsConfigured(db)) {
-      const entries = cosmetics.buildCosmeticEntries(db);
-      const json = JSON.stringify(entries, null, 2);
-      try {
-        const out = await sshRun(conn, servers.map(s => wrapForRegion(s, cosmetics.buildWriteCosmeticsCmd(s, json))).join(' ; '));
-        const missing = servers.filter(s => !out.includes(`[cosmetics] ${s.id} OK`));
-        if (missing.length === 0) {
-          console.log(`[cosmetics] ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} synced to all ${servers.length} servers`);
-        } else {
-          console.error(`[cosmetics] cosmetics.json NOT confirmed on: ${missing.map(s => s.id).join(', ')}`);
-        }
-      } catch (e) {
-        console.error('[cosmetics] cosmetics.json failed for ALL servers:', e.message);
-      }
-    }
-
     // 2) Patch each server's game.admins additively
     for (const server of servers) {
       try {
@@ -750,6 +732,39 @@ async function runPurchaseSync() {
       } catch (e) {
         console.error(`[admins-sync] ${server.id} unhandled:`, e.message);
       }
+    }
+
+    // 3) cosmetics.json (cosmetics.js), once some product has ever carried a cosmetic:
+    // until then nothing new is written to any server. Last, so a slow or failed write
+    // never holds up priority queue; one server at a time, each with its own short
+    // commands (cosmetics.buildWriteCosmeticsCmds says why), confirmed per server.
+    try {
+      if (cosmetics.cosmeticsInUse(db)) {
+        const entries = cosmetics.buildCosmeticEntries(db);
+        const json = JSON.stringify(entries);
+        const wrote = [];
+        const missing = [];
+        for (const server of servers) {
+          try {
+            let out = '';
+            for (const cmd of cosmetics.buildWriteCosmeticsCmds(server, json)) out = await sshRun(conn, wrapForRegion(server, cmd));
+            (out.includes(`[cosmetics] ${server.id} OK`) ? wrote : missing).push(server.id);
+          } catch (e) {
+            missing.push(server.id);
+            console.error(`[cosmetics] ${server.id} write failed:`, e.message);
+          }
+        }
+        if (missing.length === 0) {
+          console.log(`[cosmetics] ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} synced to all ${servers.length} servers`);
+        } else {
+          console.error(
+            `[cosmetics] cosmetics.json NOT confirmed on: ${missing.join(', ')}` +
+            ` — those servers keep their previous list. Written OK: ${wrote.join(', ') || 'none'}`
+          );
+        }
+      }
+    } catch (e) {
+      console.error('[cosmetics] sync failed:', e.message);
     }
   } finally {
     conn.end();

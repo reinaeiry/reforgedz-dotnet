@@ -173,76 +173,134 @@ function evidenceOf(payer, ip) {
   return 'none';
 }
 
-// The quarter's VAT position. Kept payments only: live, completed, not refunded,
-// counted in the quarter they completed. The country is PayPal's when it has one
-// (the billing account), else the checkout's. Amounts are in the currency the shop
+// The quarter's VAT position, the way a return is made up:
+//   sales        every paid live sale, counted in the quarter it was paid, whatever
+//                happened to it later (a staff revoke that kept the money stays a sale);
+//   corrections  every refund and chargeback reversal PayPal reported, counted in the
+//                quarter it happened, against the sale's country. A refunded order with
+//                no refund on record (refunds before 2026-09-15 were not recorded) is
+//                netted out in its own sale's quarter, and the report says how many.
+// The country is PayPal's when it has one (the billing account), else the checkout's.
+// Every sale without two matching sources is listed for review: a seller outside the
+// EU needs two pieces of evidence that agree. Amounts are in the currency the shop
 // sells in (USD); a One Stop Shop return is filed in euros at the ECB rate of the
 // quarter's last day, which this report does not fetch.
+const CHECKOUT_IP_SQL = `(SELECT f.ip_country FROM orders f
+        WHERE o.paypal_subscription_id IS NOT NULL AND f.paypal_subscription_id = o.paypal_subscription_id
+          AND f.ip_country IS NOT NULL ORDER BY f.id LIMIT 1)`;
+
 function buildVatReport(db, { quarter } = {}) {
   const b = quarterBounds(quarter);
   if (!b) throw new Error('quarter must look like 2026Q4');
-  const rows = db.prepare(`
-    SELECT o.id, o.amount_cents, o.completed_at, o.payer_country, o.ip_country,
-      (SELECT f.ip_country FROM orders f
-        WHERE o.paypal_subscription_id IS NOT NULL AND f.paypal_subscription_id = o.paypal_subscription_id
-          AND f.ip_country IS NOT NULL ORDER BY f.id LIMIT 1) AS checkout_ip_country
+  const sales = db.prepare(`
+    SELECT o.id, o.amount_cents, o.status, o.revoked_without_refund_at, o.payer_country, o.ip_country,
+      ${CHECKOUT_IP_SQL} AS checkout_ip_country,
+      (SELECT COUNT(*) FROM paypal_refunds r WHERE r.order_id = o.id) AS refund_rows
     FROM orders o
-    WHERE o.status = 'completed' AND o.test_mode = 0 AND o.amount_cents > 0
+    WHERE o.status IN ('completed', 'refunded') AND o.test_mode = 0 AND o.amount_cents > 0
       AND o.completed_at >= ? AND o.completed_at < ?
     ORDER BY o.id
   `).all(b.start, b.end);
+  const refunds = db.prepare(`
+    SELECT r.refund_id, r.amount_cents, r.kind, o.id AS order_id, o.amount_cents AS order_cents,
+      o.payer_country, o.ip_country, ${CHECKOUT_IP_SQL} AS checkout_ip_country
+    FROM paypal_refunds r
+    LEFT JOIN orders o ON o.id = r.order_id
+    WHERE COALESCE(r.test_mode, 0) = 0 AND r.received_at >= ? AND r.received_at < ?
+      AND (o.id IS NULL OR o.test_mode = 0)
+    ORDER BY r.received_at, r.refund_id
+  `).all(b.start, b.end);
 
   const byCountry = new Map();
-  const totals = { 'EU-OSS': { orders: 0, grossCents: 0, vatCents: 0 }, UK: { orders: 0, grossCents: 0, vatCents: 0 }, none: { orders: 0, grossCents: 0 } };
-  const unknown = { orders: 0, grossCents: 0 };
+  const unknown = { orders: 0, salesCents: 0, refundCents: 0 };
   const review = [];
-  for (const r of rows) {
+  let undatedRefunds = 0;
+  const countryOf = (r) => {
     const payer = normalizeCountry(r.payer_country);
     const ip = normalizeCountry(r.ip_country) || normalizeCountry(r.checkout_ip_country);
-    const evidence = evidenceOf(payer, ip);
-    const country = payer || ip;
-    if (evidence === 'conflict' || evidence === 'none') review.push({ orderId: r.id, payerCountry: payer, ipCountry: ip, evidence });
-    if (!country) {
-      unknown.orders += 1;
-      unknown.grossCents += r.amount_cents;
-      continue;
-    }
-    const { scheme, rate } = vatFor(country);
+    return { payer, ip, country: payer || ip, evidence: evidenceOf(payer, ip) };
+  };
+  const bucket = (country) => {
     let c = byCountry.get(country);
     if (!c) {
-      c = { country, scheme, rate, orders: 0, grossCents: 0, vatCents: 0, evidence: { match: 0, conflict: 0, 'payer-only': 0, 'ip-only': 0 } };
+      const { scheme, rate } = vatFor(country);
+      c = { country, scheme, rate, orders: 0, salesCents: 0, refundCents: 0, netCents: 0, vatCents: 0,
+        evidence: { match: 0, conflict: 0, 'payer-only': 0, 'ip-only': 0 } };
       byCountry.set(country, c);
     }
+    return c;
+  };
+
+  for (const r of sales) {
+    const w = countryOf(r);
+    if (w.evidence !== 'match') review.push({ orderId: r.id, payerCountry: w.payer, ipCountry: w.ip, evidence: w.evidence });
+    // A refund with no record and no date: netted out in this, the sale's, quarter.
+    const undated = r.status === 'refunded' && r.revoked_without_refund_at == null && r.refund_rows === 0;
+    if (undated) undatedRefunds += 1;
+    if (!w.country) {
+      unknown.orders += 1;
+      unknown.salesCents += r.amount_cents;
+      if (undated) unknown.refundCents += r.amount_cents;
+      continue;
+    }
+    const c = bucket(w.country);
     c.orders += 1;
-    c.grossCents += r.amount_cents;
-    c.evidence[evidence] += 1;
+    c.salesCents += r.amount_cents;
+    c.evidence[w.evidence] += 1;
+    if (undated) c.refundCents += r.amount_cents;
   }
+  for (const r of refunds) {
+    const cents = r.amount_cents != null ? Math.abs(r.amount_cents) : r.order_cents;
+    if (cents == null) {
+      review.push({ refundId: r.refund_id, orderId: r.order_id, evidence: 'refund-without-amount' });
+      continue;
+    }
+    const w = r.order_id == null ? { country: null } : countryOf(r);
+    if (!w.country) {
+      unknown.refundCents += cents;
+      if (r.order_id == null) review.push({ refundId: r.refund_id, orderId: null, evidence: 'refund-without-order' });
+      continue;
+    }
+    bucket(w.country).refundCents += cents;
+  }
+
+  const totals = {
+    'EU-OSS': { salesCents: 0, refundCents: 0, netCents: 0, vatCents: 0 },
+    UK: { salesCents: 0, refundCents: 0, netCents: 0, vatCents: 0 },
+    none: { salesCents: 0, refundCents: 0, netCents: 0 }
+  };
   for (const c of byCountry.values()) {
-    // VAT is worked out on each country's total, the way a return reports it.
-    c.vatCents = vatIncludedCents(c.grossCents, c.rate);
+    c.netCents = c.salesCents - c.refundCents;
+    // VAT is worked out on each country's net total, the way a return reports it; a
+    // quarter whose refunds outweigh its sales shows a negative correction.
+    c.vatCents = vatIncludedCents(c.netCents, c.rate);
     const t = totals[c.scheme];
-    t.orders += c.orders;
-    t.grossCents += c.grossCents;
+    t.salesCents += c.salesCents;
+    t.refundCents += c.refundCents;
+    t.netCents += c.netCents;
     if (c.scheme !== 'none') t.vatCents += c.vatCents;
   }
-  const list = [...byCountry.values()].sort((a, z) => (z.grossCents - a.grossCents) || a.country.localeCompare(z.country));
+  const list = [...byCountry.values()].sort((a, z) => (z.netCents - a.netCents) || a.country.localeCompare(z.country));
   return {
     quarter: String(quarter).trim().toUpperCase(),
     from: new Date(b.start * 1000).toISOString(),
     to: new Date(b.end * 1000).toISOString(),
     currency: 'USD',
     ratesChecked: RATES_CHECKED,
-    orders: rows.length,
-    grossCents: rows.reduce((s, r) => s + r.amount_cents, 0),
+    orders: sales.length,
+    salesCents: sales.reduce((s, r) => s + r.amount_cents, 0),
+    refunds: refunds.length,
+    undatedRefunds,
     byCountry: list,
     totals,
     unknown,
     review,
     notes: [
-      'Prices include VAT, so the VAT shown is the part of each gross amount the rate makes up.',
+      'Prices include VAT, so the VAT shown is the part of each net amount the rate makes up.',
       `Rates were checked on ${RATES_CHECKED}; check them against the EU tax database and GOV.UK before filing.`,
-      'Refunded orders are left out. A refund after a quarter was filed is corrected in a later return.',
-      'A conflict or a missing country needs a third piece of evidence (or a person\'s decision) before filing.'
+      'Sales count in the quarter they were paid; refunds and chargeback reversals in the quarter they happened.',
+      `${undatedRefunds} refunded order(s) in this quarter have no refund on record and were netted out in their sale's quarter.`,
+      'Every sale without two matching pieces of evidence is listed under review; settle each before filing.'
     ]
   };
 }

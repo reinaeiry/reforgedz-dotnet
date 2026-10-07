@@ -64,6 +64,8 @@ test('rates: EU countries file through the One Stop Shop, the UK with HMRC, the 
   assert.deepEqual(rates.vatFor('FI'), { scheme: 'EU-OSS', rate: 25.5 });
   assert.deepEqual(rates.vatFor('GB'), { scheme: 'UK', rate: 20 });
   assert.deepEqual(rates.vatFor('US'), { scheme: 'none', rate: null });
+  assert.deepEqual(rates.vatFor('mc'), { scheme: 'EU-OSS', rate: 20 }, 'Monaco is in French VAT');
+  assert.deepEqual(rates.vatFor('IM'), { scheme: 'UK', rate: 20 }, 'the Isle of Man is in UK VAT');
   assert.deepEqual(rates.vatFor(null), { scheme: 'none', rate: null });
   assert.equal(Object.keys(rates.EU_STANDARD).length, 27);
   assert.equal(rates.vatIncludedCents(1500, 20), 250);
@@ -159,41 +161,67 @@ test('the daily run reads the last three days, leaving the newest six hours to t
 
 // ---- The quarterly report ----------------------------------------------------------
 
-test('report: totals per country from kept live payments, with conflicts and gaps listed for review', () => {
+function refund(orderId, cents, at, { kind = 'refund', test = 0, id = null } = {}) {
+  db.prepare(`INSERT INTO paypal_refunds (refund_id, order_id, payment_id, amount_cents, currency, kind, source, received_at, test_mode)
+              VALUES (?, ?, NULL, ?, 'USD', ?, 'webhook', ?, ?)`).run(id || `R-${orderId}-${at}`, orderId, cents, kind, at, test);
+}
+
+test('report: sales in the quarter paid, refunds and reversals in the quarter they happened, single sources reviewed', () => {
+  db.prepare('DELETE FROM paypal_refunds').run();
   db.prepare('DELETE FROM orders').run();
   const q = (m, d) => utc(2027, m, d);
-  order({ at: q(0, 5), payer: 'GB', ip: 'GB' });                  // match, UK
-  order({ at: q(0, 6), payer: 'GB', ip: 'IE' });                  // conflict, filed under PayPal's GB
-  order({ at: q(1, 7), ip: 'DE' });                               // checkout only
-  order({ at: q(1, 8), payer: 'DE' });                            // PayPal only
-  order({ at: q(2, 9), payer: 'US', ip: 'US' });                  // outside both schemes
-  order({ at: q(2, 10) });                                        // nothing known
-  order({ at: q(0, 11), payer: 'FR', status: 'refunded' });       // refunded: out
-  order({ at: q(0, 12), payer: 'FR', test: 1 });                  // sandbox: out
-  order({ at: utc(2026, 11, 31, 23, 59), payer: 'FR' });          // previous quarter: out
-  order({ at: utc(2027, 3, 1), payer: 'FR' });                    // next quarter: out
-  // A renewal row with no checkout of its own takes its subscription's checkout country.
-  order({ at: utc(2026, 10, 1), ip: 'NL', sub: 'I-RENEWS' });
-  order({ at: q(1, 1), sub: 'I-RENEWS' });
+  const A = order({ at: q(0, 5), payer: 'GB', ip: 'GB' });                 // match
+  const B = order({ at: q(0, 6), payer: 'GB', ip: 'IE' });                 // conflict, filed under PayPal's GB
+  const C = order({ at: q(1, 7), ip: 'DE' });                              // checkout only
+  const D = order({ at: q(1, 8), payer: 'DE' });                           // PayPal only
+  const E = order({ at: q(2, 9), payer: 'US', ip: 'US' });                 // outside both schemes
+  const F = order({ at: q(2, 10) });                                       // nothing known
+  const G = order({ at: q(0, 11), payer: 'FR', status: 'refunded' });     // staff revoke, money kept: a sale
+  db.prepare('UPDATE orders SET revoked_without_refund_at = ? WHERE id = ?').run(q(0, 12), G);
+  const H = order({ at: q(0, 12), payer: 'FR', status: 'refunded' });     // refunded, no record: netted here
+  const I = order({ at: q(0, 13), payer: 'IT' });
+  refund(I, 500, q(1, 1));                                                 // partial refund in the quarter
+  const J = order({ at: utc(2026, 11, 20), payer: 'ES', status: 'refunded' }); // sold last quarter
+  refund(J, 1500, q(0, 20));                                               // refunded this quarter
+  const K = order({ at: q(0, 25), payer: 'NL' });
+  refund(K, 1500, q(2, 1), { kind: 'reversal' });                          // a lost chargeback
+  order({ at: utc(2026, 10, 1), ip: 'NL', sub: 'I-RENEWS' });               // checkout last quarter
+  const R = order({ at: q(1, 1), sub: 'I-RENEWS' });                        // its renewal: checkout's country
+  const L = order({ at: q(2, 3), payer: 'MC' });                           // Monaco: French VAT
+  const M = order({ at: q(2, 4), payer: 'IM' });                           // Isle of Man: UK VAT
+  const N = order({ at: q(0, 14), payer: 'FR', test: 1 });                // sandbox: out
+  refund(N, 1500, q(0, 15), { test: 1 });
+  refund(null, 700, q(1, 2), { id: 'R-ORPHAN' });                          // a refund with no order
+  order({ at: utc(2027, 3, 1), payer: 'FR' });                             // next quarter: out
+  refund(A, 1500, utc(2027, 3, 2));                                        // refunded next quarter: not here
 
   const r = vat.buildVatReport(db, { quarter: '2027Q1' });
-  assert.equal(r.orders, 7);
-  assert.equal(r.grossCents, 7 * 1500);
+  assert.equal(r.orders, 13);
+  assert.equal(r.salesCents, 13 * 1500);
+  assert.equal(r.refunds, 4, 'the partial refund, the late refund, the reversal and the orphan; sandbox and next quarter left out');
+  assert.equal(r.undatedRefunds, 1);
   const by = Object.fromEntries(r.byCountry.map(c => [c.country, c]));
-  assert.deepEqual(Object.keys(by).sort(), ['DE', 'GB', 'NL', 'US']);
-  assert.equal(by.GB.orders, 2);
-  assert.equal(by.GB.vatCents, rates.vatIncludedCents(3000, 20));
+  assert.deepEqual(Object.keys(by).sort(), ['DE', 'ES', 'FR', 'GB', 'IM', 'IT', 'MC', 'NL', 'US']);
+  assert.deepEqual([by.GB.orders, by.GB.salesCents, by.GB.netCents, by.GB.vatCents], [2, 3000, 3000, rates.vatIncludedCents(3000, 20)]);
   assert.deepEqual(by.GB.evidence, { match: 1, conflict: 1, 'payer-only': 0, 'ip-only': 0 });
   assert.deepEqual(by.DE.evidence, { match: 0, conflict: 0, 'payer-only': 1, 'ip-only': 1 });
-  assert.equal(by.DE.vatCents, rates.vatIncludedCents(3000, 19));
-  assert.equal(by.NL.evidence['ip-only'], 1);
+  assert.deepEqual([by.FR.orders, by.FR.salesCents, by.FR.refundCents, by.FR.netCents], [2, 3000, 1500, 1500]);
+  assert.deepEqual([by.IT.refundCents, by.IT.netCents, by.IT.vatCents], [500, 1000, rates.vatIncludedCents(1000, 22)]);
+  assert.deepEqual([by.ES.orders, by.ES.salesCents, by.ES.refundCents, by.ES.netCents], [0, 0, 1500, -1500]);
+  assert.ok(by.ES.vatCents < 0, 'a refund of an earlier quarter is a negative correction');
+  assert.deepEqual([by.NL.orders, by.NL.salesCents, by.NL.refundCents, by.NL.netCents], [2, 3000, 1500, 1500]);
+  assert.equal(by.NL.evidence['ip-only'], 1, 'the renewal takes its checkout country');
+  assert.deepEqual([by.MC.scheme, by.MC.rate], ['EU-OSS', 20]);
+  assert.deepEqual([by.IM.scheme, by.IM.rate], ['UK', 20]);
   assert.equal(by.US.scheme, 'none');
   assert.equal(by.US.vatCents, 0);
-  assert.equal(r.totals.UK.vatCents, by.GB.vatCents);
-  assert.equal(r.totals['EU-OSS'].vatCents, by.DE.vatCents + by.NL.vatCents);
-  assert.equal(r.totals.none.grossCents, 1500);
-  assert.deepEqual(r.unknown, { orders: 1, grossCents: 1500 });
-  assert.deepEqual(r.review.map(x => x.evidence).sort(), ['conflict', 'none']);
+  assert.equal(r.totals.UK.vatCents, by.GB.vatCents + by.IM.vatCents);
+  assert.equal(r.totals['EU-OSS'].vatCents, ['DE', 'ES', 'FR', 'IT', 'MC', 'NL'].reduce((s, k) => s + by[k].vatCents, 0));
+  assert.deepEqual(r.unknown, { orders: 1, salesCents: 1500, refundCents: 700 });
+  const reviewed = new Set(r.review.map(x => x.orderId));
+  for (const id of [B, C, D, F, G, H, I, K, R, L, M]) assert.ok(reviewed.has(id), `order ${id} needs review`);
+  for (const id of [A, E]) assert.ok(!reviewed.has(id), `order ${id} has two matching sources`);
+  assert.ok(r.review.some(x => x.evidence === 'refund-without-order'));
   assert.equal(r.ratesChecked, rates.RATES_CHECKED);
   assert.throws(() => vat.buildVatReport(db, { quarter: '2027-01' }), /2026Q4/);
 });

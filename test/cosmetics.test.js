@@ -7,6 +7,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rz-cosmetics-'));
 process.env.DATA_DIR = dataDir;
@@ -52,6 +54,7 @@ test('keys: lowercase letters, digits, dot, dash, underscore; the form clears wi
 test('nothing is configured until some product carries a cosmetic key', () => {
   product('Priority Queue', { pq: 1, type: 'subscription' });
   assert.equal(cosmetics.cosmeticsConfigured(db), false);
+  assert.equal(cosmetics.cosmeticsInUse(db, NOW), false, 'nothing is written to a server');
   assert.deepEqual(cosmetics.buildCosmeticEntries(db, NOW), []);
 });
 
@@ -96,14 +99,80 @@ test('a stored key that breaks the rule is never sent to a server', () => {
   assert.ok(!cosmetics.buildCosmeticEntries(db, NOW).some(x => x.item === 'Bad Key'));
 });
 
-test('the write command lands the exact list atomically and confirms per server', () => {
-  const json = JSON.stringify([{ name: 'P', guid: 'g', item: 'flag.wolf' }], null, 2);
-  const cmd = cosmetics.buildWriteCosmeticsCmd({ id: 'eu1', path: '/srv/eu1/profile' }, json);
-  const b64 = /echo '([A-Za-z0-9+/=]+)' \| base64 -d > '\/srv\/eu1\/profile\/cosmetics\.json\.tmp'/.exec(cmd);
-  assert.ok(b64, 'writes a temp file from base64');
-  assert.equal(Buffer.from(b64[1], 'base64').toString(), json);
-  assert.ok(cmd.indexOf(".tmp' '/srv/eu1/profile/cosmetics.json'") > cmd.indexOf('base64 -d'), 'renames over the target after writing');
-  assert.match(cmd, /echo '\[cosmetics\] eu1 OK'$/);
+// The write commands, run for real through bash against a throwaway folder (the test
+// container is Linux; the shell steps are the ones a game-server host runs).
+const noBash = process.platform === 'win32' && 'needs bash and coreutils (run npm test in the Docker image)';
+const NA = { id: 'na1', region: 'na', host: 'na.example', port: 22, user: 'rz' };
+const runEu = (cmd) => execFileSync('bash', ['-c', cmd], { encoding: 'utf8' });
+// A command wrapped for the NA hop, minus the ssh itself: what the NA host's shell runs.
+function runNa(server, cmd) {
+  const wrapped = sync.wrapForRegion({ ...NA, ...server }, cmd);
+  const m = /'(echo [A-Za-z0-9+/=]+ \| base64 -d \| bash)'$/.exec(wrapped);
+  assert.ok(m, 'the NA form pipes a base64 command to bash');
+  return execFileSync('bash', ['-c', m[1]], { encoding: 'utf8' });
+}
+function bigList(count) {
+  return Array.from({ length: count }, (_, i) => ({
+    name: `Player_${String(i).padStart(5, '0')}_${'x'.repeat(20)}`,
+    guid: crypto.randomUUID(),
+    item: `armband.${'stripes-red-'.repeat(4)}${i % 50}`
+  }));
+}
+
+test('the write commands land the exact list atomically and confirm per server', { skip: noBash }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rz-cos-eu-'));
+  const json = JSON.stringify([{ name: 'P', guid: 'g', item: 'flag.wolf' }]);
+  const cmds = cosmetics.buildWriteCosmeticsCmds({ id: 'eu1', path: dir + '/profile' }, json);
+  assert.equal(cmds.length, 1, 'a small list is one command');
+  assert.match(cmds[0], /echo '\[cosmetics\] eu1 OK'$/);
+  assert.ok(cmds[0].indexOf('sha256sum -c') < cmds[0].indexOf('mv -f'), 'checks the content before the rename');
+  const out = runEu(cmds[0]);
+  assert.match(out, /\[cosmetics\] eu1 OK/);
+  assert.equal(fs.readFileSync(dir + '/profile/cosmetics.json', 'utf8'), json);
+  assert.deepEqual(fs.readdirSync(dir + '/profile'), ['cosmetics.json'], 'no temp files left behind');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('2,000 entries: every command stays far under the argument limit, NA hop included, and lands the exact list', { skip: noBash }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rz-cos-na-'));
+  const server = { id: 'na1', path: dir + '/profile' };
+  const json = JSON.stringify(bigList(2000));
+  const cmds = cosmetics.buildWriteCosmeticsCmds(server, json);
+  assert.ok(cmds.length > 5, `chunked (${cmds.length} commands for ${json.length} bytes)`);
+  for (const cmd of cmds) {
+    const size = Buffer.byteLength(sync.wrapForRegion({ ...NA, ...server }, cmd));
+    assert.ok(size < 64 * 1024, `a wrapped command is ${size} bytes; Linux caps one argument at 128 KiB`);
+  }
+  let out = '';
+  for (const cmd of cmds) out = runNa(server, cmd);
+  assert.match(out, /\[cosmetics\] na1 OK/);
+  assert.equal(fs.readFileSync(dir + '/profile/cosmetics.json', 'utf8'), json);
+  assert.deepEqual(fs.readdirSync(dir + '/profile'), ['cosmetics.json']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a lost chunk leaves the previous list in place and no OK', { skip: noBash }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rz-cos-lost-'));
+  const server = { id: 'eu2', path: dir + '/profile' };
+  fs.mkdirSync(server.path);
+  fs.writeFileSync(server.path + '/cosmetics.json', '[]');
+  const cmds = cosmetics.buildWriteCosmeticsCmds(server, JSON.stringify(bigList(500)), 4096);
+  assert.ok(cmds.length > 3);
+  for (const cmd of cmds.slice(0, -1).filter((_, i) => i !== 1)) runEu(cmd);
+  assert.throws(() => runEu(cmds[cmds.length - 1]), 'the checksum fails, so the command exits non-zero');
+  assert.equal(fs.readFileSync(server.path + '/cosmetics.json', 'utf8'), '[]');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('an empty list is written too', { skip: noBash }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rz-cos-empty-'));
+  const server = { id: 'eu3', path: dir + '/profile' };
+  fs.mkdirSync(server.path);
+  fs.writeFileSync(server.path + '/cosmetics.json', JSON.stringify([{ name: 'P', guid: 'g', item: 'flag.wolf' }]));
+  const cmds = cosmetics.buildWriteCosmeticsCmds(server, '[]');
+  assert.match(runEu(cmds[cmds.length - 1]), /\[cosmetics\] eu3 OK/);
+  assert.equal(fs.readFileSync(server.path + '/cosmetics.json', 'utf8'), '[]');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('purchases.json stays priority queue only: cosmetics never enter it', () => {
@@ -119,4 +188,14 @@ test('checkout asks for an in-game ID only for what is delivered in game', () =>
   assert.equal(cosmetics.deliveredInGame({ grants_priority_queue: 0, cosmetic_key: null }), false, 'Backer and Supporter are Discord only');
   assert.equal(cosmetics.deliveredInGame({ grants_priority_queue: 0, cosmetic_key: 'Bad Key' }), false);
   assert.equal(cosmetics.deliveredInGame(null), false);
+});
+
+// Last: it clears every key, which the tests above rely on.
+test('once a cosmetic has been configured the sync keeps writing, even after every key is cleared', () => {
+  assert.equal(cosmetics.cosmeticsInUse(db, NOW), true);
+  db.prepare('UPDATE products SET cosmetic_key = NULL').run();
+  assert.equal(cosmetics.cosmeticsConfigured(db), false);
+  assert.equal(cosmetics.cosmeticsInUse(db, NOW), true, 'the servers must get the now-empty list');
+  assert.deepEqual(cosmetics.buildCosmeticEntries(db, NOW), []);
+  assert.equal(db.prepare('SELECT first_configured_at FROM cosmetics_sync_state').get().first_configured_at, NOW);
 });

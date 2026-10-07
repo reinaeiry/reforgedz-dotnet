@@ -373,10 +373,10 @@ router.get('/api/shop/version', (req, res) => {
 });
 
 // How much of this month's running costs is covered, as one public percentage
-// (funding.js). No amounts ever leave through here.
+// (funding.js), worked out at most once a minute. No amounts ever leave through here.
 router.get('/api/shop/funding', (req, res) => {
   res.set('Cache-Control', 'public, max-age=300');
-  res.json(funding.publicCoverage(db));
+  res.json(funding.cachedPublicCoverage(db));
 });
 
 router.get('/api/shop/config', (req, res) => {

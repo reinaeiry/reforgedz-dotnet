@@ -140,8 +140,8 @@ if (!productHasColumn('discord_role_id')) {
 // of serverId -> limit (e.g. {"eu3":40}). Servers absent from the map fall
 // back to the product's shared stock_limit.
 // The in-game cosmetic a product unlocks (cosmetics.js), e.g. 'armband.stripes-red'.
-// NULL for every product that is not a cosmetic; the sync writes cosmetics.json only
-// once some product carries one.
+// NULL for every product that is not a cosmetic; the sync writes cosmetics.json from
+// the first time some product carries one (cosmetics_sync_state below).
 if (!productHasColumn('cosmetic_key')) {
   db.exec("ALTER TABLE products ADD COLUMN cosmetic_key TEXT");
 }
@@ -838,6 +838,16 @@ if (!orderHasColumn('ip_country')) {
 if (!orderHasColumn('payer_country')) {
   db.exec("ALTER TABLE orders ADD COLUMN payer_country TEXT");
 }
+
+// When some product first carried a cosmetic key (cosmetics.cosmeticsInUse). From then
+// on the sync writes cosmetics.json on every run, an empty list included, so clearing
+// the last key can never leave a server holding entitlements that have ended.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cosmetics_sync_state (
+    id                   INTEGER PRIMARY KEY CHECK (id = 1),
+    first_configured_at  INTEGER NOT NULL
+  );
+`);
 
 // PayPal payments the daily reconciliation (tools/reconcile.js) has already
 // reported to staff as booked by nothing in the shop, so each one is reported once.

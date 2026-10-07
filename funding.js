@@ -77,4 +77,21 @@ function publicCoverage(db, opts = {}) {
   };
 }
 
-module.exports = { coverage, publicCoverage, monthOf, estimatedFeeCents, FEE_PERCENT, FEE_FIXED_CENTS };
+// The public endpoint answers anyone, and Cloudflare does not cache JSON unless a rule
+// says so, so every request would run the month's queries. One answer is kept for a
+// minute and never across a month boundary: a flood of requests costs one query a
+// minute, and a payment shows on the meter within a minute.
+const CACHE_TTL_S = 60;
+let cached = null;
+function cachedPublicCoverage(db, { now = Math.floor(Date.now() / 1000) } = {}) {
+  const fresh = cached && cached.db === db && now >= cached.at && now - cached.at < CACHE_TTL_S
+    && cached.value.month === monthOf(now).label;
+  if (fresh) return cached.value;
+  const value = publicCoverage(db, { now });
+  cached = { db, at: now, value };
+  return value;
+}
+
+module.exports = {
+  coverage, publicCoverage, cachedPublicCoverage, monthOf, estimatedFeeCents, FEE_PERCENT, FEE_FIXED_CENTS, CACHE_TTL_S
+};

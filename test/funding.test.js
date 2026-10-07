@@ -87,3 +87,17 @@ test('covered at 100% or more, shown as at most 999%', () => {
   assert.equal(p.status, 'covered');
   assert.equal(p.coveredPct, 999);
 });
+
+test('the public answer is worked out at most once a minute, and never carried into the next month', () => {
+  db.prepare('DELETE FROM monthly_expenses').run();
+  expense('Box', 100000);
+  const t = utc(2026, 9, 31, 23, 57, 0);
+  const first = funding.cachedPublicCoverage(db, { now: t });
+  order({ at: t + 1, amount: 50000 });
+  assert.deepEqual(funding.cachedPublicCoverage(db, { now: t + funding.CACHE_TTL_S - 1 }), first, 'within the minute: the kept answer');
+  const later = funding.cachedPublicCoverage(db, { now: t + funding.CACHE_TTL_S });
+  assert.ok(later.coveredPct > first.coveredPct, 'after the minute: the new payment shows');
+  assert.equal(funding.cachedPublicCoverage(db, { now: utc(2026, 9, 31, 23, 59, 30) }).month, '2026-10');
+  const nextMonth = funding.cachedPublicCoverage(db, { now: utc(2026, 10, 1, 0, 0, 10) });
+  assert.equal(nextMonth.month, '2026-11', '40 s after an October answer, November is worked out afresh');
+});
