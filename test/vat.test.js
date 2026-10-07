@@ -182,7 +182,7 @@ test('report: sales in the quarter paid, refunds and reversals in the quarter th
   const I = order({ at: q(0, 13), payer: 'IT' });
   refund(I, 500, q(1, 1));                                                 // partial refund in the quarter
   const J = order({ at: utc(2026, 11, 20), payer: 'ES', status: 'refunded' }); // sold last quarter
-  refund(J, 1500, q(0, 20));                                               // refunded this quarter
+  refund(J, 1500, q(0, 20));                                               // refunded this quarter: a correction
   const K = order({ at: q(0, 25), payer: 'NL' });
   refund(K, 1500, q(2, 1), { kind: 'reversal' });                          // a lost chargeback
   order({ at: utc(2026, 10, 1), ip: 'NL', sub: 'I-RENEWS' });               // checkout last quarter
@@ -194,21 +194,27 @@ test('report: sales in the quarter paid, refunds and reversals in the quarter th
   refund(null, 700, q(1, 2), { id: 'R-ORPHAN' });                          // a refund with no order
   order({ at: utc(2027, 3, 1), payer: 'FR' });                             // next quarter: out
   refund(A, 1500, utc(2027, 3, 2));                                        // refunded next quarter: not here
+  refund(B, 1500, q(0, 30), { kind: 'refund_failed', id: 'R-FAILED' });    // PayPal said it failed: money kept
+  const P = order({ at: q(0, 31), payer: 'PT', status: 'refunded' });      // its only refund failed: not netted
+  refund(P, 1500, q(1, 3), { kind: 'refund_failed', id: 'R-FAILED-2' });
 
   const r = vat.buildVatReport(db, { quarter: '2027Q1' });
-  assert.equal(r.orders, 13);
-  assert.equal(r.salesCents, 13 * 1500);
-  assert.equal(r.refunds, 4, 'the partial refund, the late refund, the reversal and the orphan; sandbox and next quarter left out');
-  assert.equal(r.undatedRefunds, 1);
+  assert.equal(r.orders, 14);
+  assert.equal(r.salesCents, 14 * 1500);
+  assert.equal(r.refunds, 4, 'the partial refund, the late refund, the reversal and the orphan; failed, sandbox and next quarter left out');
+  assert.equal(r.undatedRefunds, 1, 'a refunded order whose only refund failed is not netted out');
   const by = Object.fromEntries(r.byCountry.map(c => [c.country, c]));
-  assert.deepEqual(Object.keys(by).sort(), ['DE', 'ES', 'FR', 'GB', 'IM', 'IT', 'MC', 'NL', 'US']);
-  assert.deepEqual([by.GB.orders, by.GB.salesCents, by.GB.netCents, by.GB.vatCents], [2, 3000, 3000, rates.vatIncludedCents(3000, 20)]);
+  assert.deepEqual(Object.keys(by).sort(), ['DE', 'FR', 'GB', 'IM', 'IT', 'MC', 'NL', 'PT', 'US']);
+  assert.deepEqual([by.GB.orders, by.GB.salesCents, by.GB.refundCents, by.GB.netCents, by.GB.vatCents],
+    [2, 3000, 0, 3000, rates.vatIncludedCents(3000, 20)], 'the failed refund changes nothing');
+  assert.deepEqual([by.PT.salesCents, by.PT.refundCents], [1500, 0]);
   assert.deepEqual(by.GB.evidence, { match: 1, conflict: 1, 'payer-only': 0, 'ip-only': 0 });
   assert.deepEqual(by.DE.evidence, { match: 0, conflict: 0, 'payer-only': 1, 'ip-only': 1 });
   assert.deepEqual([by.FR.orders, by.FR.salesCents, by.FR.refundCents, by.FR.netCents], [2, 3000, 1500, 1500]);
   assert.deepEqual([by.IT.refundCents, by.IT.netCents, by.IT.vatCents], [500, 1000, rates.vatIncludedCents(1000, 22)]);
-  assert.deepEqual([by.ES.orders, by.ES.salesCents, by.ES.refundCents, by.ES.netCents], [0, 0, 1500, -1500]);
-  assert.ok(by.ES.vatCents < 0, 'a refund of an earlier quarter is a negative correction');
+  const esVat = rates.vatIncludedCents(1500, 21);
+  assert.deepEqual(r.corrections, [{ period: '2026Q4', country: 'ES', scheme: 'EU-OSS', rate: 21, refunds: 1,
+    refundCents: 1500, vatCents: -esVat, exclusiveCents: -(1500 - esVat) }], 'an EU refund of last quarter corrects last quarter');
   assert.deepEqual([by.NL.orders, by.NL.salesCents, by.NL.refundCents, by.NL.netCents], [2, 3000, 1500, 1500]);
   assert.equal(by.NL.evidence['ip-only'], 1, 'the renewal takes its checkout country');
   assert.deepEqual([by.MC.scheme, by.MC.rate], ['EU-OSS', 20]);
@@ -216,72 +222,84 @@ test('report: sales in the quarter paid, refunds and reversals in the quarter th
   assert.equal(by.US.scheme, 'none');
   assert.equal(by.US.vatCents, 0);
   assert.equal(r.totals.UK.vatCents, by.GB.vatCents + by.IM.vatCents);
-  assert.equal(r.totals['EU-OSS'].vatCents, ['DE', 'ES', 'FR', 'IT', 'MC', 'NL'].reduce((s, k) => s + by[k].vatCents, 0));
+  assert.equal(r.totals['EU-OSS'].vatCents, ['DE', 'FR', 'IT', 'MC', 'NL', 'PT'].reduce((s, k) => s + by[k].vatCents, 0));
+  for (const c of r.byCountry) if (c.scheme === 'EU-OSS') assert.ok(c.netCents >= 0, `${c.country}: an EU quarter is never negative`);
   assert.deepEqual(r.unknown, { orders: 1, salesCents: 1500, refundCents: 700 });
   const reviewed = new Set(r.review.map(x => x.orderId));
-  for (const id of [B, C, D, F, G, H, I, K, R, L, M]) assert.ok(reviewed.has(id), `order ${id} needs review`);
+  for (const id of [B, C, D, F, G, H, I, K, R, L, M, P]) assert.ok(reviewed.has(id), `order ${id} needs review`);
   for (const id of [A, E]) assert.ok(!reviewed.has(id), `order ${id} has two matching sources`);
   assert.ok(r.review.some(x => x.evidence === 'refund-without-order'));
   assert.equal(r.ratesChecked, rates.RATES_CHECKED);
   assert.throws(() => vat.buildVatReport(db, { quarter: '2027-01' }), /2026Q4/);
 });
 
-test('report: the value excluding VAT, and each return in its own currency', () => {
+test('report: the value excluding VAT, and each return in its own currency at the published rates', () => {
   db.prepare('DELETE FROM paypal_refunds').run();
   db.prepare('DELETE FROM orders').run();
   const q = (m, d) => utc(2027, m, d);
   order({ at: q(0, 5), payer: 'DE', ip: 'DE' });
   order({ at: q(1, 5), payer: 'DE', ip: 'DE' });
+  const deOld = order({ at: utc(2026, 10, 10), payer: 'DE', ip: 'DE' });  // November 2026
+  refund(deOld, 1500, q(0, 9));                                    // an EU correction, not this quarter
   order({ at: q(0, 6), payer: 'GB', ip: 'GB' });                 // January
   const feb = order({ at: q(1, 6), payer: 'GB', ip: 'GB' });     // February
   refund(feb, 500, q(2, 2));                                     // refunded in March
+  const gbOld = order({ at: utc(2026, 11, 15), payer: 'GB', ip: 'GB' }); // December 2026
+  refund(gbOld, 1000, q(1, 10));                                 // a UK refund counts when paid
   order({ at: q(2, 7), payer: 'US', ip: 'US' });
 
   const plain = vat.buildVatReport(db, { quarter: '2027Q1' });
   const by = Object.fromEntries(plain.byCountry.map(c => [c.country, c]));
-  assert.equal(by.DE.exclusiveCents, by.DE.netCents - by.DE.vatCents);
+  assert.equal(by.DE.netCents, 3000, 'the November refund stays out of this quarter');
   assert.equal(by.DE.exclusiveCents, 3000 - rates.vatIncludedCents(3000, 19));
+  assert.deepEqual([by.GB.salesCents, by.GB.refundCents, by.GB.netCents], [3000, 1500, 1500]);
   assert.equal(plain.totals.UK.exclusiveCents, by.GB.exclusiveCents);
   assert.equal(by.DE.returnFigures, null, 'no rate given: no euro figures');
   assert.deepEqual(plain.returnTotals, { 'EU-OSS': null, UK: null });
+  assert.deepEqual(plain.corrections.map(c => [c.period, c.country, c.refundCents]), [['2026Q4', 'DE', 1500]]);
 
-  const r = vat.buildVatReport(db, {
-    quarter: '2027Q1', eurPerUsd: 0.9,
-    gbpPerUsdByMonth: { '2027-01': 0.8, '2027-02': 0.75, '2027-03': 0.7 }
-  });
+  const usdPerGbpByMonth = { '2026-12': 2.0, '2027-01': 1.25, '2027-02': 1.6, '2027-03': 1.3 };
+  const r = vat.buildVatReport(db, { quarter: '2027Q1', usdPerEur: 1.25, usdPerGbpByMonth });
+  // EU: 3000 USD / 1.25 = 2400 euro cents, converted once and then split.
   const de = r.byCountry.find(c => c.country === 'DE');
-  assert.deepEqual(de.returnFigures, {
-    currency: 'EUR',
-    exclusiveCents: Math.round(de.exclusiveCents * 0.9),
-    vatCents: Math.round(de.vatCents * 0.9)
-  });
-  // UK: 1500 at 0.80 (Jan) + 1500 at 0.75 (Feb) - a 500 refund at 0.70 (Mar) = 1200 + 1125 - 350 = 1975 pence.
+  const deVat = rates.vatIncludedCents(2400, 19);
+  assert.deepEqual(de.returnFigures, { currency: 'EUR', exclusiveCents: 2400 - deVat, vatCents: deVat });
+  // UK, each at its sale's month: Jan 1500/1.25 = 1200, Feb 1500/1.6 = 938, the March refund of
+  // the February sale 500/1.6 = 313, the February refund of the December sale 1000/2.0 = 500.
+  const pence = 1200 + 938 - 313 - 500;
   const gb = r.byCountry.find(c => c.country === 'GB');
-  const vatGbp = rates.vatIncludedCents(1975, 20);
-  assert.deepEqual(gb.returnFigures, { currency: 'GBP', exclusiveCents: 1975 - vatGbp, vatCents: vatGbp });
-  assert.deepEqual(r.returnTotals.UK, { currency: 'GBP', exclusiveCents: 1975 - vatGbp, vatCents: vatGbp });
-  assert.deepEqual(r.returnTotals['EU-OSS'], { currency: 'EUR', exclusiveCents: de.returnFigures.exclusiveCents, vatCents: de.returnFigures.vatCents });
+  const gbVat = rates.vatIncludedCents(pence, 20);
+  assert.deepEqual(gb.returnFigures, { currency: 'GBP', exclusiveCents: pence - gbVat, vatCents: gbVat });
+  assert.deepEqual(r.returnTotals.UK, { currency: 'GBP', exclusiveCents: pence - gbVat, vatCents: gbVat });
+  assert.deepEqual(r.returnTotals['EU-OSS'], { currency: 'EUR', exclusiveCents: 2400 - deVat, vatCents: deVat });
   assert.equal(r.byCountry.find(c => c.country === 'US').returnFigures, null, 'outside both schemes');
+  assert.deepEqual(r.exchange, { usdPerEur: 1.25, usdPerGbpByMonth });
 
-  assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', gbpPerUsdByMonth: { '2027-01': 0.8, '2027-03': 0.7 } }),
-    e => e.code === 'BAD_INPUT' && /2027-02/.test(e.message), 'a month without a rate is refused, never counted as 0');
-  for (const bad of [0, -1, 12, NaN, '0.9']) {
-    assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', eurPerUsd: bad }), e => e.code === 'BAD_INPUT', String(bad));
+  const without = (m) => { const x = { ...usdPerGbpByMonth }; delete x[m]; return x; };
+  for (const m of ['2026-12', '2027-02']) {
+    assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', usdPerGbpByMonth: without(m) }),
+      e => e.code === 'BAD_INPUT' && e.message.includes(m), `a missing ${m} is named, never counted as 0`);
   }
-  assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', gbpPerUsdByMonth: { 'Jan': 0.8 } }), e => e.code === 'BAD_INPUT');
+  for (const bad of [0, 0.4, 3.5, NaN, '1.2']) {
+    assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', usdPerEur: bad }), e => e.code === 'BAD_INPUT', String(bad));
+  }
+  assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', usdPerGbpByMonth: { Jan: 1.27 } }), e => e.code === 'BAD_INPUT');
 });
 
-test('report query: rates read from plain text only; anything else is a 400, not a 500', () => {
-  assert.deepEqual(vat.parseReportQuery({}), { eurPerUsd: null, gbpPerUsdByMonth: null });
-  assert.deepEqual(vat.parseReportQuery({ eurPerUsd: '0.86', gbp: '2027-01:0.79, 2027-02:0.8' }),
-    { eurPerUsd: 0.86, gbpPerUsdByMonth: { '2027-01': 0.79, '2027-02': 0.8 } });
-  assert.deepEqual(vat.parseReportQuery({ eurPerUsd: '', gbp: '' }), { eurPerUsd: null, gbpPerUsdByMonth: null });
-  // What Express makes of ?gbp[toString]=1, ?eurPerUsd=1&eurPerUsd=2 and a malformed list.
-  for (const q of [{ gbp: { toString: '1' } }, { eurPerUsd: ['1', '2'] }, { gbp: '2027-01' }, { gbp: '2027-01:0.8:1' }]) {
+test('report query: plain text only, each month once; anything else is a 400, not a 500', () => {
+  assert.deepEqual(vat.parseReportQuery({}), { quarter: '', usdPerEur: null, usdPerGbpByMonth: null });
+  assert.deepEqual(vat.parseReportQuery({ quarter: '2027Q1', usdPerEur: '1.16', usdPerGbp: '2027-01:1.27, 2027-02:1.26' }),
+    { quarter: '2027Q1', usdPerEur: 1.16, usdPerGbpByMonth: { '2027-01': 1.27, '2027-02': 1.26 } });
+  assert.deepEqual(vat.parseReportQuery({ usdPerEur: '', usdPerGbp: '' }), { quarter: '', usdPerEur: null, usdPerGbpByMonth: null });
+  // What Express makes of ?quarter[toString]=1, ?usdPerEur=1&usdPerEur=2, and malformed or repeated months.
+  for (const q of [{ quarter: { toString: '1' } }, { usdPerGbp: { toString: '1' } }, { usdPerEur: ['1', '2'] },
+    { usdPerGbp: '2027-01' }, { usdPerGbp: '2027-01:1.2:1' }, { usdPerGbp: '2027-01:1.27,2027-01:1.5' }]) {
     assert.throws(() => vat.parseReportQuery(q), e => e.code === 'BAD_INPUT', JSON.stringify(q));
   }
-  // Parsed but not a rate: refused by the report itself.
-  assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', ...vat.parseReportQuery({ eurPerUsd: 'abc' }) }), e => e.code === 'BAD_INPUT');
+  // Parsed, then refused by the report itself.
+  for (const q of [{}, { quarter: '2027Q1', usdPerEur: 'abc' }, { quarter: '2027Q1', usdPerGbp: '__proto__:1.2' }]) {
+    assert.throws(() => vat.buildVatReport(db, vat.parseReportQuery(q)), e => e.code === 'BAD_INPUT', JSON.stringify(q));
+  }
 });
 
 // ---- Backfill -------------------------------------------------------------------------

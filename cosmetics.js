@@ -58,11 +58,18 @@ function cosmeticsInUse(db, now = Math.floor(Date.now() / 1000)) {
   return !!db.prepare('SELECT 1 FROM cosmetics_sync_state WHERE id = 1').get();
 }
 
+// The in-game ID as the shop stores it (routes/shop.js checks it on entry): a lower-case
+// UUID. Anything else is never sent, so every line of the file stays plain ASCII.
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Every server gets the same list (cosmetics are not tied to a server): one entry per
-// in-game ID and key, oldest order first, in purchases.json's shape.
+// in-game ID and key, oldest order first, { guid, item }. No player name, unlike
+// purchases.json: the mod matches IDs only, the servers don't need the personal data,
+// and a name is the one field a player types freely (quotes, backslashes, emoji), which
+// the game's JSON reader need not handle the way JSON.stringify writes it.
 function buildCosmeticEntries(db, now = Math.floor(Date.now() / 1000)) {
   const rows = db.prepare(`
-    SELECT u.bi_uid AS guid, COALESCE(u.gamertag, u.persona) AS name, p.cosmetic_key AS item
+    SELECT u.bi_uid AS guid, p.cosmetic_key AS item
     FROM orders o
     JOIN users u    ON u.steam_id = o.steam_id
     JOIN products p ON p.id = o.product_id
@@ -75,11 +82,11 @@ function buildCosmeticEntries(db, now = Math.floor(Date.now() / 1000)) {
   const seen = new Set();
   const out = [];
   for (const r of rows) {
-    if (!isCosmeticKey(r.item)) continue;
+    if (!isCosmeticKey(r.item) || !GUID_RE.test(String(r.guid))) continue;
     const k = `${String(r.guid).toLowerCase()}|${r.item}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push({ name: r.name || '', guid: r.guid, item: r.item });
+    out.push({ guid: r.guid, item: r.item });
   }
   return out;
 }

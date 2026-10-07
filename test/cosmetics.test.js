@@ -88,7 +88,7 @@ test('entries: live paid orders on accounts with an in-game ID, one per ID and k
     ['bbbbbbbb-0000-4000-8000-000000000002', 'armband.backer'],
     ['dddddddd-0000-4000-8000-000000000004', 'armband.stripes-red']
   ]);
-  assert.deepEqual(Object.keys(entries[0]).sort(), ['guid', 'item', 'name']);
+  assert.deepEqual(Object.keys(entries[0]).sort(), ['guid', 'item'], 'no player name goes to the servers');
 });
 
 test('a stored key that breaks the rule is never sent to a server', () => {
@@ -97,6 +97,19 @@ test('a stored key that breaks the rule is never sent to a server', () => {
   const e = user('eeeeeeee-0000-4000-8000-000000000005');
   order(e, odd);
   assert.ok(!cosmetics.buildCosmeticEntries(db, NOW).some(x => x.item === 'Bad Key'));
+});
+
+test('only real in-game IDs are sent, so every line of the file is plain ASCII', () => {
+  const flag = product('Quote flag', { key: 'flag.quote' });
+  const bad = user('not-a-uuid "\\ \u{1F600}');
+  order(bad, flag);
+  const good = user('ffffffff-0000-4000-8000-000000000006');
+  db.prepare("UPDATE users SET persona = ? WHERE steam_id = ?").run('Name "with" \\ quotes \u{1F600}', good);
+  order(good, flag);
+  const entries = cosmetics.buildCosmeticEntries(db, NOW).filter(x => x.item === 'flag.quote');
+  assert.deepEqual(entries, [{ guid: 'ffffffff-0000-4000-8000-000000000006', item: 'flag.quote' }]);
+  const text = cosmetics.serializeCosmeticEntries(cosmetics.buildCosmeticEntries(db, NOW));
+  assert.ok(/^[\x20-\x5b\x5d-\x7e\n]*$/.test(text), 'printable ASCII and newlines only, no backslash: nothing is ever escaped');
 });
 
 // The write commands, run for real through bash against a throwaway folder (the test
@@ -113,7 +126,6 @@ function runNa(server, cmd) {
 }
 function bigList(count) {
   return Array.from({ length: count }, (_, i) => ({
-    name: `Player_${String(i).padStart(5, '0')}_${'x'.repeat(20)}`,
     guid: crypto.randomUUID(),
     item: `armband.${'stripes-red-'.repeat(4)}${i % 50}`
   }));

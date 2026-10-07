@@ -173,27 +173,37 @@ function evidenceOf(payer, ip) {
   return 'none';
 }
 
-// The quarter's VAT position, the way a return is made up:
+// The quarter's VAT position, the way the returns are made up:
 //   sales        every paid live sale, counted in the quarter it was paid, whatever
 //                happened to it later (a staff revoke that kept the money stays a sale);
-//   corrections  every refund and chargeback reversal PayPal reported, counted in the
-//                quarter it happened, against the sale's country. A refunded order with
-//                no refund on record (refunds before 2026-09-15 were not recorded) is
-//                netted out in its own sale's quarter, and the report says how many.
+//   refunds      every refund and chargeback reversal PayPal reported (never one that
+//                failed), in the quarter it happened, against the sale's country. A
+//                refunded order with no refund on record (refunds before 2026-09-15 were
+//                not recorded) is netted out in its own sale's quarter, and counted.
+//   corrections  an EU refund of a sale from an EARLIER quarter stays out of this
+//                quarter's figures: the One Stop Shop corrects that quarter, in the
+//                correction part of a later return that names the period and the country
+//                (Revenue's non-Union OSS manual 4.1). A UK refund counts in the quarter it
+//                is paid (VAT Notice 700 18.2.6) at the VAT rate of the sale (18.2.5).
 // The country is PayPal's when it has one (the billing account), else the checkout's.
 // Every sale without two matching sources is listed for review: a seller outside the
-// EU needs two pieces of evidence that agree. Amounts are in USD, the currency the
-// shop sells in, and each return asks for every country's value excluding VAT and the
-// VAT due, in its own currency, so the report adds both when given the rates (it
-// fetches none):
-//   eurPerUsd         the ECB rate of the quarter's last day, applied to the quarter's
-//                     totals (Revenue, non-Union OSS manual 4.3);
-//   gbpPerUsdByMonth  { 'YYYY-MM': rate }: HMRC's period rate for each month (or the UK
-//                     market rate), each UK sale and refund converted at its own month's
-//                     rate (VAT Notice 700). A month without a rate is an error, never 0.
+// EU needs two pieces of evidence that agree.
+// Amounts are in USD, the currency the shop sells in. Each return asks, per country, for
+// the value excluding VAT and the VAT due, in its own currency, so the report adds both
+// when given the rates, entered the way they are published (it fetches none):
+//   usdPerEur         the ECB reference rate (US dollars per euro) of the quarter's last
+//                     day, applied to the quarter's totals (Revenue's manual 4.3);
+//   usdPerGbpByMonth  { 'YYYY-MM': US dollars per pound }: HMRC's monthly rate, each UK
+//                     sale converted at its own month's rate (VAT Notice 700). A UK refund
+//                     uses its SALE's month: the notice names no rate for a refund, so that
+//                     is a choice to confirm with the accountant. A month without a rate is
+//                     an error that names it, never 0.
 const CHECKOUT_IP_SQL = `(SELECT f.ip_country FROM orders f
         WHERE o.paypal_subscription_id IS NOT NULL AND f.paypal_subscription_id = o.paypal_subscription_id
           AND f.ip_country IS NOT NULL ORDER BY f.id LIMIT 1)`;
+// The refunds that gave money back. A refund PayPal later reported as failed keeps its
+// row as kind 'refund_failed' (paymentEvents.js); that money was kept.
+const MONEY_BACK_KINDS_SQL = "('refund', 'reversal')";
 
 // A bad report request (an error the admin route answers with 400).
 function badInput(message) {
@@ -201,40 +211,49 @@ function badInput(message) {
   e.code = 'BAD_INPUT';
   return e;
 }
-const isRate = (r) => typeof r === 'number' && Number.isFinite(r) && r > 0 && r < 10;
+// US dollars per euro or per pound: both have stayed between 0.8 and 2.1 for decades.
+// The band refuses a rate entered the wrong way up only when it falls outside it.
+const isUsdRate = (r) => typeof r === 'number' && Number.isFinite(r) && r > 0.5 && r < 3;
+const monthLabel = (unix) => new Date(unix * 1000).toISOString().slice(0, 7);
+const quarterLabel = (unix) => {
+  const d = new Date(unix * 1000);
+  return `${d.getUTCFullYear()}Q${Math.floor(d.getUTCMonth() / 3) + 1}`;
+};
 
-// The admin route's query (?eurPerUsd=0.86&gbp=2027-01:0.79,2027-02:0.80) as
-// buildVatReport's options. Only plain strings are read: Express turns ?gbp[x]=1 into an
-// object, which String() or Number() would throw on.
+// The admin route's query (?quarter=2027Q1&usdPerEur=1.16&usdPerGbp=2027-01:1.27,...)
+// as buildVatReport's options. Only plain strings are read: Express turns ?gbp[x]=1 into
+// an object, which String() or Number() would throw on.
 function parseReportQuery(query = {}) {
   const text = (v, name) => {
     if (v == null || v === '') return null;
     if (typeof v !== 'string') throw badInput(`${name} must be given once, as text`);
     return v;
   };
-  const eur = text(query.eurPerUsd, 'eurPerUsd');
-  const gbp = text(query.gbp, 'gbp');
-  let gbpPerUsdByMonth = null;
+  const quarter = text(query.quarter, 'quarter');
+  const eur = text(query.usdPerEur, 'usdPerEur');
+  const gbp = text(query.usdPerGbp, 'usdPerGbp');
+  let usdPerGbpByMonth = null;
   if (gbp != null) {
-    gbpPerUsdByMonth = {};
+    usdPerGbpByMonth = Object.create(null);
     for (const pair of gbp.split(',')) {
       const [month, rate, extra] = pair.split(':');
-      if (extra !== undefined || rate === undefined) throw badInput('gbp must look like 2027-01:0.79,2027-02:0.80');
-      gbpPerUsdByMonth[month.trim()] = Number(rate);
+      if (extra !== undefined || rate === undefined) throw badInput('usdPerGbp must look like 2027-01:1.27,2027-02:1.26');
+      const m = month.trim();
+      if (Object.prototype.hasOwnProperty.call(usdPerGbpByMonth, m)) throw badInput(`usdPerGbp gives ${m} twice`);
+      usdPerGbpByMonth[m] = Number(rate);
     }
   }
-  return { eurPerUsd: eur == null ? null : Number(eur), gbpPerUsdByMonth };
+  return { quarter: quarter || '', usdPerEur: eur == null ? null : Number(eur), usdPerGbpByMonth: usdPerGbpByMonth && { ...usdPerGbpByMonth } };
 }
-const monthLabel = (unix) => new Date(unix * 1000).toISOString().slice(0, 7);
 
-function buildVatReport(db, { quarter, eurPerUsd = null, gbpPerUsdByMonth = null } = {}) {
+function buildVatReport(db, { quarter, usdPerEur = null, usdPerGbpByMonth = null } = {}) {
   const b = quarterBounds(quarter);
   if (!b) throw badInput('quarter must look like 2026Q4');
-  if (eurPerUsd != null && !isRate(eurPerUsd)) throw badInput('eurPerUsd must be a number like 0.86');
-  if (gbpPerUsdByMonth != null) {
-    const ok = typeof gbpPerUsdByMonth === 'object'
-      && Object.entries(gbpPerUsdByMonth).every(([m, r]) => /^\d{4}-\d{2}$/.test(m) && isRate(r));
-    if (!ok) throw badInput('gbpPerUsdByMonth must map YYYY-MM to a rate, like 2027-01:0.79');
+  if (usdPerEur != null && !isUsdRate(usdPerEur)) throw badInput('usdPerEur must be the ECB rate in US dollars per euro, like 1.16');
+  if (usdPerGbpByMonth != null) {
+    const ok = typeof usdPerGbpByMonth === 'object'
+      && Object.entries(usdPerGbpByMonth).every(([m, r]) => /^\d{4}-\d{2}$/.test(m) && isUsdRate(r));
+    if (!ok) throw badInput('usdPerGbp must map YYYY-MM to US dollars per pound, like 2027-01:1.27');
   }
   const sales = db.prepare(`
     SELECT o.id, o.amount_cents, o.status, o.revoked_without_refund_at, o.payer_country, o.ip_country, o.completed_at,
@@ -247,15 +266,17 @@ function buildVatReport(db, { quarter, eurPerUsd = null, gbpPerUsdByMonth = null
   `).all(b.start, b.end);
   const refunds = db.prepare(`
     SELECT r.refund_id, r.amount_cents, r.kind, r.received_at, o.id AS order_id, o.amount_cents AS order_cents,
-      o.payer_country, o.ip_country, ${CHECKOUT_IP_SQL} AS checkout_ip_country
+      o.completed_at AS sale_at, o.payer_country, o.ip_country, ${CHECKOUT_IP_SQL} AS checkout_ip_country
     FROM paypal_refunds r
     LEFT JOIN orders o ON o.id = r.order_id
-    WHERE COALESCE(r.test_mode, 0) = 0 AND r.received_at >= ? AND r.received_at < ?
+    WHERE COALESCE(r.test_mode, 0) = 0 AND r.kind IN ${MONEY_BACK_KINDS_SQL}
+      AND r.received_at >= ? AND r.received_at < ?
       AND (o.id IS NULL OR o.test_mode = 0)
     ORDER BY r.received_at, r.refund_id
   `).all(b.start, b.end);
 
   const byCountry = new Map();
+  const corrections = new Map();
   const unknown = { orders: 0, salesCents: 0, refundCents: 0 };
   const review = [];
   let undatedRefunds = 0;
@@ -274,22 +295,24 @@ function buildVatReport(db, { quarter, eurPerUsd = null, gbpPerUsdByMonth = null
     }
     return c;
   };
-  // UK sales and refunds in pounds, each at its own month's rate (country -> pence).
+  // UK sales and refunds in pence, each at its sale month's rate (country -> pence).
   const gbp = new Map();
   const missingMonths = new Set();
-  const addGbp = (c, field, cents, at) => {
-    if (gbpPerUsdByMonth == null || c.scheme !== 'UK') return;
-    const rate = gbpPerUsdByMonth[monthLabel(at)];
-    if (rate == null) { missingMonths.add(monthLabel(at)); return; }
+  const addGbp = (c, field, cents, saleAt) => {
+    if (usdPerGbpByMonth == null || c.scheme !== 'UK') return;
+    const rate = usdPerGbpByMonth[monthLabel(saleAt)];
+    if (rate == null) { missingMonths.add(monthLabel(saleAt)); return; }
     const g = gbp.get(c.country) || { salesCents: 0, refundCents: 0 };
-    g[field] += Math.round(cents * rate);
+    g[field] += Math.round(cents / rate);
     gbp.set(c.country, g);
   };
 
   for (const r of sales) {
     const w = countryOf(r);
     if (w.evidence !== 'match') review.push({ orderId: r.id, payerCountry: w.payer, ipCountry: w.ip, evidence: w.evidence });
-    // A refund with no record and no date: netted out in this, the sale's, quarter.
+    // A refund with no record and no date: netted out in this, the sale's, quarter. Any
+    // row counts as a record, a failed one too: a failed refund leaves the order marked
+    // refunded although the money stayed (paymentEvents.applyRefundFailure).
     const undated = r.status === 'refunded' && r.revoked_without_refund_at == null && r.refund_rows === 0;
     if (undated) undatedRefunds += 1;
     if (!w.country) {
@@ -320,12 +343,22 @@ function buildVatReport(db, { quarter, eurPerUsd = null, gbpPerUsdByMonth = null
       if (r.order_id == null) review.push({ refundId: r.refund_id, orderId: null, evidence: 'refund-without-order' });
       continue;
     }
+    const { scheme, rate } = vatFor(w.country);
+    if (scheme === 'EU-OSS' && r.sale_at != null && r.sale_at < b.start) {
+      const period = quarterLabel(r.sale_at);
+      const key = `${period}|${w.country}`;
+      const x = corrections.get(key) || { period, country: w.country, scheme, rate, refunds: 0, refundCents: 0 };
+      x.refunds += 1;
+      x.refundCents += cents;
+      corrections.set(key, x);
+      continue;
+    }
     const c = bucket(w.country);
     c.refundCents += cents;
-    addGbp(c, 'refundCents', cents, r.received_at);
+    addGbp(c, 'refundCents', cents, r.sale_at != null ? r.sale_at : r.received_at);
   }
   if (missingMonths.size) {
-    throw badInput(`gbpPerUsdByMonth needs a rate for ${[...missingMonths].sort().join(', ')}`);
+    throw badInput(`usdPerGbp needs a rate for ${[...missingMonths].sort().join(', ')}`);
   }
 
   const totals = {
@@ -335,23 +368,26 @@ function buildVatReport(db, { quarter, eurPerUsd = null, gbpPerUsdByMonth = null
   };
   // What each return asks for, in its currency: null until the rate is given.
   const returnTotals = {
-    'EU-OSS': eurPerUsd != null ? { currency: 'EUR', exclusiveCents: 0, vatCents: 0 } : null,
-    UK: gbpPerUsdByMonth != null ? { currency: 'GBP', exclusiveCents: 0, vatCents: 0 } : null
+    'EU-OSS': usdPerEur != null ? { currency: 'EUR', exclusiveCents: 0, vatCents: 0 } : null,
+    UK: usdPerGbpByMonth != null ? { currency: 'GBP', exclusiveCents: 0, vatCents: 0 } : null
   };
   for (const c of byCountry.values()) {
     c.netCents = c.salesCents - c.refundCents;
-    // VAT is worked out on each country's net total, the way a return reports it; a
-    // quarter whose refunds outweigh its sales shows a negative correction.
+    // VAT is worked out on each country's net total, the way a return reports it; a UK
+    // quarter whose refunds outweigh its sales shows a negative figure.
     c.vatCents = vatIncludedCents(c.netCents, c.rate);
     c.exclusiveCents = c.netCents - c.vatCents;
     c.returnFigures = null;
-    if (c.scheme === 'EU-OSS' && eurPerUsd != null) {
-      c.returnFigures = { currency: 'EUR', exclusiveCents: Math.round(c.exclusiveCents * eurPerUsd), vatCents: Math.round(c.vatCents * eurPerUsd) };
-    } else if (c.scheme === 'UK' && gbpPerUsdByMonth != null) {
+    // Converted once, then split, so the VAT is always the value times the rate.
+    let net = null;
+    if (c.scheme === 'EU-OSS' && usdPerEur != null) net = { currency: 'EUR', cents: Math.round(c.netCents / usdPerEur) };
+    if (c.scheme === 'UK' && usdPerGbpByMonth != null) {
       const g = gbp.get(c.country) || { salesCents: 0, refundCents: 0 };
-      const net = g.salesCents - g.refundCents;
-      const vat = vatIncludedCents(net, c.rate);
-      c.returnFigures = { currency: 'GBP', exclusiveCents: net - vat, vatCents: vat };
+      net = { currency: 'GBP', cents: g.salesCents - g.refundCents };
+    }
+    if (net) {
+      const vat = vatIncludedCents(net.cents, c.rate);
+      c.returnFigures = { currency: net.currency, exclusiveCents: net.cents - vat, vatCents: vat };
     }
     const t = totals[c.scheme];
     t.salesCents += c.salesCents;
@@ -367,6 +403,12 @@ function buildVatReport(db, { quarter, eurPerUsd = null, gbpPerUsdByMonth = null
       rt.vatCents += c.returnFigures.vatCents;
     }
   }
+  // The EU corrections, in USD and negative (VAT given back): the euro amount uses the
+  // rate of the return being corrected, which this report does not know.
+  const correctionList = [...corrections.values()].map(x => {
+    const vat = vatIncludedCents(x.refundCents, x.rate);
+    return { ...x, vatCents: -vat, exclusiveCents: -(x.refundCents - vat) };
+  }).sort((a, z) => a.period.localeCompare(z.period) || a.country.localeCompare(z.country));
   const list = [...byCountry.values()].sort((a, z) => (z.netCents - a.netCents) || a.country.localeCompare(z.country));
   return {
     quarter: String(quarter).trim().toUpperCase(),
@@ -381,19 +423,21 @@ function buildVatReport(db, { quarter, eurPerUsd = null, gbpPerUsdByMonth = null
     byCountry: list,
     totals,
     returnTotals,
-    exchange: { eurPerUsd, gbpPerUsdByMonth },
+    corrections: correctionList,
+    exchange: { usdPerEur, usdPerGbpByMonth: usdPerGbpByMonth && { ...usdPerGbpByMonth } },
     unknown,
     review,
     notes: [
       'Prices include VAT, so the VAT shown is the part of each net amount the rate makes up; exclusiveCents is the rest, the value a return asks for.',
-      eurPerUsd != null
-        ? `EU figures in euros at ${eurPerUsd} EUR per USD; it must be the ECB rate of the quarter's last day.`
-        : "Pass eurPerUsd (the ECB rate of the quarter's last day) for the EU figures in euros.",
-      gbpPerUsdByMonth != null
-        ? 'UK figures in pounds, each sale and refund at its month\'s rate as given.'
-        : "Pass gbpPerUsdByMonth (HMRC's period rate for each month) for the UK figures in pounds.",
+      usdPerEur != null
+        ? `EU figures in euros at 1 EUR = ${usdPerEur} USD, which must be the ECB reference rate of the quarter's last day.`
+        : "Pass usdPerEur (the ECB reference rate of the quarter's last day, US dollars per euro) for the EU figures in euros.",
+      usdPerGbpByMonth != null
+        ? 'UK figures in pounds, each sale at its month\'s rate as given (US dollars per pound); a refund at its sale\'s month.'
+        : "Pass usdPerGbp (HMRC's monthly rate for each month, US dollars per pound) for the UK figures in pounds.",
       `Rates were checked on ${RATES_CHECKED}; check them against the EU tax database and GOV.UK before filing.`,
-      'Sales count in the quarter they were paid; refunds and chargeback reversals in the quarter they happened.',
+      'Sales count in the quarter they were paid; refunds and chargeback reversals in the quarter they happened; failed refunds not at all.',
+      `${correctionList.length} EU correction(s): refunds of earlier quarters' sales, for the correction part of the return, converted at the rate of the return they correct.`,
       `${undatedRefunds} refunded order(s) in this quarter have no refund on record and were netted out in their sale's quarter.`,
       'Every sale without two matching pieces of evidence is listed under review; settle each before filing.'
     ]
