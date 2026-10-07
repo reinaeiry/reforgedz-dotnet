@@ -387,7 +387,7 @@ router.get('/api/shop/config', (req, res) => {
     configured: paypal.isConfigured(testMode),
     // Shown on the Custom Flag confirmation screen/email. Never hardcoded —
     // set CUSTOM_FLAG_TUTORIAL_URL when a real video exists; until then the
-    // frontend shows the placeholder string as-is.
+    // page and the email give plain preparation steps instead.
     customFlagTutorialUrl: process.env.CUSTOM_FLAG_TUTORIAL_URL || null,
     customFlagTicketUrl: CUSTOM_FLAG_TICKET_URL,
     // The game reads its admin list only at start, so queue priority begins at

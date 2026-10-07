@@ -10,7 +10,9 @@ const nodemailer = require('nodemailer');
 
 // Shown in the Custom Flag confirmation email whenever CUSTOM_FLAG_TUTORIAL_URL
 // isn't set — never hardcode a real link here.
-const YOUTUBE_PLACEHOLDER = '[YOUTUBE_TUTORIAL_LINK_HERE]';
+// Step 1 of the Custom Flag email when no tutorial video is set (CUSTOM_FLAG_TUTORIAL_URL):
+// plain instructions, never a placeholder the buyer has to puzzle over.
+const FLAG_PREP_TEXT = 'Get your flag design ready as a PNG or JPG image. Our staff turn it into your in-game flag.';
 
 let transporter = null;
 function getTransport() {
@@ -460,10 +462,11 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
   const dateStr = new Date(dateMs || Date.now()).toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'long', timeStyle: 'short' }) + ' UTC';
   const tutorialHtml = tutorialUrl
     ? `<a href="${esc(tutorialUrl)}" style="color:#e02525;text-decoration:none;font-weight:600">Watch the tutorial</a>`
-    : `<span style="color:#777">${esc(YOUTUBE_PLACEHOLDER)}</span>`;
-  const tutorialText = tutorialUrl || YOUTUBE_PLACEHOLDER;
+    : null;
   const cf = customFields || {};
-  const ticketMessage = "Hello, I'm looking to get started on my Custom Flag! I have watched the tutorial video and here is my custom flag request:";
+  const ticketMessage = tutorialUrl
+    ? "Hello, I'm looking to get started on my Custom Flag! I have watched the tutorial video and here is my custom flag request:"
+    : "Hello, I'm looking to get started on my Custom Flag! Here is my custom flag request:";
 
   const detailRow = (label, value) => `
     <tr>
@@ -547,7 +550,9 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
         <tr><td style="padding:8px 24px 8px">
           <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:13px;font-weight:600;letter-spacing:1.5px;color:#cc1f1f;text-transform:uppercase;margin-top:8px">Next Steps</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-            ${stepRow(1, 'Watch the tutorial', `${tutorialHtml} covers how to prepare your flag design.`)}
+            ${tutorialHtml
+              ? stepRow(1, 'Watch the tutorial', `${tutorialHtml} covers how to prepare your flag design.`)
+              : stepRow(1, 'Prepare your design', esc(FLAG_PREP_TEXT))}
             ${stepRow(2, 'Open a support ticket', `Head to <a href="${esc(ticketUrl)}" style="color:#e02525;text-decoration:none;font-weight:600">our Discord ticket channel</a>, click <strong style="color:#f0f0f0">Open Support Ticket</strong>, and choose <strong style="color:#f0f0f0">Shop</strong> from the dropdown.`)}
             ${stepRow(3, 'Send us your request', `In the ticket, include your receipt number <strong style="color:#f0f0f0">${esc(invoiceNo)}</strong> and this message (attach your flag design to it):`)}
           </table>
@@ -585,7 +590,7 @@ async function sendCustomFlagConfirmation({ to, orderId, productTitle, amountCen
     `  Discord ID: ${cf.discordId || 'Not provided'}`,
     '',
     'Next steps:',
-    `1. Watch the tutorial: ${tutorialText}`,
+    tutorialUrl ? `1. Watch the tutorial: ${tutorialUrl}` : `1. Prepare your design: ${FLAG_PREP_TEXT}`,
     `2. Open a support ticket in Discord (${ticketUrl}) - click "Open Support`,
     '   Ticket" and choose "Shop" from the dropdown.',
     `3. In the ticket, include your receipt number (${invoiceNo}) and this`,

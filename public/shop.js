@@ -1899,7 +1899,7 @@ async function checkAlerts() {
           const cfg = await api('/api/shop/config').catch(() => ({}));
           const tutorial = cfg.customFlagTutorialUrl
             ? `<a href="${escHtml(cfg.customFlagTutorialUrl)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;font-weight:600">Watch the tutorial</a>`
-            : '[YOUTUBE_TUTORIAL_LINK_HERE]';
+            : null;
           const receiptNo = `RFGZ-${String(orderId).padStart(6, '0')}`;
           const ticketLink = cfg.customFlagTicketUrl
             ? `<a href="${escHtml(cfg.customFlagTicketUrl)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;font-weight:600">our Discord ticket channel</a>`
@@ -1907,7 +1907,7 @@ async function checkAlerts() {
           alertSuccess.innerHTML = `
             <strong>Thanks for your Custom Flag order!</strong>
             The same steps below were also emailed to the address you used at checkout (PayPal).<br><br>
-            1. ${tutorial} on preparing your flag design.<br>
+            1. ${tutorial ? `${tutorial} on preparing your flag design.` : 'Get your flag design ready as a PNG or JPG image.'}<br>
             2. Open a ticket at ${ticketLink} — click <strong>Open Support Ticket</strong> and choose <strong>Shop</strong> from the dropdown.<br>
             3. In the ticket, include your receipt number <strong>${escHtml(receiptNo)}</strong> and attach your flag design.
           `;
