@@ -416,11 +416,12 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'This product needs additional details — use the Custom Flag checkout form.' });
   }
 
-  // Queue priority is delivered to an in-game id. Taking the money first and
-  // asking later left paid orders with nowhere to deliver (#106 and #675, found
-  // 2026-09-14), so the id comes first.
-  if (product.grants_priority_queue && !req.user.bi_uid) {
-    return res.status(400).json({ code: 'needs_in_game_id', error: 'Add your in-game ID first, so your priority queue has somewhere to go.' });
+  // Queue priority and in-game cosmetics are delivered to an in-game id. Taking
+  // the money first and asking later left paid orders with nowhere to deliver
+  // (#106 and #675, found 2026-09-14), so the id comes first.
+  if (cosmetics.deliveredInGame(product) && !req.user.bi_uid) {
+    const what = product.grants_priority_queue ? 'your priority queue' : 'your cosmetic';
+    return res.status(400).json({ code: 'needs_in_game_id', error: `Add your in-game ID first, so ${what} has somewhere to go.` });
   }
 
   // Only a server the shop offers. dev1 is synced to but never sold, so naming it

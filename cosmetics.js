@@ -33,6 +33,13 @@ function normalizeCosmeticKey(v) {
   return isCosmeticKey(s) ? { ok: true, value: s } : { ok: false, value: null };
 }
 
+// Whether a product is delivered to the buyer's in-game ID: priority queue and
+// in-game cosmetics are; Discord-only perks (Backer, Supporter) are not. Checkout
+// asks for the ID before payment only when this is true.
+function deliveredInGame(product) {
+  return !!product && (!!product.grants_priority_queue || isCosmeticKey(product.cosmetic_key));
+}
+
 function cosmeticsConfigured(db) {
   return !!db.prepare("SELECT 1 FROM products WHERE cosmetic_key IS NOT NULL AND cosmetic_key != '' LIMIT 1").get();
 }
@@ -81,4 +88,4 @@ function buildWriteCosmeticsCmd(server, json) {
   ].join(' && ');
 }
 
-module.exports = { isCosmeticKey, normalizeCosmeticKey, cosmeticsConfigured, buildCosmeticEntries, buildWriteCosmeticsCmd };
+module.exports = { isCosmeticKey, normalizeCosmeticKey, deliveredInGame, cosmeticsConfigured, buildCosmeticEntries, buildWriteCosmeticsCmd };

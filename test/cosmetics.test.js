@@ -112,3 +112,11 @@ test('purchases.json stays priority queue only: cosmetics never enter it', () =>
     for (const e of buckets[id]) assert.notEqual(e.item, 'Red stripes armband', `${id} must not list a cosmetic`);
   }
 });
+
+test('checkout asks for an in-game ID only for what is delivered in game', () => {
+  assert.equal(cosmetics.deliveredInGame({ grants_priority_queue: 1, cosmetic_key: null }), true);
+  assert.equal(cosmetics.deliveredInGame({ grants_priority_queue: 0, cosmetic_key: 'armband.stripes-red' }), true);
+  assert.equal(cosmetics.deliveredInGame({ grants_priority_queue: 0, cosmetic_key: null }), false, 'Backer and Supporter are Discord only');
+  assert.equal(cosmetics.deliveredInGame({ grants_priority_queue: 0, cosmetic_key: 'Bad Key' }), false);
+  assert.equal(cosmetics.deliveredInGame(null), false);
+});

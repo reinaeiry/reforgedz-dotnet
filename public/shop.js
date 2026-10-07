@@ -1263,10 +1263,14 @@ async function buyProduct(productId, serverId, customAmountCents) {
     return;
   }
 
-  // Every perk is delivered to an in-game ID, so ask for it before PayPal on
-  // any platform. Console players used to get an alert and a dead end here.
-  // Discord is not asked for here: the payment confirmation offers it.
-  if (!currentUser.bi_uid) {
+  // Priority queue and in-game cosmetics are delivered to an in-game ID, so those
+  // ask for it before PayPal on any platform (console players used to get an alert
+  // and a dead end here). Discord-only perks such as Backer and Supporter need none:
+  // asking for one anyway lost buyers before checkout (funnel, September 2026). An
+  // unknown product is treated as needing one. Discord is not asked for here: the
+  // payment confirmation offers it.
+  const needsGameId = !product || !!product.grants_priority_queue || !!product.cosmetic_key;
+  if (needsGameId && !currentUser.bi_uid) {
     showBiUidModal(productId, serverId, customAmountCents);
     return;
   }
