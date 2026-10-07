@@ -170,6 +170,8 @@ function normalizeCapture(orderRes) {
     status: cap.status || orderRes.status || null,
     payerEmail: orderRes?.payer?.email_address || orderRes?.payment_source?.paypal?.email_address || null,
     payerName: [orderRes?.payer?.name?.given_name, orderRes?.payer?.name?.surname].filter(Boolean).join(' ') || null,
+    // The payer's country (VAT evidence); vatEvidence.normalizeCountry checks it before it is stored.
+    payerCountry: orderRes?.payer?.address?.country_code || null,
     customId: cap.custom_id || pu.custom_id || null,
     grossCents: toCents(gross),
     feeCents: toCents(fee),

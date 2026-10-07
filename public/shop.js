@@ -1979,3 +1979,23 @@ window.openSigninFromCard = openSigninFromCard;
 window.hardDeleteProduct = hardDeleteProduct;
 
 init();
+
+// This month's running costs covered, as a percentage (GET /api/shop/funding).
+// Stays hidden unless the shop knows its costs, and never holds up the page.
+(async function loadFunding() {
+  const box = document.getElementById('fundingMeter');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/shop/funding', { headers: { Accept: 'application/json' } });
+    if (!r.ok) return;
+    const f = await r.json();
+    if (!f || typeof f.coveredPct !== 'number') return;
+    const pct = Math.max(0, Math.min(999, Math.floor(f.coveredPct)));
+    document.getElementById('fundingPct').textContent = `${pct}% covered`;
+    document.getElementById('fundingFill').style.width = `${Math.min(100, pct)}%`;
+    document.getElementById('fundingNote').textContent = f.status === 'covered'
+      ? 'This month is covered. Anything more goes into a reserve for the months that fall short.'
+      : 'ReforgedZ is player-funded. Purchases pay for running it.';
+    box.hidden = false;
+  } catch { /* the meter is optional */ }
+})();

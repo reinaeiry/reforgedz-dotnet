@@ -18,6 +18,8 @@ const cards = require('../paymentCards');
 const paymentEvents = require('../paymentEvents');
 const staffRevoke = require('../staffRevoke');
 const funnel = require('../funnel');
+const vatEvidence = require('../vatEvidence');
+const funding = require('../funding');
 const inGameId = require('../inGameId');
 const { windowLimit } = require('../windowLimit');
 const reminders = require('../tools/reminders');
@@ -369,6 +371,13 @@ router.get('/api/shop/version', (req, res) => {
   res.json({ sha: require('../tools/lib/version').gitSha(), node: process.version });
 });
 
+// How much of this month's running costs is covered, as one public percentage
+// (funding.js). No amounts ever leave through here.
+router.get('/api/shop/funding', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json(funding.publicCoverage(db));
+});
+
 router.get('/api/shop/config', (req, res) => {
   const testMode = req.query.test === '1';
   res.json({
@@ -539,8 +548,8 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
   // Create the pending order row up-front so the customId we hand to PayPal
   // can map back to our DB even before they approve.
   const order = db.prepare(`
-    INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode) VALUES (?, ?, ?, 'pending', ?, ?)
-  `).run(req.user.steam_id, product.id, orderServerId, amountCents, useTest ? 1 : 0);
+    INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode, ip_country) VALUES (?, ?, ?, 'pending', ?, ?, ?)
+  `).run(req.user.steam_id, product.id, orderServerId, amountCents, useTest ? 1 : 0, vatEvidence.ipCountryOf(req));
   const orderId = order.lastInsertRowid;
   if (sharedIdConfirmed) {
     console.log(`[pq-guard] order #${orderId}: ${req.user.steam_id} confirmed in-game ID ${String(req.user.bi_uid).slice(0, 8)}... is theirs although another account has live priority queue on it (buying ${orderServerId || 'all servers'})`);
@@ -642,12 +651,13 @@ router.post('/api/shop/checkout-custom-flag', requireAuth, handleCustomFlagUploa
   }
 
   const orderInfo = db.prepare(`
-    INSERT INTO orders (steam_id, product_id, status, amount_cents, test_mode, custom_fields_json, custom_file_path)
-    VALUES (?, ?, 'pending', ?, ?, ?, ?)
+    INSERT INTO orders (steam_id, product_id, status, amount_cents, test_mode, custom_fields_json, custom_file_path, ip_country)
+    VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
   `).run(
     req.user.steam_id, product.id, amountCents, useTest ? 1 : 0,
     JSON.stringify({ playerName, inGameName, guid, discordId }),
-    fileName
+    fileName,
+    vatEvidence.ipCountryOf(req)
   );
   const orderId = orderInfo.lastInsertRowid;
 
@@ -774,9 +784,11 @@ function fulfillOrder(orderId, cap) {
   // who had genuinely paid with a cancelled order and no entitlement.
   const res = db.prepare(`
     UPDATE orders SET status = 'completed', completed_at = unixepoch(),
-      paypal_capture_id = ?, payer_email = ?, fee_cents = ?
+      paypal_capture_id = ?, payer_email = ?, fee_cents = ?,
+      payer_country = COALESCE(?, payer_country)
     WHERE id = ? AND status IN ('pending', 'cancelled')
-  `).run(cap.captureId || null, cap.payerEmail || null, cap.feeCents ?? null, orderId);
+  `).run(cap.captureId || null, cap.payerEmail || null, cap.feeCents ?? null,
+    vatEvidence.normalizeCountry(cap.payerCountry), orderId);
 
   // Never fulfil silently: if nothing moved, the caller's assumptions are wrong
   // and someone has paid without being granted anything.
@@ -2571,6 +2583,16 @@ function runway(paypalUsdCents, mrrCents, monthlyBurnCents) {
   return { profitable: false, monthsRemaining: months, netMonthlyCents: netMonthly };
 }
 
+// The quarter's VAT position from the evidence on each order (vatEvidence.js):
+// ?quarter=2026Q4. Totals per country, and the payments whose two sources disagree
+// or are missing, for a person to settle before a return is filed.
+router.get('/api/shop/admin/vat-report', requireAdmin, (req, res) => {
+  const quarter = String(req.query.quarter || '');
+  if (!vatEvidence.quarterBounds(quarter)) return res.status(400).json({ error: 'quarter must look like 2026Q4' });
+  res.set('Cache-Control', 'no-store');
+  res.json(vatEvidence.buildVatReport(db, { quarter }));
+});
+
 router.get('/api/shop/admin/finances', requireAdmin, async (req, res) => {
   const [balance, payouts, mrr] = await Promise.all([fetchProviderBalance(), recentTransactions(), mrrEstimate()]);
   const revenue = revenueSummary();
@@ -4130,13 +4152,15 @@ async function dispatchPayPalEvent(event, resource, orderId, { testMode = false 
         const ins = db.prepare(`
           INSERT INTO orders (steam_id, product_id, server_id, status, amount_cents, test_mode,
                               paypal_subscription_id, paypal_capture_id, payer_email, fee_cents,
-                              effective_until, completed_at, created_at)
-          VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+                              effective_until, completed_at, created_at, ip_country)
+          VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch(), ?)
         `).run(
           original.steam_id, original.product_id, original.server_id,
           cycleAmount, original.test_mode,
           subId, resource.id, resource.payer?.email_address || original.payer_email || null,
-          feeCents, effectiveUntil
+          feeCents, effectiveUntil,
+          // VAT evidence: a renewal has no checkout of its own, so it carries its checkout's country.
+          original.ip_country || null
         );
         newOrderId = ins.lastInsertRowid;
         if (refundedBefore) {

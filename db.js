@@ -822,6 +822,17 @@ if (!orderHasColumn('revoked_without_refund_at')) {
   db.exec("ALTER TABLE orders ADD COLUMN revoked_without_refund_at INTEGER");
 }
 
+// VAT evidence (vatEvidence.js): the buyer's country from two independent sources,
+// two-letter codes only. ip_country is where the browser was when checkout started
+// (a renewal row carries its checkout's); payer_country is PayPal's country for the
+// payer, filled once a day from Transaction Search. NULL = not known yet.
+if (!orderHasColumn('ip_country')) {
+  db.exec("ALTER TABLE orders ADD COLUMN ip_country TEXT");
+}
+if (!orderHasColumn('payer_country')) {
+  db.exec("ALTER TABLE orders ADD COLUMN payer_country TEXT");
+}
+
 // PayPal payments the daily reconciliation (tools/reconcile.js) has already
 // reported to staff as booked by nothing in the shop, so each one is reported once.
 db.exec(`

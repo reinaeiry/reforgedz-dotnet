@@ -1383,6 +1383,13 @@ try {
 } catch (e) {
   console.error('[reconcile] could not schedule:', e.message);
 }
+// 08:40 UTC: PayPal's country for each recent payer, VAT evidence (vatEvidence.js).
+// Two-letter codes only; VAT_EVIDENCE=off turns it off.
+try {
+  require('./vatEvidence').scheduleDailyFill({ db: require('./db'), paypal: require('./paypal') });
+} catch (e) {
+  console.error('[vat] could not schedule:', e.message);
+}
 // The morning health card in #Payment-Processor (tools/healthReport.js): heals
 // missing entitlement roles, runs the deep doctor, posts one embed.
 try {
