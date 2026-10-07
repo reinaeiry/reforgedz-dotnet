@@ -84,6 +84,15 @@ function buildCosmeticEntries(db, now = Math.floor(Date.now() / 1000)) {
   return out;
 }
 
+// The file's text: a JSON array with one entry per line. Short lines keep it readable
+// by a line-at-a-time reader (the mod's purchases.json reader joins ReadLine results,
+// and the engine documents no limit for one line), at about 2 bytes per entry more
+// than compact JSON.
+function serializeCosmeticEntries(entries) {
+  if (!entries.length) return '[]';
+  return '[\n' + entries.map(e => JSON.stringify(e)).join(',\n') + '\n]';
+}
+
 // Base64 characters per command. Each command travels as one argument to the remote
 // shell, which Linux caps at 128 KiB, and a server reached through the NA hop gets it
 // base64-encoded once more (sync.wrapForRegion), so 32 KiB keeps every command near
@@ -121,5 +130,5 @@ function buildWriteCosmeticsCmds(server, json, chunkSize = CHUNK_B64) {
 
 module.exports = {
   CHUNK_B64, isCosmeticKey, normalizeCosmeticKey, deliveredInGame, cosmeticsConfigured, cosmeticsInUse,
-  buildCosmeticEntries, buildWriteCosmeticsCmds
+  buildCosmeticEntries, serializeCosmeticEntries, buildWriteCosmeticsCmds
 };

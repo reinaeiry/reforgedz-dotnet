@@ -136,7 +136,7 @@ test('the write commands land the exact list atomically and confirm per server',
 test('2,000 entries: every command stays far under the argument limit, NA hop included, and lands the exact list', { skip: noBash }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rz-cos-na-'));
   const server = { id: 'na1', path: dir + '/profile' };
-  const json = JSON.stringify(bigList(2000));
+  const json = cosmetics.serializeCosmeticEntries(bigList(2000));
   const cmds = cosmetics.buildWriteCosmeticsCmds(server, json);
   assert.ok(cmds.length > 5, `chunked (${cmds.length} commands for ${json.length} bytes)`);
   for (const cmd of cmds) {
@@ -149,6 +149,17 @@ test('2,000 entries: every command stays far under the argument limit, NA hop in
   assert.equal(fs.readFileSync(dir + '/profile/cosmetics.json', 'utf8'), json);
   assert.deepEqual(fs.readdirSync(dir + '/profile'), ['cosmetics.json']);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the file is a JSON array with one short line per entry', () => {
+  const list = bigList(2000);
+  const text = cosmetics.serializeCosmeticEntries(list);
+  assert.deepEqual(JSON.parse(text), list);
+  const lines = text.split('\n');
+  assert.equal(lines.length, 2002, 'the brackets plus one line per entry');
+  assert.ok(Math.max(...lines.map(l => l.length)) < 200, 'no long line for a line reader to choke on');
+  assert.equal(cosmetics.serializeCosmeticEntries([]), '[]');
+  assert.deepEqual(JSON.parse(cosmetics.serializeCosmeticEntries(list.slice(0, 1))), list.slice(0, 1));
 });
 
 test('a lost chunk leaves the previous list in place and no OK', { skip: noBash }, () => {

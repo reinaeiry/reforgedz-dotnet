@@ -741,7 +741,7 @@ async function runPurchaseSync() {
     try {
       if (cosmetics.cosmeticsInUse(db)) {
         const entries = cosmetics.buildCosmeticEntries(db);
-        const json = JSON.stringify(entries);
+        const json = cosmetics.serializeCosmeticEntries(entries);
         const wrote = [];
         const missing = [];
         for (const server of servers) {
