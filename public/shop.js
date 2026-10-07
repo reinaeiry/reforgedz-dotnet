@@ -49,6 +49,7 @@ const formPriceMaxRow = document.getElementById('formPriceMaxRow');
 const formPriceLabel = document.getElementById('formPriceLabel');
 const formAssignDiscordRole = document.getElementById('formAssignDiscordRole');
 const formDiscordRoleId = document.getElementById('formDiscordRoleId');
+const formCosmeticKey = document.getElementById('formCosmeticKey');
 const formDiscordRoleRow = document.getElementById('formDiscordRoleRow');
 const formEditId = document.getElementById('formEditId');
 
@@ -1532,7 +1533,8 @@ productForm.addEventListener('submit', async (e) => {
     customPrice,
     priceMinCents,
     priceMaxCents,
-    discordRoleId
+    discordRoleId,
+    cosmeticKey: formCosmeticKey ? formCosmeticKey.value.trim().toLowerCase() : undefined
   };
 
   try {
@@ -1582,6 +1584,7 @@ function editProduct(id) {
     formPriceMin.value = p.price_min_cents != null ? (p.price_min_cents / 100).toFixed(2) : '';
     formPriceMax.value = p.price_max_cents != null ? (p.price_max_cents / 100).toFixed(2) : '';
     formAssignDiscordRole.checked = !!p.discord_role_id;
+    if (formCosmeticKey) formCosmeticKey.value = p.cosmetic_key || '';
     formDiscordRoleId.innerHTML = p.discord_role_id ? `<option value="${escHtml(p.discord_role_id)}" selected>Loading…</option>` : '<option value="">Loading…</option>';
     if (p.discord_role_id) populateDiscordRoleSelect(p.discord_role_id);
     refreshStockLabel();
@@ -1612,6 +1615,7 @@ function clearForm() {
   formPriceMin.value = '';
   formPriceMax.value = '';
   formAssignDiscordRole.checked = false;
+  if (formCosmeticKey) formCosmeticKey.value = '';
   formDiscordRoleId.innerHTML = '<option value="">Pick a role…</option>';
   refreshStockLabel();
   refreshCustomPriceUi();

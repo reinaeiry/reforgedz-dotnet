@@ -20,6 +20,7 @@ const staffRevoke = require('../staffRevoke');
 const funnel = require('../funnel');
 const vatEvidence = require('../vatEvidence');
 const funding = require('../funding');
+const cosmetics = require('../cosmetics');
 const inGameId = require('../inGameId');
 const { windowLimit } = require('../windowLimit');
 const reminders = require('../tools/reminders');
@@ -351,7 +352,7 @@ function requireAdmin(req, res, next) {
 // Get active products
 router.get('/api/shop/products', (req, res) => {
   const products = db.prepare(`
-    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, active
+    SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, cosmetic_key, active
     FROM products WHERE active = 1 ORDER BY created_at DESC
   `).all();
   // Stock depends on who is looking (a buyer's own checkout at PayPal holds no slot
@@ -1417,9 +1418,12 @@ function normalizeDiscordRoleId(v) {
   return /^\d{15,25}$/.test(s) ? s : null;
 }
 
+// What the admin form says when a cosmetic key breaks the spelling rule the mod matches on.
+const COSMETIC_KEY_RULE = 'The in-game cosmetic key may use lowercase letters, digits, dots, dashes and underscores, start with a letter or digit, and be at most 64 characters (for example armband.stripes-red).';
+
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId, cosmeticKey } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -1449,11 +1453,13 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
   if (!customCheck.ok) return res.status(400).json({ error: customCheck.error });
   const customPriceVal = customPrice ? 1 : 0;
   const discordRoleIdVal = normalizeDiscordRoleId(discordRoleId);
+  const cosmeticCheck = cosmetics.normalizeCosmeticKey(cosmeticKey);
+  if (!cosmeticCheck.ok) return res.status(400).json({ error: COSMETIC_KEY_RULE });
 
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, stockOverridesVal === undefined ? null : stockOverridesVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max, discordRoleIdVal || null);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, cosmetic_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, stockOverridesVal === undefined ? null : stockOverridesVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max, discordRoleIdVal || null, cosmeticCheck.value);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
   res.json(attachStock(attachImages(product)));
@@ -1461,7 +1467,7 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId, cosmeticKey } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
 
@@ -1523,6 +1529,9 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
 
   const discordRoleIdWasSent = discordRoleId !== undefined;
   const discordRoleIdVal = discordRoleIdWasSent ? normalizeDiscordRoleId(discordRoleId) : null;
+  const cosmeticKeyWasSent = cosmeticKey !== undefined;
+  const cosmeticCheck = cosmetics.normalizeCosmeticKey(cosmeticKey);
+  if (cosmeticKeyWasSent && !cosmeticCheck.ok) return res.status(400).json({ error: COSMETIC_KEY_RULE });
 
   db.prepare(`
     UPDATE products SET
@@ -1541,6 +1550,7 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       price_min_cents = CASE WHEN ? THEN ? ELSE price_min_cents END,
       price_max_cents = CASE WHEN ? THEN ? ELSE price_max_cents END,
       discord_role_id = CASE WHEN ? THEN ? ELSE discord_role_id END,
+      cosmetic_key = CASE WHEN ? THEN ? ELSE cosmetic_key END,
       active = COALESCE(?, active),
       updated_at = unixepoch()
     WHERE id = ?
@@ -1569,6 +1579,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     maxVal,
     discordRoleIdWasSent ? 1 : 0,
     discordRoleIdVal,
+    cosmeticKeyWasSent ? 1 : 0,
+    cosmeticCheck.value,
     active !== undefined ? (active ? 1 : 0) : null,
     req.params.id
   );

@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { Client } = require('ssh2');
 const db = require('./db');
 const pqEntitlement = require('./pqEntitlement');
+const cosmetics = require('./cosmetics');
 // listServers() = servers the shop syncs to (eu3 deliberately excluded).
 // listAllServers() = every reachable server, used by the save inspector so a
 // server retired from sale can still have its saves read.
@@ -94,8 +95,9 @@ const shortGuid = (g) => `${String(g || '').slice(0, 8)}...`;
 // Nothing else goes in. Backer and Supporter are Discord roles only and give no
 // in-game benefit (the owner's rule), and neither does any other product that does
 // not grant priority queue (Custom Flag, or one added later), so their orders are
-// never written to a game server. Their roles come from the Discord role reconcile
-// (pqEntitlement.perksLiveSql), not from this file.
+// never written to this file. Their roles come from the Discord role reconcile
+// (pqEntitlement.perksLiveSql), not from this file. In-game cosmetics travel in a
+// separate cosmetics.json (cosmetics.js), so this file's meaning never changes.
 function buildPerServerPurchaseBuckets(now = nowUnix()) {
   const buckets = Object.fromEntries(SERVER_IDS.map(id => [id, []]));
   for (const r of pqEntitlement.livePqRows(db, now)) {
@@ -721,6 +723,24 @@ async function runPurchaseSync() {
       }
     } catch (e) {
       console.error('[sync] purchases.json failed for ALL servers:', e.message);
+    }
+
+    // 1b) cosmetics.json (cosmetics.js), only once some product carries a cosmetic:
+    // until then nothing new is written to any server. Confirmed per server, as above.
+    if (cosmetics.cosmeticsConfigured(db)) {
+      const entries = cosmetics.buildCosmeticEntries(db);
+      const json = JSON.stringify(entries, null, 2);
+      try {
+        const out = await sshRun(conn, servers.map(s => wrapForRegion(s, cosmetics.buildWriteCosmeticsCmd(s, json))).join(' ; '));
+        const missing = servers.filter(s => !out.includes(`[cosmetics] ${s.id} OK`));
+        if (missing.length === 0) {
+          console.log(`[cosmetics] ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} synced to all ${servers.length} servers`);
+        } else {
+          console.error(`[cosmetics] cosmetics.json NOT confirmed on: ${missing.map(s => s.id).join(', ')}`);
+        }
+      } catch (e) {
+        console.error('[cosmetics] cosmetics.json failed for ALL servers:', e.message);
+      }
     }
 
     // 2) Patch each server's game.admins additively

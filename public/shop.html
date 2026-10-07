@@ -850,6 +850,13 @@
               The bot gives buyers the selected role on payment, and strips it on cancellation/refund/revoke. Buyer must have linked their Discord ID on their account page.
             </div>
           </div>
+          <div class="admin-field">
+            <label>In-game cosmetic key (optional)</label>
+            <input type="text" id="formCosmeticKey" placeholder="armband.stripes-red" maxlength="64" autocomplete="off" spellcheck="false">
+            <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
+              Unlocks this cosmetic in game for the buyer. It must match the key in the mod exactly. Leave empty for anything that is not an in-game cosmetic.
+            </div>
+          </div>
           <div class="admin-field" id="formDiscordRoleRow" style="display:none">
             <label>Discord role</label>
             <select id="formDiscordRoleId">

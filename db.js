@@ -139,6 +139,12 @@ if (!productHasColumn('discord_role_id')) {
 // Optional per-server stock caps for server_specific products, as a JSON map
 // of serverId -> limit (e.g. {"eu3":40}). Servers absent from the map fall
 // back to the product's shared stock_limit.
+// The in-game cosmetic a product unlocks (cosmetics.js), e.g. 'armband.stripes-red'.
+// NULL for every product that is not a cosmetic; the sync writes cosmetics.json only
+// once some product carries one.
+if (!productHasColumn('cosmetic_key')) {
+  db.exec("ALTER TABLE products ADD COLUMN cosmetic_key TEXT");
+}
 if (!productHasColumn('stock_limit_overrides')) {
   db.exec("ALTER TABLE products ADD COLUMN stock_limit_overrides TEXT");
 }
