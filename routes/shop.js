@@ -2599,11 +2599,20 @@ function runway(paypalUsdCents, mrrCents, monthlyBurnCents) {
 // The quarter's VAT position from the evidence on each order (vatEvidence.js):
 // ?quarter=2026Q4. Totals per country, and the payments whose two sources disagree
 // or are missing, for a person to settle before a return is filed.
+// ?quarter=2027Q1[&eurPerUsd=0.86][&gbp=2027-01:0.79,2027-02:0.80,2027-03:0.78]: the rates
+// turn the figures into each return's currency (vatEvidence.buildVatReport says which rate).
 router.get('/api/shop/admin/vat-report', requireAdmin, (req, res) => {
   const quarter = String(req.query.quarter || '');
   if (!vatEvidence.quarterBounds(quarter)) return res.status(400).json({ error: 'quarter must look like 2026Q4' });
+  let report;
+  try {
+    report = vatEvidence.buildVatReport(db, { quarter, ...vatEvidence.parseReportQuery(req.query) });
+  } catch (e) {
+    if (e.code === 'BAD_INPUT') return res.status(400).json({ error: e.message });
+    throw e;
+  }
   res.set('Cache-Control', 'no-store');
-  res.json(vatEvidence.buildVatReport(db, { quarter }));
+  res.json(report);
 });
 
 router.get('/api/shop/admin/finances', requireAdmin, async (req, res) => {

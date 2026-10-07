@@ -226,6 +226,64 @@ test('report: sales in the quarter paid, refunds and reversals in the quarter th
   assert.throws(() => vat.buildVatReport(db, { quarter: '2027-01' }), /2026Q4/);
 });
 
+test('report: the value excluding VAT, and each return in its own currency', () => {
+  db.prepare('DELETE FROM paypal_refunds').run();
+  db.prepare('DELETE FROM orders').run();
+  const q = (m, d) => utc(2027, m, d);
+  order({ at: q(0, 5), payer: 'DE', ip: 'DE' });
+  order({ at: q(1, 5), payer: 'DE', ip: 'DE' });
+  order({ at: q(0, 6), payer: 'GB', ip: 'GB' });                 // January
+  const feb = order({ at: q(1, 6), payer: 'GB', ip: 'GB' });     // February
+  refund(feb, 500, q(2, 2));                                     // refunded in March
+  order({ at: q(2, 7), payer: 'US', ip: 'US' });
+
+  const plain = vat.buildVatReport(db, { quarter: '2027Q1' });
+  const by = Object.fromEntries(plain.byCountry.map(c => [c.country, c]));
+  assert.equal(by.DE.exclusiveCents, by.DE.netCents - by.DE.vatCents);
+  assert.equal(by.DE.exclusiveCents, 3000 - rates.vatIncludedCents(3000, 19));
+  assert.equal(plain.totals.UK.exclusiveCents, by.GB.exclusiveCents);
+  assert.equal(by.DE.returnFigures, null, 'no rate given: no euro figures');
+  assert.deepEqual(plain.returnTotals, { 'EU-OSS': null, UK: null });
+
+  const r = vat.buildVatReport(db, {
+    quarter: '2027Q1', eurPerUsd: 0.9,
+    gbpPerUsdByMonth: { '2027-01': 0.8, '2027-02': 0.75, '2027-03': 0.7 }
+  });
+  const de = r.byCountry.find(c => c.country === 'DE');
+  assert.deepEqual(de.returnFigures, {
+    currency: 'EUR',
+    exclusiveCents: Math.round(de.exclusiveCents * 0.9),
+    vatCents: Math.round(de.vatCents * 0.9)
+  });
+  // UK: 1500 at 0.80 (Jan) + 1500 at 0.75 (Feb) - a 500 refund at 0.70 (Mar) = 1200 + 1125 - 350 = 1975 pence.
+  const gb = r.byCountry.find(c => c.country === 'GB');
+  const vatGbp = rates.vatIncludedCents(1975, 20);
+  assert.deepEqual(gb.returnFigures, { currency: 'GBP', exclusiveCents: 1975 - vatGbp, vatCents: vatGbp });
+  assert.deepEqual(r.returnTotals.UK, { currency: 'GBP', exclusiveCents: 1975 - vatGbp, vatCents: vatGbp });
+  assert.deepEqual(r.returnTotals['EU-OSS'], { currency: 'EUR', exclusiveCents: de.returnFigures.exclusiveCents, vatCents: de.returnFigures.vatCents });
+  assert.equal(r.byCountry.find(c => c.country === 'US').returnFigures, null, 'outside both schemes');
+
+  assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', gbpPerUsdByMonth: { '2027-01': 0.8, '2027-03': 0.7 } }),
+    e => e.code === 'BAD_INPUT' && /2027-02/.test(e.message), 'a month without a rate is refused, never counted as 0');
+  for (const bad of [0, -1, 12, NaN, '0.9']) {
+    assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', eurPerUsd: bad }), e => e.code === 'BAD_INPUT', String(bad));
+  }
+  assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', gbpPerUsdByMonth: { 'Jan': 0.8 } }), e => e.code === 'BAD_INPUT');
+});
+
+test('report query: rates read from plain text only; anything else is a 400, not a 500', () => {
+  assert.deepEqual(vat.parseReportQuery({}), { eurPerUsd: null, gbpPerUsdByMonth: null });
+  assert.deepEqual(vat.parseReportQuery({ eurPerUsd: '0.86', gbp: '2027-01:0.79, 2027-02:0.8' }),
+    { eurPerUsd: 0.86, gbpPerUsdByMonth: { '2027-01': 0.79, '2027-02': 0.8 } });
+  assert.deepEqual(vat.parseReportQuery({ eurPerUsd: '', gbp: '' }), { eurPerUsd: null, gbpPerUsdByMonth: null });
+  // What Express makes of ?gbp[toString]=1, ?eurPerUsd=1&eurPerUsd=2 and a malformed list.
+  for (const q of [{ gbp: { toString: '1' } }, { eurPerUsd: ['1', '2'] }, { gbp: '2027-01' }, { gbp: '2027-01:0.8:1' }]) {
+    assert.throws(() => vat.parseReportQuery(q), e => e.code === 'BAD_INPUT', JSON.stringify(q));
+  }
+  // Parsed but not a rate: refused by the report itself.
+  assert.throws(() => vat.buildVatReport(db, { quarter: '2027Q1', ...vat.parseReportQuery({ eurPerUsd: 'abc' }) }), e => e.code === 'BAD_INPUT');
+});
+
 // ---- Backfill -------------------------------------------------------------------------
 
 test('backfill windows are at most 31 days, cover the span exactly, oldest first', () => {

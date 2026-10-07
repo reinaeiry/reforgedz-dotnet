@@ -182,18 +182,62 @@ function evidenceOf(payer, ip) {
 //                netted out in its own sale's quarter, and the report says how many.
 // The country is PayPal's when it has one (the billing account), else the checkout's.
 // Every sale without two matching sources is listed for review: a seller outside the
-// EU needs two pieces of evidence that agree. Amounts are in the currency the shop
-// sells in (USD); a One Stop Shop return is filed in euros at the ECB rate of the
-// quarter's last day, which this report does not fetch.
+// EU needs two pieces of evidence that agree. Amounts are in USD, the currency the
+// shop sells in, and each return asks for every country's value excluding VAT and the
+// VAT due, in its own currency, so the report adds both when given the rates (it
+// fetches none):
+//   eurPerUsd         the ECB rate of the quarter's last day, applied to the quarter's
+//                     totals (Revenue, non-Union OSS manual 4.3);
+//   gbpPerUsdByMonth  { 'YYYY-MM': rate }: HMRC's period rate for each month (or the UK
+//                     market rate), each UK sale and refund converted at its own month's
+//                     rate (VAT Notice 700). A month without a rate is an error, never 0.
 const CHECKOUT_IP_SQL = `(SELECT f.ip_country FROM orders f
         WHERE o.paypal_subscription_id IS NOT NULL AND f.paypal_subscription_id = o.paypal_subscription_id
           AND f.ip_country IS NOT NULL ORDER BY f.id LIMIT 1)`;
 
-function buildVatReport(db, { quarter } = {}) {
+// A bad report request (an error the admin route answers with 400).
+function badInput(message) {
+  const e = new Error(message);
+  e.code = 'BAD_INPUT';
+  return e;
+}
+const isRate = (r) => typeof r === 'number' && Number.isFinite(r) && r > 0 && r < 10;
+
+// The admin route's query (?eurPerUsd=0.86&gbp=2027-01:0.79,2027-02:0.80) as
+// buildVatReport's options. Only plain strings are read: Express turns ?gbp[x]=1 into an
+// object, which String() or Number() would throw on.
+function parseReportQuery(query = {}) {
+  const text = (v, name) => {
+    if (v == null || v === '') return null;
+    if (typeof v !== 'string') throw badInput(`${name} must be given once, as text`);
+    return v;
+  };
+  const eur = text(query.eurPerUsd, 'eurPerUsd');
+  const gbp = text(query.gbp, 'gbp');
+  let gbpPerUsdByMonth = null;
+  if (gbp != null) {
+    gbpPerUsdByMonth = {};
+    for (const pair of gbp.split(',')) {
+      const [month, rate, extra] = pair.split(':');
+      if (extra !== undefined || rate === undefined) throw badInput('gbp must look like 2027-01:0.79,2027-02:0.80');
+      gbpPerUsdByMonth[month.trim()] = Number(rate);
+    }
+  }
+  return { eurPerUsd: eur == null ? null : Number(eur), gbpPerUsdByMonth };
+}
+const monthLabel = (unix) => new Date(unix * 1000).toISOString().slice(0, 7);
+
+function buildVatReport(db, { quarter, eurPerUsd = null, gbpPerUsdByMonth = null } = {}) {
   const b = quarterBounds(quarter);
-  if (!b) throw new Error('quarter must look like 2026Q4');
+  if (!b) throw badInput('quarter must look like 2026Q4');
+  if (eurPerUsd != null && !isRate(eurPerUsd)) throw badInput('eurPerUsd must be a number like 0.86');
+  if (gbpPerUsdByMonth != null) {
+    const ok = typeof gbpPerUsdByMonth === 'object'
+      && Object.entries(gbpPerUsdByMonth).every(([m, r]) => /^\d{4}-\d{2}$/.test(m) && isRate(r));
+    if (!ok) throw badInput('gbpPerUsdByMonth must map YYYY-MM to a rate, like 2027-01:0.79');
+  }
   const sales = db.prepare(`
-    SELECT o.id, o.amount_cents, o.status, o.revoked_without_refund_at, o.payer_country, o.ip_country,
+    SELECT o.id, o.amount_cents, o.status, o.revoked_without_refund_at, o.payer_country, o.ip_country, o.completed_at,
       ${CHECKOUT_IP_SQL} AS checkout_ip_country,
       (SELECT COUNT(*) FROM paypal_refunds r WHERE r.order_id = o.id) AS refund_rows
     FROM orders o
@@ -202,7 +246,7 @@ function buildVatReport(db, { quarter } = {}) {
     ORDER BY o.id
   `).all(b.start, b.end);
   const refunds = db.prepare(`
-    SELECT r.refund_id, r.amount_cents, r.kind, o.id AS order_id, o.amount_cents AS order_cents,
+    SELECT r.refund_id, r.amount_cents, r.kind, r.received_at, o.id AS order_id, o.amount_cents AS order_cents,
       o.payer_country, o.ip_country, ${CHECKOUT_IP_SQL} AS checkout_ip_country
     FROM paypal_refunds r
     LEFT JOIN orders o ON o.id = r.order_id
@@ -230,6 +274,17 @@ function buildVatReport(db, { quarter } = {}) {
     }
     return c;
   };
+  // UK sales and refunds in pounds, each at its own month's rate (country -> pence).
+  const gbp = new Map();
+  const missingMonths = new Set();
+  const addGbp = (c, field, cents, at) => {
+    if (gbpPerUsdByMonth == null || c.scheme !== 'UK') return;
+    const rate = gbpPerUsdByMonth[monthLabel(at)];
+    if (rate == null) { missingMonths.add(monthLabel(at)); return; }
+    const g = gbp.get(c.country) || { salesCents: 0, refundCents: 0 };
+    g[field] += Math.round(cents * rate);
+    gbp.set(c.country, g);
+  };
 
   for (const r of sales) {
     const w = countryOf(r);
@@ -247,7 +302,11 @@ function buildVatReport(db, { quarter } = {}) {
     c.orders += 1;
     c.salesCents += r.amount_cents;
     c.evidence[w.evidence] += 1;
-    if (undated) c.refundCents += r.amount_cents;
+    addGbp(c, 'salesCents', r.amount_cents, r.completed_at);
+    if (undated) {
+      c.refundCents += r.amount_cents;
+      addGbp(c, 'refundCents', r.amount_cents, r.completed_at);
+    }
   }
   for (const r of refunds) {
     const cents = r.amount_cents != null ? Math.abs(r.amount_cents) : r.order_cents;
@@ -261,24 +320,52 @@ function buildVatReport(db, { quarter } = {}) {
       if (r.order_id == null) review.push({ refundId: r.refund_id, orderId: null, evidence: 'refund-without-order' });
       continue;
     }
-    bucket(w.country).refundCents += cents;
+    const c = bucket(w.country);
+    c.refundCents += cents;
+    addGbp(c, 'refundCents', cents, r.received_at);
+  }
+  if (missingMonths.size) {
+    throw badInput(`gbpPerUsdByMonth needs a rate for ${[...missingMonths].sort().join(', ')}`);
   }
 
   const totals = {
-    'EU-OSS': { salesCents: 0, refundCents: 0, netCents: 0, vatCents: 0 },
-    UK: { salesCents: 0, refundCents: 0, netCents: 0, vatCents: 0 },
+    'EU-OSS': { salesCents: 0, refundCents: 0, netCents: 0, vatCents: 0, exclusiveCents: 0 },
+    UK: { salesCents: 0, refundCents: 0, netCents: 0, vatCents: 0, exclusiveCents: 0 },
     none: { salesCents: 0, refundCents: 0, netCents: 0 }
+  };
+  // What each return asks for, in its currency: null until the rate is given.
+  const returnTotals = {
+    'EU-OSS': eurPerUsd != null ? { currency: 'EUR', exclusiveCents: 0, vatCents: 0 } : null,
+    UK: gbpPerUsdByMonth != null ? { currency: 'GBP', exclusiveCents: 0, vatCents: 0 } : null
   };
   for (const c of byCountry.values()) {
     c.netCents = c.salesCents - c.refundCents;
     // VAT is worked out on each country's net total, the way a return reports it; a
     // quarter whose refunds outweigh its sales shows a negative correction.
     c.vatCents = vatIncludedCents(c.netCents, c.rate);
+    c.exclusiveCents = c.netCents - c.vatCents;
+    c.returnFigures = null;
+    if (c.scheme === 'EU-OSS' && eurPerUsd != null) {
+      c.returnFigures = { currency: 'EUR', exclusiveCents: Math.round(c.exclusiveCents * eurPerUsd), vatCents: Math.round(c.vatCents * eurPerUsd) };
+    } else if (c.scheme === 'UK' && gbpPerUsdByMonth != null) {
+      const g = gbp.get(c.country) || { salesCents: 0, refundCents: 0 };
+      const net = g.salesCents - g.refundCents;
+      const vat = vatIncludedCents(net, c.rate);
+      c.returnFigures = { currency: 'GBP', exclusiveCents: net - vat, vatCents: vat };
+    }
     const t = totals[c.scheme];
     t.salesCents += c.salesCents;
     t.refundCents += c.refundCents;
     t.netCents += c.netCents;
-    if (c.scheme !== 'none') t.vatCents += c.vatCents;
+    if (c.scheme !== 'none') {
+      t.vatCents += c.vatCents;
+      t.exclusiveCents += c.exclusiveCents;
+    }
+    const rt = returnTotals[c.scheme];
+    if (rt && c.returnFigures) {
+      rt.exclusiveCents += c.returnFigures.exclusiveCents;
+      rt.vatCents += c.returnFigures.vatCents;
+    }
   }
   const list = [...byCountry.values()].sort((a, z) => (z.netCents - a.netCents) || a.country.localeCompare(z.country));
   return {
@@ -293,10 +380,18 @@ function buildVatReport(db, { quarter } = {}) {
     undatedRefunds,
     byCountry: list,
     totals,
+    returnTotals,
+    exchange: { eurPerUsd, gbpPerUsdByMonth },
     unknown,
     review,
     notes: [
-      'Prices include VAT, so the VAT shown is the part of each net amount the rate makes up.',
+      'Prices include VAT, so the VAT shown is the part of each net amount the rate makes up; exclusiveCents is the rest, the value a return asks for.',
+      eurPerUsd != null
+        ? `EU figures in euros at ${eurPerUsd} EUR per USD; it must be the ECB rate of the quarter's last day.`
+        : "Pass eurPerUsd (the ECB rate of the quarter's last day) for the EU figures in euros.",
+      gbpPerUsdByMonth != null
+        ? 'UK figures in pounds, each sale and refund at its month\'s rate as given.'
+        : "Pass gbpPerUsdByMonth (HMRC's period rate for each month) for the UK figures in pounds.",
       `Rates were checked on ${RATES_CHECKED}; check them against the EU tax database and GOV.UK before filing.`,
       'Sales count in the quarter they were paid; refunds and chargeback reversals in the quarter they happened.',
       `${undatedRefunds} refunded order(s) in this quarter have no refund on record and were netted out in their sale's quarter.`,
@@ -307,5 +402,5 @@ function buildVatReport(db, { quarter } = {}) {
 
 module.exports = {
   normalizeCountry, ipCountryOf, payerCountryOf, fillPayerCountries, runDailyFill, scheduleDailyFill,
-  nextRunAt, vatOff, quarterBounds, evidenceOf, buildVatReport, windowsBetween, MAX_WINDOW_S
+  nextRunAt, vatOff, quarterBounds, evidenceOf, buildVatReport, parseReportQuery, windowsBetween, MAX_WINDOW_S
 };
