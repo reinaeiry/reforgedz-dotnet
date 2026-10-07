@@ -197,3 +197,38 @@ test('report: totals per country from kept live payments, with conflicts and gap
   assert.equal(r.ratesChecked, rates.RATES_CHECKED);
   assert.throws(() => vat.buildVatReport(db, { quarter: '2027-01' }), /2026Q4/);
 });
+
+// ---- Backfill -------------------------------------------------------------------------
+
+test('backfill windows are at most 31 days, cover the span exactly, oldest first', () => {
+  const start = utc(2026, 4, 1);
+  const end = utc(2026, 9, 7);
+  const w = vat.windowsBetween(start, end);
+  assert.equal(w[0].start, start);
+  assert.equal(w.at(-1).end, end);
+  for (let i = 0; i < w.length; i++) {
+    assert.ok(w[i].end - w[i].start <= 31 * 86400);
+    if (i) assert.equal(w[i].start, w[i - 1].end, 'no gap and no overlap');
+  }
+  assert.deepEqual(vat.windowsBetween(end, end), []);
+});
+
+test('a dry run counts the rows a real run would fill and writes nothing', async () => {
+  const g = order({ at: utc(2026, 9, 6), capture: 'CAP-G' });
+  const pp = fakePayPal([[tx('CAP-G', 'AT')]]);
+  const dry = await vat.fillPayerCountries({ db, paypal: pp, start: utc(2026, 9, 5), end: utc(2026, 9, 7), dryRun: true, logger: silent });
+  assert.equal(dry.filled, 1);
+  assert.equal(dry.dryRun, true);
+  assert.equal(countryOf(g), null);
+  const real = await vat.fillPayerCountries({ db, paypal: pp, start: utc(2026, 9, 5), end: utc(2026, 9, 7), logger: silent });
+  assert.equal(real.filled, 1);
+  assert.equal(countryOf(g), 'AT');
+});
+
+test('the backfill command needs a start date; --apply is the only way to write', () => {
+  const { parseArgs } = require('../tools/vatBackfill');
+  assert.deepEqual(parseArgs(['--from', '2026-05-01']), { from: '2026-05-01', apply: false, fromUnix: utc(2026, 4, 1) });
+  assert.equal(parseArgs(['--from', '2026-05-01', '--apply']).apply, true);
+  assert.equal(parseArgs(['--from', 'May']).fromUnix, null);
+  assert.equal(parseArgs([]).fromUnix, null);
+});

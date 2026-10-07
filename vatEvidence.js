@@ -62,17 +62,20 @@ const nowUnix = () => Math.floor(Date.now() / 1000);
 // seconds, at most 31 days). Only rows with no country yet are written, so a run can
 // be repeated safely. A failed page stops the run; rows filled before it stay filled,
 // because each one is true on its own.
-async function fillPayerCountries({ db, paypal, start, end, logger = console } = {}) {
+async function fillPayerCountries({ db, paypal, start, end, dryRun = false, logger = console } = {}) {
   if (!db) throw new Error('fillPayerCountries needs the database handle');
   if (!paypal) throw new Error('fillPayerCountries needs the PayPal client');
-  const out = { start, end, pages: 0, rows: 0, withCountry: 0, filled: 0, error: null, skipped: null };
+  const out = { start, end, dryRun: !!dryRun, pages: 0, rows: 0, withCountry: 0, filled: 0, error: null, skipped: null };
   if (!(end > start)) { out.error = 'the window is empty'; return out; }
   if (end - start > MAX_WINDOW_S) { out.error = 'PayPal answers at most 31 days per call'; return out; }
   if (typeof paypal.isConfigured === 'function' && !paypal.isConfigured(false)) {
     out.skipped = 'live PayPal is not configured';
     return out;
   }
-  const fill = db.prepare('UPDATE orders SET payer_country = ? WHERE paypal_capture_id = ? AND payer_country IS NULL AND test_mode = 0');
+  // A dry run counts the rows a real run would fill and writes nothing.
+  const fill = dryRun
+    ? (() => { const q = db.prepare('SELECT COUNT(*) AS n FROM orders WHERE paypal_capture_id = ? AND payer_country IS NULL AND test_mode = 0'); return { run: (_c, id) => ({ changes: q.get(id).n }) }; })()
+    : db.prepare('UPDATE orders SET payer_country = ? WHERE paypal_capture_id = ? AND payer_country IS NULL AND test_mode = 0');
   try {
     let totalPages = 1;
     for (let page = 1; page <= totalPages; page++) {
@@ -98,6 +101,14 @@ async function fillPayerCountries({ db, paypal, start, end, logger = console } =
     out.error = errorText(e);
     logger.error(`[vat] PayPal transaction search failed: ${out.error}`);
   }
+  return out;
+}
+
+// [start, end] cut into PayPal-sized windows (31 days at most), oldest first, for a
+// backfill over months (tools/vatBackfill.js).
+function windowsBetween(start, end, size = MAX_WINDOW_S) {
+  const out = [];
+  for (let s = start; s < end; s += size) out.push({ start: s, end: Math.min(end, s + size) });
   return out;
 }
 
@@ -238,5 +249,5 @@ function buildVatReport(db, { quarter } = {}) {
 
 module.exports = {
   normalizeCountry, ipCountryOf, payerCountryOf, fillPayerCountries, runDailyFill, scheduleDailyFill,
-  nextRunAt, vatOff, quarterBounds, evidenceOf, buildVatReport, MAX_WINDOW_S
+  nextRunAt, vatOff, quarterBounds, evidenceOf, buildVatReport, windowsBetween, MAX_WINDOW_S
 };
