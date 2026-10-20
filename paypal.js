@@ -141,6 +141,13 @@ function orderRequest({ amountCents, currency = 'USD', description, customId, br
         experience_context: {
           brand_name: brandName || 'ReforgedZ',
           landing_page: 'GUEST_CHECKOUT',
+          // Only funding that clears at once (the schema: "Ensures that at the time
+          // of capture, the payment does not have the pending status"), the same
+          // rule subscriptions already apply. A capture that could sit pending for
+          // days (an eCheck) would be read by the shop as unpaid: the checkout jobs
+          // would email "nothing was charged" and expire the order (review,
+          // 2026-10-20).
+          payment_method_preference: 'IMMEDIATE_PAYMENT_REQUIRED',
           user_action: 'PAY_NOW',
           shipping_preference: 'NO_SHIPPING',
           return_url: returnUrl,

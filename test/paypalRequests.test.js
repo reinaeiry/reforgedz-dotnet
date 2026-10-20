@@ -17,6 +17,7 @@ test('a one-time order asks PayPal for the guest card form first, no shipping, p
   assert.equal(body.purchase_units[0].description, 'Winter Armband');
   const ctx = body.payment_source.paypal.experience_context;
   assert.equal(ctx.landing_page, 'GUEST_CHECKOUT', 'the card form first (Orders v2 schema 2.36: LOGIN, GUEST_CHECKOUT, NO_PREFERENCE, BILLING)');
+  assert.equal(ctx.payment_method_preference, 'IMMEDIATE_PAYMENT_REQUIRED', 'no capture can sit pending (an eCheck); the same rule as subscriptions');
   assert.equal(ctx.shipping_preference, 'NO_SHIPPING');
   assert.equal(ctx.user_action, 'PAY_NOW');
   assert.equal(ctx.brand_name, 'ReforgedZ');

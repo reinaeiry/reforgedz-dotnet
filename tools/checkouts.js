@@ -23,7 +23,8 @@
 // Nothing runs on require: both functions take the database handle as a parameter
 // so the tests use a throwaway copy of the real schema (test/checkouts.test.js).
 const { SERVER_LABELS, SELLABLE_SERVER_IDS } = require('../gameServers');
-const { DEFAULT_PERSONA } = require('../webAuth');
+const webAuth = require('../webAuth');
+const { DEFAULT_PERSONA } = webAuth;
 const saleWindow = require('../saleWindow');
 
 const HOUR_S = 3600;
@@ -74,7 +75,8 @@ function expireAbandonedCheckouts(db, { now = nowS() } = {}) {
 // an account with an email, not a cycle of a paying subscription, and the account's
 // latest attempt at that product.
 const DUE_SQL = `
-  SELECT o.id, o.steam_id, o.product_id, o.server_id, o.amount_cents, o.created_at, o.paypal_subscription_id,
+  SELECT o.id, o.steam_id, o.product_id, o.server_id, o.amount_cents, o.created_at,
+         o.paypal_order_id, o.paypal_subscription_id,
          p.title AS product_title, p.currency, p.server_specific, p.active AS product_active,
          p.available_from, p.available_until,
          u.email, u.persona, u.gamertag, u.bi_uid_name
@@ -127,32 +129,66 @@ function remindersOff(env = process.env) {
   return ['off', '0', 'false'].includes(String(env.FINISH_REMINDERS || '').trim().toLowerCase());
 }
 
+// What PayPal says about the checkout right before the email goes, so "nothing was
+// charged" is never said of a payment in flight (review, 2026-10-20): a one-time
+// order whose capture sat pending, or a subscription approved whose webhook is
+// late. 'unapproved' means the buyer never finished at PayPal, and the email goes;
+// anything else waits ('in_progress': PayPal will tell the shop; 'unknown': the
+// call failed, so the next run looks again). One call per due order, a handful a
+// day. Orders v2 statuses: CREATED, SAVED, APPROVED, VOIDED, COMPLETED,
+// PAYER_ACTION_REQUIRED; subscriptions: APPROVAL_PENDING, APPROVED, ACTIVE,
+// SUSPENDED, CANCELLED, EXPIRED.
+const UNAPPROVED_ORDER = new Set(['CREATED', 'SAVED', 'PAYER_ACTION_REQUIRED']);
+async function paypalState(row) {
+  const paypal = require('../paypal');
+  try {
+    if (row.paypal_subscription_id) {
+      const sub = await paypal.getSubscription(false, row.paypal_subscription_id);
+      return String(sub && sub.status || '').toUpperCase() === 'APPROVAL_PENDING' ? 'unapproved' : 'in_progress';
+    }
+    const order = await paypal.getOrder(false, row.paypal_order_id);
+    return UNAPPROVED_ORDER.has(String(order && order.status || '').toUpperCase()) ? 'unapproved' : 'in_progress';
+  } catch (e) {
+    console.error(`[checkouts] order #${row.id}: PayPal state not read (${e.message}); the next run looks again`);
+    return 'unknown';
+  }
+}
+
 // What a run would send, and sends it unless dryRun. The summary holds order ids
-// and counts only, never an email address.
-async function runFinishReminders({ db, now = nowS(), send, dryRun = false, max = MAX_PER_RUN } = {}) {
+// and counts only, never an email address. Each email also takes one slot of the
+// shop's mail budget (webAuth.takeMailSlot, the same one sign-up and reset links
+// use: a gap per address, a daily cap per address, a cap per hour overall), so a
+// run of sign-ups with someone else's address can send that address no more than
+// those links could; an order refused by the budget stays unclaimed for the next
+// run.
+async function runFinishReminders({ db, now = nowS(), send, dryRun = false, max = MAX_PER_RUN, checkPayPal = paypalState, mailSlot = webAuth.takeMailSlot } = {}) {
   if (!db) throw new Error('runFinishReminders needs the database handle');
   const sendMail = send || ((payload) => require('../invoiceMail').sendFinishCheckout(payload));
-  const out = { now, dryRun: !!dryRun, due: 0, sent: 0, failed: 0, counts: { alreadySent: 0, overCap: 0 }, items: [], skipped: [] };
+  const out = { now, dryRun: !!dryRun, due: 0, sent: 0, failed: 0, counts: { alreadySent: 0, overCap: 0, inProgress: 0, unknown: 0, budget: 0 }, items: [], skipped: [] };
   const rows = db.prepare(DUE_SQL).all({ remindBefore: now - REMIND_AFTER_S, expireAfter: now - EXPIRE_AFTER_S });
   out.due = rows.length;
   const claim = db.prepare('UPDATE orders SET finish_reminder_sent_at = ? WHERE id = ? AND finish_reminder_sent_at IS NULL AND status = \'pending\'');
+  const skip = (row, reason) => { out.counts[reason] += 1; out.skipped.push({ orderId: row.id, reason }); };
 
   for (const row of rows) {
-    if (out.items.length >= max) { out.counts.overCap += 1; out.skipped.push({ orderId: row.id, reason: 'overCap' }); continue; }
+    if (out.items.length >= max) { skip(row, 'overCap'); continue; }
     const restart = restartFor(row, now);
     const item = { orderId: row.id, productId: row.product_id, serverId: row.server_specific ? row.server_id : null, kind: row.paypal_subscription_id ? 'subscription' : 'one_time', status: 'would_send' };
+    if (dryRun) { out.items.push(item); continue; }
+    const state = await checkPayPal(row);
+    if (state !== 'unapproved') { skip(row, state === 'unknown' ? 'unknown' : 'inProgress'); continue; }
+    const email = String(row.email).trim();
+    if (!mailSlot(email, now)) { skip(row, 'budget'); continue; }
     out.items.push(item);
-    if (dryRun) continue;
     if (!claim.run(now, row.id).changes) {
       out.items.pop();
-      out.counts.alreadySent += 1;
-      out.skipped.push({ orderId: row.id, reason: 'alreadySent' });
+      skip(row, 'alreadySent');
       continue;
     }
     let result;
     try {
       result = await sendMail({
-        to: String(row.email).trim(),
+        to: email,
         displayName: playerName(row),
         productTitle: row.product_title,
         serverLabel: row.server_specific && row.server_id ? (SERVER_LABELS[row.server_id] || String(row.server_id).toUpperCase()) : null,
@@ -168,8 +204,9 @@ async function runFinishReminders({ db, now = nowS(), send, dryRun = false, max 
     else { item.status = 'failed'; out.failed += 1; }
   }
   if (!dryRun && (out.due || out.sent || out.failed)) {
-    const line = `[checkouts] finish-purchase emails: ${out.due} due, ${out.sent} sent, ${out.failed} failed; skipped ${out.counts.alreadySent} already sent, ${out.counts.overCap} over the cap of ${max}`;
-    if (out.failed || out.counts.overCap) console.error(line);
+    const c = out.counts;
+    const line = `[checkouts] finish-purchase emails: ${out.due} due, ${out.sent} sent, ${out.failed} failed; skipped ${c.alreadySent} already sent, ${c.inProgress} in progress at PayPal, ${c.unknown} not read, ${c.budget} over the mail budget, ${c.overCap} over the cap of ${max}`;
+    if (out.failed || c.overCap || c.unknown) console.error(line);
     else console.log(line);
   }
   return out;
@@ -199,6 +236,6 @@ function scheduleCheckoutJobs() {
 function nowS() { return Math.floor(Date.now() / 1000); }
 
 module.exports = {
-  expireAbandonedCheckouts, runFinishReminders, scheduleCheckoutJobs, restartFor, playerName, remindersOff,
+  expireAbandonedCheckouts, runFinishReminders, scheduleCheckoutJobs, restartFor, playerName, remindersOff, paypalState,
   REMIND_AFTER_S, EXPIRE_AFTER_S, RUN_EVERY_MS, MAX_PER_RUN
 };

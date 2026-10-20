@@ -925,6 +925,16 @@ router.get('/api/shop/paypal/return', async (req, res) => {
       fulfillOrder(orderId, cap);
       return res.redirect(BASE_URL + '/shop?success=1&order=' + orderId);
     }
+    if (cap.status === 'PENDING' && cap.captureId) {
+      // The capture exists but the money has not cleared (a review hold; the order
+      // asks for immediate funding, so not an eCheck). PAYMENT.CAPTURE.COMPLETED
+      // fulfils it later, by this id. Recording the id now keeps the checkout jobs
+      // (tools/checkouts.js) from emailing "nothing was charged" or expiring the
+      // row meanwhile, and the buyer is told it is being confirmed, not cancelled.
+      db.prepare('UPDATE orders SET paypal_capture_id = ? WHERE id = ? AND status = \'pending\' AND paypal_capture_id IS NULL').run(cap.captureId, orderId);
+      console.log(`[paypal] order #${orderId}: capture ${cap.captureId} is pending at PayPal; waiting for the capture webhook`);
+      return res.redirect(BASE_URL + '/shop?processing=1&order=' + orderId);
+    }
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   } catch (err) {
     console.error('PayPal capture (return) error:', err.message);
@@ -1324,7 +1334,7 @@ router.get('/api/shop/admin/products', requireAdmin, (req, res) => {
 router.get('/api/shop/admin/orders', requireAdmin, (req, res) => {
   const orders = db.prepare(`
     SELECT o.id, o.status, o.amount_cents, o.created_at, o.completed_at, o.test_mode,
-           o.stripe_session_id, o.stripe_subscription_id,
+           o.stripe_session_id, o.stripe_subscription_id, o.cancelled_reason,
            o.custom_fields_json, o.custom_file_path,
            o.steam_id, u.persona, u.avatar_url, u.bi_uid,
            u.platform, u.gamertag, u.bm_player_id,

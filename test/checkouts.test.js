@@ -27,6 +27,8 @@ console.log = () => {};
 const db = require('../db');
 Object.assign(console, quiet);
 const jobs = require('../tools/checkouts');
+const webAuth = require('../webAuth');
+const paypal = require('../paypal');
 const { finishCheckoutEmail } = require('../invoiceMail');
 
 test.after(() => {
@@ -68,10 +70,14 @@ function fakeSender(reply = async () => ({ ok: true })) {
   const sent = [];
   return { sent, send: async (payload) => { sent.push(payload); return reply(payload, sent.length); } };
 }
+// A run with PayPal saying "never approved" and an open mail budget, unless a test
+// says otherwise, so the tests above the PayPal and budget ones stay about the rows.
 async function run(opts) {
   const log = console.log; const err = console.error;
   console.log = () => {}; console.error = () => {};
-  try { return await jobs.runFinishReminders({ db, now: NOW, ...opts }); } finally { console.log = log; console.error = err; }
+  try {
+    return await jobs.runFinishReminders({ db, now: NOW, checkPayPal: async () => 'unapproved', mailSlot: () => true, ...opts });
+  } finally { console.log = log; console.error = err; }
 }
 function expire(opts) {
   const log = console.log;
@@ -249,6 +255,74 @@ test('a thrown sender counts as failed and never throws out of the run', async (
   const out = await run({ send: async () => { throw new Error('boom'); } });
   assert.equal(out.failed, 1);
   assert.equal(row(a).finish_reminder_sent_at, NOW);
+});
+
+test('PayPal is asked first: a checkout approved or paid there, or one PayPal could not be asked about, gets no email and stays unclaimed for the next run', async () => {
+  const p = product({ title: 'Supporter' });
+  const unapproved = order(user({ email: 'u1@example.com' }), p, { ageS: 2 * HOUR, orderId: 'PO-U' });
+  const approved = order(user({ email: 'u2@example.com' }), p, { ageS: 2 * HOUR, orderId: 'PO-AP' });
+  const unknown = order(user({ email: 'u3@example.com' }), p, { ageS: 2 * HOUR, orderId: 'PO-UN' });
+  const states = { 'PO-U': 'unapproved', 'PO-AP': 'in_progress', 'PO-UN': 'unknown' };
+  const sender = fakeSender();
+  const out = await run({ send: sender.send, checkPayPal: async (row) => states[row.paypal_order_id] });
+  assert.equal(out.due, 3);
+  assert.deepEqual(out.items.map((i) => i.orderId), [unapproved]);
+  assert.equal(out.counts.inProgress, 1);
+  assert.equal(out.counts.unknown, 1);
+  assert.equal(row(approved).finish_reminder_sent_at, null);
+  assert.equal(row(unknown).finish_reminder_sent_at, null);
+  // Next run, PayPal now answers "never approved" for the one it could not read: it goes.
+  const next = await run({ send: sender.send, now: NOW + 15 * 60, checkPayPal: async (r) => (r.paypal_order_id === 'PO-AP' ? 'in_progress' : 'unapproved') });
+  assert.deepEqual(next.items.map((i) => i.orderId), [unknown]);
+  assert.equal(row(approved).finish_reminder_sent_at, null, 'still in progress at PayPal: still no email');
+  // The rows the job hands PayPal carry the ids it needs: the one-time order id was
+  // missing from the query once, and every one-time email was skipped for it.
+  assert.equal(sender.sent.length, 2);
+  // Tidy up: the approved order stays due by the rows alone, which the budget test
+  // below must not see.
+  db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(approved);
+});
+
+test('the PayPal state check: an unapproved order or an APPROVAL_PENDING subscription may be emailed; anything else is in progress; a failed call is unknown', async () => {
+  const orig = { getOrder: paypal.getOrder, getSubscription: paypal.getSubscription };
+  try {
+    const answers = {};
+    paypal.getOrder = async (test, id) => { assert.equal(test, false); if (answers[id] instanceof Error) throw answers[id]; return { id, status: answers[id] }; };
+    paypal.getSubscription = async (test, id) => { assert.equal(test, false); if (answers[id] instanceof Error) throw answers[id]; return { id, status: answers[id] }; };
+    const o = (id) => ({ id: 1, paypal_order_id: id, paypal_subscription_id: null });
+    const s = (id) => ({ id: 2, paypal_order_id: null, paypal_subscription_id: id });
+    Object.assign(answers, { A: 'CREATED', B: 'PAYER_ACTION_REQUIRED', C: 'SAVED', D: 'APPROVED', E: 'COMPLETED', F: 'VOIDED', G: new Error('paypal 500'),
+      S1: 'APPROVAL_PENDING', S2: 'APPROVED', S3: 'ACTIVE', S4: 'CANCELLED', S5: new Error('timeout') });
+    const err = console.error; console.error = () => {};
+    try {
+      for (const id of ['A', 'B', 'C']) assert.equal(await jobs.paypalState(o(id)), 'unapproved', id);
+      for (const id of ['D', 'E', 'F']) assert.equal(await jobs.paypalState(o(id)), 'in_progress', id);
+      assert.equal(await jobs.paypalState(o('G')), 'unknown');
+      assert.equal(await jobs.paypalState(s('S1')), 'unapproved');
+      for (const id of ['S2', 'S3', 'S4']) assert.equal(await jobs.paypalState(s(id)), 'in_progress', id);
+      assert.equal(await jobs.paypalState(s('S5')), 'unknown');
+    } finally { console.error = err; }
+  } finally {
+    Object.assign(paypal, orig);
+  }
+});
+
+test('the mail budget: two due orders on one address in one run send one; the other waits for the next run and is never double-claimed', async () => {
+  webAuth._test.resetMailBudget();
+  const u = user({ email: 'budget@example.com' });
+  const a = order(u, product({ title: 'Supporter' }), { ageS: 3 * HOUR, orderId: 'PO-B1' });
+  const b = order(u, product({ title: 'Red Armband' }), { ageS: 2 * HOUR, orderId: 'PO-B2' });
+  const sender = fakeSender();
+  const first = await run({ send: sender.send, mailSlot: webAuth.takeMailSlot });
+  assert.deepEqual(first.items.map((i) => i.orderId), [a]);
+  assert.equal(first.counts.budget, 1);
+  assert.equal(row(b).finish_reminder_sent_at, null);
+  const second = await run({ send: sender.send, now: NOW + 15 * 60, mailSlot: webAuth.takeMailSlot });
+  assert.deepEqual(second.items.map((i) => i.orderId), [b]);
+  assert.equal(sender.sent.length, 2);
+  assert.equal(row(a).finish_reminder_sent_at, NOW);
+  assert.equal(row(b).finish_reminder_sent_at, NOW + 15 * 60);
+  webAuth._test.resetMailBudget();
 });
 
 test('the switch: FINISH_REMINDERS=off, 0 or false turns the email off; anything else leaves it on', () => {

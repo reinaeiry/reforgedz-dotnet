@@ -1942,7 +1942,8 @@ async function checkAlerts() {
     // The agreement is approved at PayPal but the activation webhook has not
     // landed yet. Usually seconds; poll the order before giving up on it.
     alertSuccess.style.display = 'block';
-    alertSuccess.textContent = 'PayPal is confirming your subscription. This usually takes a few seconds.';
+    // Also a one-time payment whose capture is pending at PayPal (the return route).
+    alertSuccess.textContent = 'PayPal is confirming your payment. This usually takes a few seconds.';
     window.history.replaceState({}, '', '/shop');
     for (let i = 0; i < 10 && orderId; i++) {
       await new Promise(r => setTimeout(r, 3000));
@@ -1959,7 +1960,7 @@ async function checkAlerts() {
         return;
       }
     }
-    alertSuccess.innerHTML = 'PayPal is still confirming your subscription. It appears on your <a href="/account">account page</a> as soon as the first payment clears; if it is not there within an hour, open a ticket in Discord.';
+    alertSuccess.innerHTML = 'PayPal is still confirming your payment. It appears on your <a href="/account">account page</a> as soon as it clears; if it is not there within an hour, open a ticket in Discord.';
     return;
   }
   if (params.get('success') === '1') {
