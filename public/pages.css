@@ -1,0 +1,411 @@
+/* ============================================
+   ReforgedZ.net: document pages
+   (/official, /join, /privacy, /terms, /changes)
+   Loaded after style.css; uses its tokens only.
+   ============================================ */
+
+/* Small text needs 4.5:1. The brand red (#cc1f1f) is 3.4:1 on these surfaces and the
+   ghost grey (#777) 4.2:1, so small accent and small grey text on these pages use lighter
+   tints: measured 5.05:1 and 5.84:1 on --bg-dark, 4.75:1 and 5.49:1 on --surface. */
+.doc {
+  --accent-text: #e4524e;
+  --text-ghost: #8f8f8f;
+  /* Metric-matched fallbacks: until Oswald and Inter arrive from Google Fonts, Arial is
+     drawn at the width the web fonts will take, so the first paint does not move when
+     they swap in. Measured in Chromium on 2026-10-20: Oswald 700 at 64 px is 78.6% of
+     Arial's width (83.1% at 16.8 px with letter-spacing), Inter 400 is 106.4%. */
+  --display: 'Oswald', 'Oswald Fallback', sans-serif;
+  --body: 'Inter', 'Inter Fallback', sans-serif;
+}
+@font-face {
+  font-family: 'Oswald Fallback';
+  src: local('Arial'), local('Helvetica'), local('Roboto');
+  size-adjust: 78.5%;   /* tuned to the h1, the only display text that wraps */
+}
+@font-face {
+  font-family: 'Inter Fallback';
+  src: local('Arial'), local('Helvetica'), local('Roboto');
+  size-adjust: 106.4%;
+}
+
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 16px;
+  z-index: 200;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 6px;
+}
+.skip-link:focus { top: 12px; outline: 2px solid #fff; outline-offset: 2px; }
+
+/* A visible ring on every keyboard focus, on these pages only. */
+.doc a:focus-visible,
+.doc button:focus-visible,
+.doc [tabindex]:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.doc main:focus { outline: none; }
+
+html { scroll-padding-top: 84px; }
+
+.doc-page {
+  padding-top: 140px;
+  padding-bottom: 96px;
+  min-height: 100vh;
+  background: var(--bg-dark);
+}
+
+.doc-header { margin-bottom: 48px; max-width: 820px; }
+
+.doc-header h1 {
+  font-family: var(--display);
+  font-size: clamp(2.2rem, 6vw, 4.2rem);
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #fff;
+  line-height: 1;
+  margin-bottom: 18px;
+  text-wrap: balance;
+}
+
+.doc-intro {
+  font-size: 1rem;
+  color: var(--text-dim);
+  max-width: 600px;      /* about 68 characters; in px, not ch, so the box does not change with the font */
+  line-height: 1.8;
+  text-wrap: pretty;
+}
+.doc-intro + .doc-intro { margin-top: 12px; }
+
+.doc-body { max-width: 820px; }
+.doc-body.wide { max-width: 1100px; }
+
+.doc-section {
+  border-top: 1px solid var(--border);
+  padding: 36px 0;
+}
+.doc-section:last-child { border-bottom: 1px solid var(--border); }
+
+.doc-section h2 {
+  font-family: var(--display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #fff;
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.doc .eyebrow { color: var(--accent-text); }
+
+.doc-section h2 .num {
+  color: var(--accent-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  min-width: 22px;
+}
+
+.doc-section h3 {
+  font-family: var(--display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text);
+  margin: 22px 0 8px;
+}
+
+.doc-section p,
+.doc-section li {
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  line-height: 1.85;
+  text-wrap: pretty;
+}
+.doc-section p { margin: 0 0 12px; }
+.doc-section p:last-child { margin-bottom: 0; }
+
+.doc-section ul,
+.doc-section ol { margin: 0 0 12px 22px; }
+.doc-section li { margin-bottom: 6px; }
+
+.doc-section strong { color: var(--text); font-weight: 600; }
+
+.doc a.inline {
+  color: #fff;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.2s;
+}
+.doc a.inline:hover { text-decoration-color: #fff; }
+
+/* Numbered steps (join guide) */
+.doc-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: step;
+}
+.doc-steps > li {
+  position: relative;
+  padding: 0 0 26px 56px;
+  margin: 0;
+  counter-increment: step;
+}
+.doc-steps > li:last-child { padding-bottom: 0; }
+.doc-steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent-text);
+}
+.doc-steps h3 { margin: 6px 0 8px; }
+.doc-steps p { margin-bottom: 8px; }
+
+/* Callout */
+.doc-note {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 18px 22px;
+  margin: 18px 0;
+}
+.doc-note p { margin: 0; font-size: 0.875rem; }
+.doc-note p + p { margin-top: 8px; }
+.doc-note.quiet { border-left-color: var(--text-ghost); }
+
+/* Key facts strip */
+.doc-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 0 0 40px;
+  padding: 0;
+  list-style: none;
+}
+.doc-fact { background: var(--bg-dark); padding: 22px 22px; }
+.doc-fact .fact-num {
+  font-family: var(--display);
+  font-size: clamp(1.15rem, 5vw, 1.6rem);
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;   /* one line in every font, so the strip's height never depends on the swap */
+}
+.doc-fact .fact-label {
+  font-size: 0.72rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-ghost);
+  margin-top: 6px;
+}
+/* One fact per row on phones: a label never wraps, so the strip's height is the same
+   in the fallback font and the web font. */
+@media (max-width: 479px) {
+  .doc-facts { grid-template-columns: 1fr; }
+  .doc-fact { padding: 16px 18px; }
+}
+@media (min-width: 480px) and (max-width: 767px) {
+  .doc-facts { grid-template-columns: 1fr 1fr; }
+}
+
+/* Tables */
+.doc-table-wrap { overflow-x: auto; margin: 6px 0 12px; }
+.doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.doc-table caption {
+  text-align: left;
+  font-size: 0.72rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-ghost);
+  padding: 0 0 10px;
+}
+.doc-table th,
+.doc-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 11px 14px 11px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.doc-table th {
+  font-size: 0.72rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-ghost);
+  font-weight: 500;
+}
+.doc-table td.strong, .doc-table td strong { color: var(--text); font-weight: 600; }
+.doc-table td time { font-variant-numeric: tabular-nums; }
+
+.code {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  white-space: nowrap;
+}
+a.code {
+  display: inline-block;
+  padding: 3px 0;        /* a 24 px tap target (WCAG 2.5.8) without changing the row rhythm */
+  margin: -3px 0;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+a.code:hover { text-decoration-color: #fff; }
+
+/* Phone: stack the rows of tables marked .stack */
+@media (max-width: 640px) {
+  .doc-table.stack thead { display: none; }
+  .doc-table.stack tr {
+    display: block;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .doc-table.stack td {
+    display: flex;
+    gap: 12px;
+    padding: 4px 0;
+    border: none;
+  }
+  .doc-table.stack td::before {
+    content: attr(data-label);
+    flex: 0 0 34%;
+    font-size: 0.7rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-ghost);
+    padding-top: 3px;
+  }
+  .code { white-space: normal; word-break: break-all; }
+}
+
+/* Mod lists reuse .mods-category / .mod-pill from style.css. */
+.doc .mods-category { margin-bottom: 26px; }
+
+/* Changes list. The list arrives by script, so the box starts tall enough that the
+   lines under it (the meta row, the footer) begin below the first screen and do not
+   jump when the entries land. */
+#changesList { min-height: 70vh; }
+.changes-list { list-style: none; margin: 0; padding: 0; }
+.changes-item {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 24px;
+  padding: 26px 0;
+  border-top: 1px solid var(--border);
+}
+.changes-item:last-child { border-bottom: 1px solid var(--border); }
+.changes-date {
+  font-family: var(--display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--accent-text);
+  font-variant-numeric: tabular-nums;
+}
+.changes-title {
+  font-family: var(--display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #fff;
+  margin: 0 0 6px;
+}
+.changes-status {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-hover);
+  border-radius: 4px;
+  font-family: var(--body);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-ghost);
+}
+.changes-line { font-size: 0.9rem; color: var(--text-dim); line-height: 1.8; margin: 0; }
+.changes-proof { font-size: 0.8rem; color: var(--text-ghost); margin: 8px 0 0; line-height: 1.7; }
+.changes-empty {
+  padding: 32px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-ghost);
+  font-size: 0.9rem;
+}
+@media (max-width: 640px) {
+  .changes-item { grid-template-columns: 1fr; gap: 6px; }
+}
+
+/* Meta line at the foot of a document */
+.doc-meta {
+  margin-top: 40px;
+  padding: 20px 0;
+  max-width: 820px;
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--text-ghost);
+}
+.doc-meta span { color: var(--text-dim); font-weight: 500; }
+
+/* Draft banner for pages the owner has not approved yet */
+.doc-draft {
+  display: inline-block;
+  margin-bottom: 18px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-hover);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* Page footer links grow on these pages, and each is a 24 px-tall target */
+.doc .footer-links { flex-wrap: wrap; justify-content: center; gap: 8px 24px; }
+.doc .footer-links a { display: inline-block; padding: 4px 0; }
+
+@media (max-width: 768px) {
+  .doc-page { padding-top: 110px; padding-bottom: 64px; }
+  .doc-header { margin-bottom: 36px; }
+  .doc-section { padding: 28px 0; }
+  .doc-steps > li { padding-left: 50px; }
+}

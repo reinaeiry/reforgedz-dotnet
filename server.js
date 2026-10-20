@@ -1214,6 +1214,14 @@ app.get('/monetization', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'monetization.html'));
 });
 
+// The document pages (second look, 2026-10): what is officially ours, how to join,
+// what changed, and the two policies. Plain HTML; /changes reads /changes.json.
+for (const page of ['official', 'join', 'changes', 'privacy', 'terms']) {
+  app.get('/' + page, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', page + '.html'));
+  });
+}
+
 app.get('/shop', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'shop.html'));
 });
