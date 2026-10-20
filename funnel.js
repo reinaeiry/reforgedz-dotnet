@@ -27,14 +27,18 @@ const CLIENT_STEPS = [
   'signin_shown',
   'id_prompt_shown',
   'discord_prompt_shown',
+  'paypal_redirected',          // the page is leaving for PayPal with the approval link it was given
   'checkout_cancelled_seen'
 ];
 
-// Every step, in the order a buyer meets them, for the admin view.
+// Every step, in the order a buyer meets them, for the admin view. checkout_started
+// is PayPal handing back a link; paypal_redirected is the buyer's browser leaving
+// for it, so redirects against payment_completed is what is lost at PayPal itself
+// (decision A5, 2026-10-20).
 const STEPS = [
   'buy_clicked', 'signin_shown', 'account_created', 'signed_in', 'id_prompt_shown',
   'id_saved_find', 'id_saved_paste', 'discord_prompt_shown', 'checkout_started',
-  'checkout_blocked_duplicate', 'checkout_cancelled_seen', 'payment_completed'
+  'paypal_redirected', 'checkout_blocked_duplicate', 'checkout_cancelled_seen', 'payment_completed'
 ];
 
 const DAY_S = 86400;

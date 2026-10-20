@@ -867,7 +867,21 @@
             <label>In-game cosmetic key (optional)</label>
             <input type="text" id="formCosmeticKey" placeholder="armband.stripes-red" maxlength="64" autocomplete="off" spellcheck="false">
             <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
-              Unlocks this cosmetic in game for the buyer. It must match the key in the mod exactly. Leave empty for anything that is not an in-game cosmetic.
+              Unlocks this cosmetic in game for the buyer. It must match the key in the mod exactly. Leave empty for anything that is not an in-game cosmetic. Two products may share one key: a buyer of either gets the same cosmetic once.
+            </div>
+          </div>
+          <div class="admin-field">
+            <label>On sale from (UTC, optional)</label>
+            <input type="text" id="formAvailableFrom" placeholder="2026-12-17 00:00" maxlength="16" autocomplete="off" spellcheck="false">
+            <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
+              YYYY-MM-DD HH:MM in UTC. Before this the item is not shown and cannot be bought. Empty means from now.
+            </div>
+          </div>
+          <div class="admin-field">
+            <label>On sale until (UTC, optional)</label>
+            <input type="text" id="formAvailableUntil" placeholder="2027-01-04 23:59" maxlength="16" autocomplete="off" spellcheck="false">
+            <div style="font-size:0.7rem;color:var(--text-ghost);margin-top:4px;line-height:1.5">
+              YYYY-MM-DD HH:MM in UTC. After this the item is not shown and cannot be bought; anyone who bought it keeps it. Empty means no end.
             </div>
           </div>
           <div class="admin-field" id="formDiscordRoleRow" style="display:none">
@@ -1045,6 +1059,7 @@
           <div class="detail-amount-bounds" id="detailAmountBounds"></div>
         </div>
         <p class="buy-terms" data-buy-terms></p>
+        <p class="buy-terms" id="detailSubNote" hidden></p>
         <div class="detail-footer">
           <span class="detail-price" id="detailPrice"></span>
           <button class="shop-buy-btn" id="detailBuy">Purchase</button>

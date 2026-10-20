@@ -29,6 +29,17 @@ function buyTermsHtml() {
 }
 document.querySelectorAll('[data-buy-terms]').forEach((el) => { el.textContent = BUY_TERMS_TEXT; });
 
+// A subscription is paid from a PayPal account (paypal.js subscriptionRequest), so
+// a buyer is told before one starts (decision A2, 2026-10-20). Shown on subscription
+// products only: one-time purchases take a card without an account.
+const SUB_PAYPAL_TEXT = 'Subscriptions are paid through a PayPal account.';
+function isSubscriptionProduct(p) {
+  return !!p && (p.type === 'subscription' || p.type === 'recurring_custom');
+}
+function subPaypalHtml(p) {
+  return isSubscriptionProduct(p) ? `<p class="buy-terms">${SUB_PAYPAL_TEXT}</p>` : '';
+}
+
 // ---- DOM refs (static elements only — re-queried as needed for dynamic ones) ----
 const navAuth = document.getElementById('navAuth');
 const testBanner = document.getElementById('testBanner');
@@ -61,6 +72,32 @@ const formPriceLabel = document.getElementById('formPriceLabel');
 const formAssignDiscordRole = document.getElementById('formAssignDiscordRole');
 const formDiscordRoleId = document.getElementById('formDiscordRoleId');
 const formCosmeticKey = document.getElementById('formCosmeticKey');
+const formAvailableFrom = document.getElementById('formAvailableFrom');
+const formAvailableUntil = document.getElementById('formAvailableUntil');
+
+// The sale window fields (B7): "YYYY-MM-DD HH:MM" in UTC, sent as unix seconds;
+// empty clears. Returns { ok, value } where value is null for empty.
+function parseUtcField(text) {
+  const s = String(text || '').trim();
+  if (!s) return { ok: true, value: null };
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/.exec(s);
+  if (!m) return { ok: false, value: null };
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3], m[4] ? +m[4] : 0, m[5] ? +m[5] : 0);
+  return Number.isFinite(t) ? { ok: true, value: Math.floor(t / 1000) } : { ok: false, value: null };
+}
+function formatUtcField(unix) {
+  if (unix == null) return '';
+  const d = new Date(Number(unix) * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+// Whether a product is on sale now, for the staff badge (the server decides for buyers).
+function onSaleNow(p) {
+  const now = Math.floor(Date.now() / 1000);
+  if (p.available_from != null && now < Number(p.available_from)) return false;
+  if (p.available_until != null && now > Number(p.available_until)) return false;
+  return true;
+}
 const formDiscordRoleRow = document.getElementById('formDiscordRoleRow');
 const formEditId = document.getElementById('formEditId');
 
@@ -678,15 +715,19 @@ function renderProducts(products) {
 
     const typeLabel = formatTypeLabel(p.type, p.interval_days);
     const typeClass = p.type === 'one_time' ? 'one_time' : 'subscription';
+    // Staff see a product outside its sale window (the admin list carries them all)
+    // with a note; buyers never get it from the API.
+    const offSaleHtml = isAdmin && !onSaleNow(p) ? '<span class="stock-badge">Not on sale now</span>' : '';
 
     return `
       <div class="shop-card${inactiveClass}${soldOutClass}" data-id="${p.id}" onclick="openProductDetail(${p.id})">
         ${imgHtml}
         <div class="shop-card-body">
-          <div class="shop-card-type ${typeClass}">${escHtml(typeLabel)}${stockBadgeHtml(p)}</div>
+          <div class="shop-card-type ${typeClass}">${escHtml(typeLabel)}${stockBadgeHtml(p)}${offSaleHtml}</div>
           <h3>${escHtml(p.title)}</h3>
           <p>${escHtml(p.description || '')}</p>
           ${buyTermsHtml()}
+          ${subPaypalHtml(p)}
           <div class="shop-card-footer">
             <span class="shop-card-price">${p.custom_price ? escHtml(formatPriceRange(p)) : formatPrice(p.price_cents, p.currency || 'usd', p.type, p.interval_days)}</span>
             ${buyBtnHtml}
@@ -884,6 +925,9 @@ function openProductDetail(productId) {
 
   const detailType = document.getElementById('detailType');
   detailType.innerHTML = escHtml(formatTypeLabel(product.type, product.interval_days)) + stockBadgeHtml(product);
+  const subNote = document.getElementById('detailSubNote');
+  subNote.textContent = SUB_PAYPAL_TEXT;
+  subNote.hidden = !isSubscriptionProduct(product);
   document.getElementById('detailTitle').textContent = product.title;
   document.getElementById('detailDesc').textContent = product.description || '';
   renderServerPicker(product);
@@ -1249,7 +1293,10 @@ document.getElementById('customFlagSubmit').addEventListener('click', async () =
     const res = await fetch('/api/shop/checkout-custom-flag', { method: 'POST', body: form });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-    if (data.url) window.location.href = data.url;
+    if (data.url) {
+      funnelStep('paypal_redirected');
+      window.location.href = data.url;
+    }
   } catch (e) {
     error.textContent = e.message || 'Checkout failed';
     submitBtn.disabled = false;
@@ -1383,6 +1430,9 @@ async function proceedCheckout(productId, serverId, customAmountCents, opts = {}
       })
     });
     if (data.url) {
+      // Counted as the page leaves (fetch keepalive outlives the navigation), so
+      // the daily funnel shows redirects against payments (A5).
+      funnelStep('paypal_redirected');
       window.location.href = data.url;
     }
   } catch (e) {
@@ -1558,6 +1608,16 @@ productForm.addEventListener('submit', async (e) => {
     cosmeticKey: formCosmeticKey ? formCosmeticKey.value.trim().toLowerCase() : undefined
   };
 
+  // The sale window: both fields always sent, so clearing one clears it.
+  const fromField = parseUtcField(formAvailableFrom ? formAvailableFrom.value : '');
+  const untilField = parseUtcField(formAvailableUntil ? formAvailableUntil.value : '');
+  if (!fromField.ok || !untilField.ok) return alert('Sale dates must be YYYY-MM-DD HH:MM in UTC, or empty.');
+  if (fromField.value != null && untilField.value != null && untilField.value < fromField.value) {
+    return alert('The sale must end after it starts.');
+  }
+  body.availableFrom = fromField.value;
+  body.availableUntil = untilField.value;
+
   try {
     if (editingProductId) {
       await api(`/api/shop/admin/products/${editingProductId}`, {
@@ -1606,6 +1666,8 @@ function editProduct(id) {
     formPriceMax.value = p.price_max_cents != null ? (p.price_max_cents / 100).toFixed(2) : '';
     formAssignDiscordRole.checked = !!p.discord_role_id;
     if (formCosmeticKey) formCosmeticKey.value = p.cosmetic_key || '';
+    if (formAvailableFrom) formAvailableFrom.value = formatUtcField(p.available_from);
+    if (formAvailableUntil) formAvailableUntil.value = formatUtcField(p.available_until);
     formDiscordRoleId.innerHTML = p.discord_role_id ? `<option value="${escHtml(p.discord_role_id)}" selected>Loading…</option>` : '<option value="">Loading…</option>';
     if (p.discord_role_id) populateDiscordRoleSelect(p.discord_role_id);
     refreshStockLabel();
@@ -1637,6 +1699,8 @@ function clearForm() {
   formPriceMax.value = '';
   formAssignDiscordRole.checked = false;
   if (formCosmeticKey) formCosmeticKey.value = '';
+  if (formAvailableFrom) formAvailableFrom.value = '';
+  if (formAvailableUntil) formAvailableUntil.value = '';
   formDiscordRoleId.innerHTML = '<option value="">Pick a role…</option>';
   refreshStockLabel();
   refreshCustomPriceUi();

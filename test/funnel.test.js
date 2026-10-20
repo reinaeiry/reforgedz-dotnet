@@ -53,7 +53,9 @@ test('the server and page steps are the known steps, with no overlap and no repe
   assert.equal(new Set(all).size, all.length, 'no step is both a server and a page step');
   assert.deepEqual([...all].sort(), [...funnel.STEPS].sort());
   assert.equal(new Set(funnel.STEPS).size, funnel.STEPS.length);
-  assert.deepEqual(funnel.CLIENT_STEPS, ['buy_clicked', 'signin_shown', 'id_prompt_shown', 'discord_prompt_shown', 'checkout_cancelled_seen']);
+  assert.deepEqual(funnel.CLIENT_STEPS, ['buy_clicked', 'signin_shown', 'id_prompt_shown', 'discord_prompt_shown', 'paypal_redirected', 'checkout_cancelled_seen']);
+  // paypal_redirected sits right after checkout_started in the admin order (A5).
+  assert.equal(funnel.STEPS.indexOf('paypal_redirected'), funnel.STEPS.indexOf('checkout_started') + 1);
   for (const s of ['account_created', 'signed_in', 'id_saved_find', 'id_saved_paste', 'checkout_started', 'checkout_blocked_duplicate', 'payment_completed']) {
     assert.ok(funnel.SERVER_STEPS.includes(s), s);
   }

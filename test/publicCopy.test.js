@@ -109,6 +109,38 @@ test('G12: the account page shows the saved choice with the same wording, ticked
   assert.match(accountHtml, /JSON\.stringify\(\{ optIn: wanted \}\)/);
 });
 
+// ---- A2, A5 and B7 (2026-10-20) ----------------------------------------------------
+
+test('A2: subscription products say they are paid through a PayPal account, under the terms line; one-time products do not', () => {
+  const line = 'Subscriptions are paid through a PayPal account.';
+  assert.equal(count(shopJs, line), 1, 'one constant');
+  assert.match(shopJs, /const SUB_PAYPAL_TEXT = 'Subscriptions are paid through a PayPal account\.';/);
+  assert.match(shopJs, /return isSubscriptionProduct\(p\) \? `<p class="buy-terms">\$\{SUB_PAYPAL_TEXT\}<\/p>` : '';/);
+  assert.match(shopJs, /p\.type === 'subscription' \|\| p\.type === 'recurring_custom'/);
+  const card = shopJs.slice(shopJs.indexOf('<div class="shop-card${inactiveClass}'), shopJs.indexOf('${adminHtml}'));
+  const terms = card.indexOf('${buyTermsHtml()}');
+  const sub = card.indexOf('${subPaypalHtml(p)}');
+  const footer = card.indexOf('<div class="shop-card-footer">');
+  assert.ok(terms > 0 && sub > terms && footer > sub, 'card: terms, then the subscription line, then the button');
+  // The product box: a second line right under the terms, shown for subscriptions only.
+  assert.match(shopHtml, /<p class="buy-terms" data-buy-terms><\/p>\s*<p class="buy-terms" id="detailSubNote" hidden><\/p>\s*<div class="detail-footer">/);
+  assert.match(shopJs, /subNote\.hidden = !isSubscriptionProduct\(product\);/);
+});
+
+test('A5: the page counts paypal_redirected right before it leaves for PayPal, in both checkouts', () => {
+  const leaves = [...shopJs.matchAll(/funnelStep\('paypal_redirected'\);\s*(?:\/\/[^\n]*\n\s*)?window\.location\.href = data\.url;/g)];
+  assert.equal(leaves.length, 2, 'the plain checkout and the Custom Flag checkout');
+  assert.equal(count(shopJs, 'window.location.href = data.url;'), 2, 'no other way out to PayPal');
+});
+
+test('B7: the admin form has the two sale-window fields, in UTC, and the shop marks a product off sale for staff only', () => {
+  assert.match(shopHtml, /<input type="text" id="formAvailableFrom" placeholder="2026-12-17 00:00"/);
+  assert.match(shopHtml, /<input type="text" id="formAvailableUntil" placeholder="2027-01-04 23:59"/);
+  assert.equal((shopHtml.match(/YYYY-MM-DD HH:MM in UTC/g) || []).length, 2);
+  assert.match(shopJs, /body\.availableFrom = fromField\.value;\s*body\.availableUntil = untilField\.value;/);
+  assert.match(shopJs, /isAdmin && !onSaleNow\(p\) \? '<span class="stock-badge">Not on sale now<\/span>' : ''/);
+});
+
 test('no checkbox in the served markup is pre-ticked', () => {
   for (const [name, text] of [['shop.html', shopHtml], ['account.html', accountHtml], ['index.html', indexHtml], ['monetization.html', pub('monetization.html')]]) {
     for (const m of text.matchAll(/<input[^>]*type="checkbox"[^>]*>/g)) {

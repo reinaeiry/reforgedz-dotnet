@@ -21,6 +21,7 @@ const funnel = require('../funnel');
 const vatEvidence = require('../vatEvidence');
 const funding = require('../funding');
 const cosmetics = require('../cosmetics');
+const saleWindow = require('../saleWindow');
 const inGameId = require('../inGameId');
 const { windowLimit } = require('../windowLimit');
 const reminders = require('../tools/reminders');
@@ -351,10 +352,14 @@ function requireAdmin(req, res, next) {
 
 // Get active products
 router.get('/api/shop/products', (req, res) => {
+  // Only what is on sale now (saleWindow.js): a product outside its window is not
+  // listed, and checkout refuses it below. Staff see every product through the
+  // admin list instead.
+  const now = Math.floor(Date.now() / 1000);
   const products = db.prepare(`
     SELECT id, title, description, price_cents, currency, type, image_url, images_json, interval_days, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, cosmetic_key, active
-    FROM products WHERE active = 1 ORDER BY created_at DESC
-  `).all();
+    FROM products WHERE active = 1 AND ${saleWindow.onSaleSql('products', '@now')} ORDER BY created_at DESC
+  `).all({ now });
   // Stock depends on who is looking (a buyer's own checkout at PayPal holds no slot
   // against them), so the answer is never shared between viewers.
   const viewer = req.isAuthenticated && req.isAuthenticated() && req.user ? req.user.steam_id : null;
@@ -412,6 +417,11 @@ router.post('/api/shop/checkout', requireAuth, async (req, res) => {
 
   const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId);
   if (!product) return res.status(404).json({ error: 'Product not found' });
+
+  // Outside its sale window a product cannot be bought, however the request got
+  // here (saleWindow.js). Decided from our own data, before anything is created.
+  const notOnSale = saleWindow.refusal(product);
+  if (notOnSale) return res.status(409).json({ code: 'not_on_sale', error: notOnSale });
 
   // Custom Flag needs extra fields + an image upload that this plain-JSON
   // endpoint can't carry — it has its own multipart checkout below.
@@ -638,6 +648,8 @@ router.post('/api/shop/checkout-custom-flag', requireAuth, handleCustomFlagUploa
   if (product.type !== 'custom_flag') {
     return res.status(400).json({ error: 'This product does not accept a Custom Flag checkout.' });
   }
+  const notOnSale = saleWindow.refusal(product);
+  if (notOnSale) return res.status(409).json({ code: 'not_on_sale', error: notOnSale });
 
   const amountCents = product.price_cents;
   // Derive the extension from the file's actual content, not its claimed MIME —
@@ -933,12 +945,16 @@ router.get('/api/shop/paypal/return-sub', async (req, res) => {
   if (!order || !order.paypal_subscription_id) {
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   }
-  // Already-fulfilled order: just bounce to success. Anything not pending is
-  // treated as terminal — don't re-touch it.
+  // Already-fulfilled order: just bounce to success. A cancelled row is looked up
+  // like a pending one: the buyer may have backed out at PayPal and then approved
+  // after all, or approved an expired checkout (tools/checkouts.js), and in both
+  // cases the ACTIVATED webhook fulfils through fulfillOrder, which accepts a
+  // cancelled row. Telling that buyer "no charge was made" would be wrong, so the
+  // page asks PayPal what happened. Refunded rows stay terminal.
   if (order.status === 'completed') {
     return res.redirect(BASE_URL + '/shop?success=1&order=' + orderId);
   }
-  if (order.status !== 'pending') {
+  if (order.status !== 'pending' && order.status !== 'cancelled') {
     return res.redirect(BASE_URL + '/shop?cancelled=1');
   }
   const useTest = !!order.test_mode;
@@ -1427,7 +1443,7 @@ const COSMETIC_KEY_RULE = 'The in-game cosmetic key may use lowercase letters, d
 
 // Create product
 router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
-  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId, cosmeticKey } = req.body;
+  const { title, description, priceCents, type, imageUrl, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId, cosmeticKey, availableFrom, availableUntil } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'Title is required' });
@@ -1459,11 +1475,15 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
   const discordRoleIdVal = normalizeDiscordRoleId(discordRoleId);
   const cosmeticCheck = cosmetics.normalizeCosmeticKey(cosmeticKey);
   if (!cosmeticCheck.ok) return res.status(400).json({ error: COSMETIC_KEY_RULE });
+  // The sale window (B7): unix seconds or empty; the key may be shared by several
+  // products (B6), so nothing here checks it for uniqueness.
+  const win = saleWindow.normalizeWindow({ availableFrom, availableUntil });
+  if (!win.ok) return res.status(400).json({ error: win.error });
 
   const result = db.prepare(`
-    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, cosmetic_key)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, stockOverridesVal === undefined ? null : stockOverridesVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max, discordRoleIdVal || null, cosmeticCheck.value);
+    INSERT INTO products (title, description, price_cents, type, image_url, interval_days, images_json, stock_limit, stock_limit_overrides, server_specific, grants_priority_queue, custom_price, price_min_cents, price_max_cents, discord_role_id, cosmetic_key, available_from, available_until)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title.trim(), (description || '').trim(), priceCents, type, imageUrl || null, intervalDaysVal, imagesJson, stockLimitVal === undefined ? null : stockLimitVal, stockOverridesVal === undefined ? null : stockOverridesVal, serverSpecificVal, grantsPqVal, customPriceVal, customCheck.min, customCheck.max, discordRoleIdVal || null, cosmeticCheck.value, win.from ?? null, win.until ?? null);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
   res.json(attachStock(attachImages(product)));
@@ -1471,9 +1491,21 @@ router.post('/api/shop/admin/products', requireAdmin, (req, res) => {
 
 // Update product
 router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
-  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId, cosmeticKey } = req.body;
+  const { title, description, priceCents, imageUrl, active, type, intervalDays, imagesExtra, stockLimit, stockLimitOverrides, serverSpecific, grantsPriorityQueue, customPrice, priceMinCents, priceMaxCents, discordRoleId, cosmeticKey, availableFrom, availableUntil } = req.body;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
+
+  // The sale window (B7): a field left out keeps its value; '' or null clears it.
+  // Checked against the other end as it will be after this update.
+  const win = saleWindow.normalizeWindow({ availableFrom, availableUntil });
+  if (!win.ok) return res.status(400).json({ error: win.error });
+  const fromWasSent = win.from !== undefined;
+  const untilWasSent = win.until !== undefined;
+  const effectiveFrom = fromWasSent ? win.from : product.available_from;
+  const effectiveUntil = untilWasSent ? win.until : product.available_until;
+  if (effectiveFrom != null && effectiveUntil != null && effectiveUntil < effectiveFrom) {
+    return res.status(400).json({ error: 'The sale must end after it starts.' });
+  }
 
   if (type !== undefined && !VALID_PRODUCT_TYPES.includes(type)) {
     return res.status(400).json({ error: 'Invalid type' });
@@ -1555,6 +1587,8 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
       price_max_cents = CASE WHEN ? THEN ? ELSE price_max_cents END,
       discord_role_id = CASE WHEN ? THEN ? ELSE discord_role_id END,
       cosmetic_key = CASE WHEN ? THEN ? ELSE cosmetic_key END,
+      available_from = CASE WHEN ? THEN ? ELSE available_from END,
+      available_until = CASE WHEN ? THEN ? ELSE available_until END,
       active = COALESCE(?, active),
       updated_at = unixepoch()
     WHERE id = ?
@@ -1585,6 +1619,10 @@ router.put('/api/shop/admin/products/:id', requireAdmin, (req, res) => {
     discordRoleIdVal,
     cosmeticKeyWasSent ? 1 : 0,
     cosmeticCheck.value,
+    fromWasSent ? 1 : 0,
+    win.from ?? null,
+    untilWasSent ? 1 : 0,
+    win.until ?? null,
     active !== undefined ? (active ? 1 : 0) : null,
     req.params.id
   );
