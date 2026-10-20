@@ -112,35 +112,49 @@ async function ppFetch(testMode, path, { method = 'GET', body, headers } = {}, a
 
 // ─── Orders v2 ──────────────────────────────────────────────────────────────
 
-// Create a one-time CAPTURE order. amountCents in the smallest currency unit.
-// Returns { id, approveUrl }.
-async function createOrder(testMode, { amountCents, currency = 'USD', description, customId, brandName, returnUrl, cancelUrl }) {
+// The request body of a one-time CAPTURE order, kept apart from the call so the
+// tests can read it (test/paypalRequests.test.js).
+//
+// landing_page GUEST_CHECKOUT shows PayPal's card form first, with "Log in" as the
+// alternative, instead of the login page a buyer without a PayPal account closed
+// (25 of 143 checkouts in the 60 days to 2026-10-19 were lost at PayPal itself;
+// decision A1, 2026-10-20). The value is from the Orders v2 schema (version 2.36,
+// read 2026-10-20): payment_source.paypal.experience_context.landing_page takes
+// LOGIN, GUEST_CHECKOUT, NO_PREFERENCE or BILLING, default NO_PREFERENCE; the older
+// application_context.landing_page (LOGIN, BILLING, NO_PREFERENCE) is marked
+// deprecated since 2.9 in favour of this one. Subscriptions keep their own
+// application_context (subscriptionRequest) and are not changed.
+function orderRequest({ amountCents, currency = 'USD', description, customId, brandName, returnUrl, cancelUrl }) {
   const value = (amountCents / 100).toFixed(2);
-  const order = await ppFetch(testMode, '/v2/checkout/orders', {
-    method: 'POST',
-    body: {
-      intent: 'CAPTURE',
-      purchase_units: [{
-        custom_id: customId ? String(customId) : undefined,
-        description: description ? String(description).slice(0, 127) : undefined,
-        amount: {
-          currency_code: String(currency).toUpperCase(),
-          value
-        }
-      }],
-      payment_source: {
-        paypal: {
-          experience_context: {
-            brand_name: brandName || 'ReforgedZ',
-            user_action: 'PAY_NOW',
-            shipping_preference: 'NO_SHIPPING',
-            return_url: returnUrl,
-            cancel_url: cancelUrl
-          }
+  return {
+    intent: 'CAPTURE',
+    purchase_units: [{
+      custom_id: customId ? String(customId) : undefined,
+      description: description ? String(description).slice(0, 127) : undefined,
+      amount: {
+        currency_code: String(currency).toUpperCase(),
+        value
+      }
+    }],
+    payment_source: {
+      paypal: {
+        experience_context: {
+          brand_name: brandName || 'ReforgedZ',
+          landing_page: 'GUEST_CHECKOUT',
+          user_action: 'PAY_NOW',
+          shipping_preference: 'NO_SHIPPING',
+          return_url: returnUrl,
+          cancel_url: cancelUrl
         }
       }
     }
-  });
+  };
+}
+
+// Create a one-time CAPTURE order. amountCents in the smallest currency unit.
+// Returns { id, approveUrl }.
+async function createOrder(testMode, opts) {
+  const order = await ppFetch(testMode, '/v2/checkout/orders', { method: 'POST', body: orderRequest(opts) });
   const approve = (order.links || []).find((l) => l.rel === 'payer-action' || l.rel === 'approve');
   return { id: order.id, approveUrl: approve ? approve.href : null, raw: order };
 }
@@ -563,10 +577,11 @@ async function createPlan(testMode, {
 // Create a Subscription against an existing plan. Returns { id, approveUrl }.
 // `customId` is echoed back on every billing event so we can map cycles to
 // our orders.
-async function createSubscription(testMode, {
-  planId, customId, brandName = 'ReforgedZ', returnUrl, cancelUrl
-}) {
-  const body = {
+// The request body of a subscription, kept apart from the call so the tests can read
+// it. A subscription is paid from a PayPal account (payer_selected PAYPAL), which is
+// why the shop says so before one starts (public/shop.js SUB_PAYPAL_TEXT).
+function subscriptionRequest({ planId, customId, brandName = 'ReforgedZ', returnUrl, cancelUrl }) {
+  return {
     plan_id: planId,
     custom_id: customId != null ? String(customId) : undefined,
     application_context: {
@@ -578,6 +593,10 @@ async function createSubscription(testMode, {
       cancel_url: cancelUrl
     }
   };
+}
+
+async function createSubscription(testMode, opts) {
+  const body = subscriptionRequest(opts);
   const res = await ppFetch(testMode, '/v1/billing/subscriptions', { method: 'POST', body });
   const approveUrl = (res.links || []).find(l => l.rel === 'approve')?.href || null;
   return { id: res.id, approveUrl, status: res.status };
@@ -602,6 +621,8 @@ async function cancelSubscription(testMode, subscriptionId, reason = 'Cancelled 
 
 module.exports = {
   isConfigured,
+  orderRequest,
+  subscriptionRequest,
   createOrder,
   getOrder,
   captureOrder,
