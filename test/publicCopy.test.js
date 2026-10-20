@@ -49,7 +49,8 @@ test('F7: the product box, the in-game ID box and the Custom Flag form each carr
   const detail = shopHtml.indexOf('<div class="detail-footer">');
   assert.ok(detail > 0);
   assert.ok(shopHtml.lastIndexOf(placeholder, detail) > detail - 120, 'product box: the line is right above the buy footer');
-  assert.ok(shopHtml.indexOf('id="detailBuy"', detail) - detail < 200);
+  const detailBuy = shopHtml.indexOf('id="detailBuy"', detail);
+  assert.ok(detailBuy > detail && detailBuy - detail < 200, 'the buy button is inside that footer');
   // In-game ID box: directly before its actions row.
   const biuid = shopHtml.indexOf('<button class="biuid-cancel" id="biuidCancel">');
   assert.ok(shopHtml.lastIndexOf(placeholder, biuid) > biuid - 160, 'in-game ID box: the line is right above the actions');

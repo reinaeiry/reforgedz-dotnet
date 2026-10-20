@@ -374,9 +374,11 @@ router.get('/api/shop/version', (req, res) => {
 
 // This month's running costs as one whole-dollar total and the percentage covered
 // (funding.js), worked out at most once a minute. No expense label, host or tool
-// name, or takings figure ever leaves through here.
+// name, or takings figure ever leaves through here. The browser may keep the
+// answer for the same minute as the server does, so a payment shows within a
+// minute of either (review, 2026-10-20: it was 300 s against a 60 s contract).
 router.get('/api/shop/funding', (req, res) => {
-  res.set('Cache-Control', 'public, max-age=300');
+  res.set('Cache-Control', `public, max-age=${funding.CACHE_TTL_S}`);
   res.json(funding.cachedPublicCoverage(db));
 });
 
