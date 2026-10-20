@@ -1,8 +1,11 @@
 // How much of this month's running costs the community has covered so far.
 //
-// The site shows one public number, a percentage, so players can see the servers
-// are player-funded and how close this month is (funding plan, 2026-10). Amounts
-// never leave this module: the public endpoint returns the percentage and a status.
+// The site shows two public numbers, so players can see the servers are
+// player-funded and how close this month is (funding plan, 2026-10; format settled
+// by the owner 2026-10-19, decision F3): the month's running costs as ONE whole-dollar
+// "server costs" figure, and the percentage covered. Nothing else leaves this
+// module through the public endpoint: no expense labels, no host or tool names, no
+// per-line amounts, no takings. The admin Finances tab keeps the detail.
 //
 // Costs are the monthly entries on the admin Finances tab (monthly_expenses, kind
 // 'monthly', tax included). Money in is this UTC month's kept payments: completed
@@ -65,13 +68,16 @@ function coverage(db, { now = Math.floor(Date.now() / 1000) } = {}) {
   return { month: m.label, payments: rows.length, grossCents, feeCents, vatCents, keptCents, costsCents: costs, coveredPct: pct };
 }
 
-// What the public endpoint returns: the percentage and a status, no amounts.
+// What the public endpoint returns: the month's running costs as one whole-dollar
+// total (the monthly expenses summed, tax included, rounded to the dollar), the
+// percentage covered, and a status. Never a label, a name or a takings figure.
 // status: 'covered' at 100% or more, 'short' below, 'unknown' with no costs entered.
 function publicCoverage(db, opts = {}) {
   const c = coverage(db, opts);
-  if (c.coveredPct == null) return { month: c.month, coveredPct: null, status: 'unknown' };
+  if (c.coveredPct == null) return { month: c.month, costsDollars: null, coveredPct: null, status: 'unknown' };
   return {
     month: c.month,
+    costsDollars: Math.round(c.costsCents / 100),
     coveredPct: Math.min(MAX_SHOWN_PCT, c.coveredPct),
     status: c.coveredPct >= 100 ? 'covered' : 'short'
   };

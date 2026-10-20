@@ -43,9 +43,9 @@ test('the month is the UTC calendar month around now', () => {
   assert.equal(funding.estimatedFeeCents(1500), 101);
 });
 
-test('no costs entered: no percentage, status unknown', () => {
+test('no costs entered: no total, no percentage, status unknown', () => {
   const p = funding.publicCoverage(db, { now: utc(2026, 9, 7) });
-  assert.deepEqual(p, { month: '2026-10', coveredPct: null, status: 'unknown' });
+  assert.deepEqual(p, { month: '2026-10', costsDollars: null, coveredPct: null, status: 'unknown' });
 });
 
 test('kept money: fees (recorded or estimated) and VAT come off; refunds, sandbox and other months stay out', () => {
@@ -73,11 +73,31 @@ test('kept money: fees (recorded or estimated) and VAT come off; refunds, sandbo
   assert.equal(c.coveredPct, Math.floor((c.keptCents * 100) / 78000));
 });
 
-test('the public answer is a percentage and a status, never an amount', () => {
+test('the public answer is one whole-dollar total, a percentage and a status: no labels, no names, no takings (F3)', () => {
   const p = funding.publicCoverage(db, { now: utc(2026, 9, 20) });
-  assert.deepEqual(Object.keys(p).sort(), ['coveredPct', 'month', 'status']);
+  assert.deepEqual(Object.keys(p).sort(), ['costsDollars', 'coveredPct', 'month', 'status']);
+  assert.equal(p.costsDollars, 780, 'the monthly lines summed ($380 + $400), the one-off left out');
   assert.equal(p.status, 'short');
   assert.ok(p.coveredPct >= 0 && p.coveredPct < 100);
+  // The labels entered on the Finances tab, and the takings behind the percentage,
+  // never appear in what the public endpoint sends.
+  const sent = JSON.stringify(p);
+  assert.doesNotMatch(sent, /OVH|Claude|Server move|label|gross|kept|fee|vat|payments/i);
+  const c = funding.coverage(db, { now: utc(2026, 9, 20) });
+  for (const cents of [c.grossCents, c.keptCents, c.feeCents, c.vatCents]) {
+    assert.ok(cents > 0 && !sent.includes(String(cents)), `${cents} stays private`);
+  }
+});
+
+test('the total is the monthly expenses with tax, rounded to the whole dollar', () => {
+  db.prepare('DELETE FROM monthly_expenses').run();
+  expense('Both servers', 70000, { tax: 8049 });                     // $780.49 -> $780
+  assert.equal(funding.publicCoverage(db, { now: utc(2026, 9, 20) }).costsDollars, 780);
+  expense('Something small', 1);                                      // $780.50 -> $781
+  assert.equal(funding.publicCoverage(db, { now: utc(2026, 9, 20) }).costsDollars, 781);
+  expense('One-off', 99999, { kind: 'one_off' });                     // not a running cost
+  assert.equal(funding.publicCoverage(db, { now: utc(2026, 9, 20) }).costsDollars, 781);
+  assert.equal(Number.isInteger(funding.publicCoverage(db, { now: utc(2026, 9, 20) }).costsDollars), true);
 });
 
 test('covered at 100% or more, shown as at most 999%', () => {
@@ -86,6 +106,7 @@ test('covered at 100% or more, shown as at most 999%', () => {
   const p = funding.publicCoverage(db, { now: utc(2026, 9, 20) });
   assert.equal(p.status, 'covered');
   assert.equal(p.coveredPct, 999);
+  assert.equal(p.costsDollars, 1);
 });
 
 test('the public answer is worked out at most once a minute, and never carried into the next month', () => {
