@@ -40,6 +40,7 @@
 
   function showEmpty(msg) {
     list.replaceChildren(el('p', 'changes-empty', msg));
+    list.setAttribute('aria-busy', 'false');
   }
 
   function prettyDate(iso) {
@@ -82,6 +83,7 @@
         ul.appendChild(li);
       }
       list.replaceChildren(ul);
+      list.setAttribute('aria-busy', 'false');
     })
     .catch(() => showEmpty('The list could not be loaded just now. Try again in a moment.'));
 })();
