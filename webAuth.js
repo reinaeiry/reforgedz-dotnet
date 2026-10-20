@@ -168,13 +168,56 @@ function findUserByEmail(db, email) {
   return db.prepare('SELECT * FROM users WHERE email = ?').get(email) || null;
 }
 
-function createWebUser(db, { email, passwordHash }) {
+// A sign-up may tick the news box (G12); the row then records the choice from the
+// start. Left out or anything but true: 0, like every other account.
+function createWebUser(db, { email, passwordHash, marketingOptIn = false, now = nowS() }) {
   const steamId = 'web:' + crypto.randomBytes(12).toString('hex');
+  const optIn = marketingOptIn === true;
   db.prepare(`
-    INSERT INTO users (steam_id, persona, avatar_url, role, platform, email, password_hash)
-    VALUES (?, ?, NULL, 'user', 'web', ?, ?)
-  `).run(steamId, DEFAULT_PERSONA, email, passwordHash);
+    INSERT INTO users (steam_id, persona, avatar_url, role, platform, email, password_hash,
+                       marketing_opt_in, marketing_opt_in_at, marketing_opt_in_form)
+    VALUES (?, ?, NULL, 'user', 'web', ?, ?, ?, ?, ?)
+  `).run(steamId, DEFAULT_PERSONA, email, passwordHash, optIn ? 1 : 0, optIn ? now : null, optIn ? MARKETING_FORM : null);
   return getUser(db, steamId);
+}
+
+// ---- News by email (decision G12, 2026-10-19) ---------------------------------
+// One unticked box, "Email me ReforgedZ news (you can stop any time)", at sign-up
+// and on the account page. The row keeps the choice, when it was last set and the
+// wording version shown then, so a later mailing can show what was agreed to and
+// a changed wording gets a new version. Nothing here sends email.
+
+// The wording's version. Bump it whenever MARKETING_TEXT changes.
+const MARKETING_FORM = 'news-2026-10';
+const MARKETING_TEXT = 'Email me ReforgedZ news (you can stop any time)';
+
+// The box is a real tick or nothing: only the JSON boolean true counts, so a
+// string "true", a 1 or a missing field never record an opt-in.
+function optInFromBody(value) {
+  return value === true;
+}
+
+// Record the choice as made now, with the wording shown. Both a tick and an untick
+// set the time and the version, so the row always says when the current state was
+// chosen. Returns the stored state, or null when there is no such account.
+function setMarketingOptIn(db, steamId, optIn, { now = nowS() } = {}) {
+  const on = optIn === true;
+  const r = db.prepare(`
+    UPDATE users SET marketing_opt_in = ?, marketing_opt_in_at = ?, marketing_opt_in_form = ?
+    WHERE steam_id = ?
+  `).run(on ? 1 : 0, now, MARKETING_FORM, steamId);
+  if (r.changes === 0) return null;
+  return marketingOptInOf(getUser(db, steamId));
+}
+
+// The public shape of the row's choice, for the account page.
+function marketingOptInOf(user) {
+  if (!user) return null;
+  return {
+    marketingOptIn: user.marketing_opt_in === 1,
+    marketingOptInAt: user.marketing_opt_in_at || null,
+    marketingOptInForm: user.marketing_opt_in_form || null,
+  };
 }
 
 // Why this signed-in account cannot start adding email sign-in, or null.
@@ -409,6 +452,11 @@ module.exports = {
   isStaffAccount,
   findUserByEmail,
   createWebUser,
+  optInFromBody,
+  setMarketingOptIn,
+  marketingOptInOf,
+  MARKETING_FORM,
+  MARKETING_TEXT,
   addLoginRefusal,
   resolveEmailTarget,
   clearLoginForRelink,

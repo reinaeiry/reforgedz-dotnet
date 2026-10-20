@@ -611,7 +611,7 @@ const KNOWN_EMAIL_REPLY = {
 
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
-    const { email: rawEmail, password } = req.body || {};
+    const { email: rawEmail, password, marketingOptIn: rawOptIn } = req.body || {};
     const email = webAuth.normalizeEmail(rawEmail);
     if (!email) return res.status(400).json({ error: 'Enter a valid email address.' });
     const problem = webAuth.passwordProblem(password);
@@ -624,7 +624,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const hash = await webAuth.hashPassword(password);
     let user;
     try {
-      user = webAuth.createWebUser(db, { email, passwordHash: hash });
+      // The news box (G12) is unticked by default; only a real tick records an opt-in.
+      user = webAuth.createWebUser(db, { email, passwordHash: hash, marketingOptIn: webAuth.optInFromBody(rawOptIn) });
     } catch (e) {
       // Registered by someone else while the password was hashing.
       if (String(e.message).includes('UNIQUE')) return res.json(KNOWN_EMAIL_REPLY);

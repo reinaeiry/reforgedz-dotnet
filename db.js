@@ -187,6 +187,21 @@ if (!userHasColumn('auth_gen')) {
   db.exec("ALTER TABLE users ADD COLUMN auth_gen INTEGER NOT NULL DEFAULT 0");
 }
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL");
+
+// News by email, opt-in (decision G12, 2026-10-19): an unticked box at sign-up and
+// on the account page. The row records the choice (0/1), when it was last set
+// (unix seconds) and which wording was shown then (webAuth.MARKETING_FORM), so a
+// later mailing can show what the player agreed to. Nothing sends email yet; the
+// default is 0 for every account, old and new.
+if (!userHasColumn('marketing_opt_in')) {
+  db.exec("ALTER TABLE users ADD COLUMN marketing_opt_in INTEGER NOT NULL DEFAULT 0");
+}
+if (!userHasColumn('marketing_opt_in_at')) {
+  db.exec("ALTER TABLE users ADD COLUMN marketing_opt_in_at INTEGER");
+}
+if (!userHasColumn('marketing_opt_in_form')) {
+  db.exec("ALTER TABLE users ADD COLUMN marketing_opt_in_form TEXT");
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS auth_tokens (
     token_hash  TEXT PRIMARY KEY,
