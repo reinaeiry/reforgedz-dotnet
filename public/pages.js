@@ -24,9 +24,10 @@
 })();
 
 // ---- What's changed: render public/changes.json ----
-// Each entry is { date: "YYYY-MM-DD", title, line, proof }. proof is a sentence or a URL
-// saying how the change was checked on the live servers. Everything is inserted as text,
-// never as HTML, so a bad entry cannot run on the page.
+// Each entry is { date: "YYYY-MM-DD", title, line, proof, status? }. proof is where the change
+// was announced, or a URL. An entry is shown as final only when status is "confirmed" (someone
+// checked it on the live servers); until then it carries a "being confirmed" mark. Everything
+// is inserted as text, never as HTML, so a bad entry cannot run on the page.
 (function () {
   const list = document.getElementById('changesList');
   if (!list) return;
@@ -65,10 +66,15 @@
         if (/^\d{4}-\d{2}-\d{2}$/.test(e.date || '')) time.setAttribute('datetime', e.date);
         li.appendChild(time);
         const body = el('div');
-        body.appendChild(el('h3', 'changes-title', String(e.title || '')));
+        const h = el('h3', 'changes-title', String(e.title || ''));
+        if (e.status !== 'confirmed') {
+          h.appendChild(document.createTextNode(' '));
+          h.appendChild(el('span', 'changes-status', 'Being confirmed'));
+        }
+        body.appendChild(h);
         if (e.line) body.appendChild(el('p', 'changes-line', String(e.line)));
         if (e.proof) {
-          const p = el('p', 'changes-proof', 'How we checked: ');
+          const p = el('p', 'changes-proof', (e.status === 'confirmed' ? 'Checked on the live servers. Announced: ' : 'Announced: '));
           const proof = String(e.proof);
           if (/^https?:\/\//.test(proof)) {
             const a = el('a', 'inline', proof);
