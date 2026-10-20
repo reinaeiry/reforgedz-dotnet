@@ -4,6 +4,14 @@
    Loaded after style.css; uses its tokens only.
    ============================================ */
 
+/* Small text needs 4.5:1. The brand red (#cc1f1f) is 3.4:1 on these surfaces and the
+   ghost grey (#777) 4.2:1, so small accent and small grey text on these pages use lighter
+   tints: measured 5.05:1 and 5.84:1 on --bg-dark, 4.75:1 and 5.49:1 on --surface. */
+.doc {
+  --accent-text: #e4524e;
+  --text-ghost: #8f8f8f;
+}
+
 .skip-link {
   position: absolute;
   top: -100px;
@@ -82,8 +90,10 @@ html { scroll-padding-top: 84px; }
   align-items: center;
   gap: 14px;
 }
+.doc .eyebrow { color: var(--accent-text); }
+
 .doc-section h2 .num {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 0.8rem;
   font-weight: 700;
   min-width: 22px;
@@ -154,7 +164,7 @@ html { scroll-padding-top: 84px; }
   font-family: var(--display);
   font-size: 1.1rem;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .doc-steps h3 { margin: 6px 0 8px; }
 .doc-steps p { margin-bottom: 8px; }
@@ -182,6 +192,8 @@ html { scroll-padding-top: 84px; }
   border-radius: 8px;
   overflow: hidden;
   margin: 0 0 40px;
+  padding: 0;
+  list-style: none;
 }
 .doc-fact { background: var(--bg-dark); padding: 22px 22px; }
 .doc-fact .fact-num {
@@ -241,6 +253,9 @@ html { scroll-padding-top: 84px; }
   white-space: nowrap;
 }
 a.code {
+  display: inline-block;
+  padding: 3px 0;        /* a 24 px tap target (WCAG 2.5.8) without changing the row rhythm */
+  margin: -3px 0;
   text-decoration: underline;
   text-decoration-color: var(--accent);
   text-underline-offset: 3px;
@@ -291,7 +306,7 @@ a.code:hover { text-decoration-color: #fff; }
   font-size: 0.95rem;
   font-weight: 600;
   letter-spacing: 1px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-variant-numeric: tabular-nums;
 }
 .changes-title {
@@ -341,8 +356,9 @@ a.code:hover { text-decoration-color: #fff; }
   color: var(--text-dim);
 }
 
-/* Page footer links grow on these pages */
-.doc .footer-links { flex-wrap: wrap; justify-content: center; }
+/* Page footer links grow on these pages, and each is a 24 px-tall target */
+.doc .footer-links { flex-wrap: wrap; justify-content: center; gap: 8px 24px; }
+.doc .footer-links a { display: inline-block; padding: 4px 0; }
 
 @media (max-width: 768px) {
   .doc-page { padding-top: 110px; padding-bottom: 64px; }
