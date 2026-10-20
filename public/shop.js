@@ -1441,6 +1441,12 @@ async function proceedCheckout(productId, serverId, customAmountCents, opts = {}
       showBiUidModal(productId, serverId, customAmountCents);
       return;
     }
+    // Outside its sale window (saleWindow.js): the server's own sentence, in the
+    // notice box rather than a browser alert, since a ?buy= link can reach here.
+    if (e.code === 'not_on_sale') {
+      showCheckoutNotice({ title: 'Not on sale right now', text: e.message });
+      return;
+    }
     // A second priority queue subscription for a server this account already has.
     if (e.code === 'already_subscribed') {
       showCheckoutNotice({

@@ -139,6 +139,8 @@ test('B7: the admin form has the two sale-window fields, in UTC, and the shop ma
   assert.equal((shopHtml.match(/YYYY-MM-DD HH:MM in UTC/g) || []).length, 2);
   assert.match(shopJs, /body\.availableFrom = fromField\.value;\s*body\.availableUntil = untilField\.value;/);
   assert.match(shopJs, /isAdmin && !onSaleNow\(p\) \? '<span class="stock-badge">Not on sale now<\/span>' : ''/);
+  // A refused checkout shows the server's sentence in the notice box, not a browser alert.
+  assert.match(shopJs, /if \(e\.code === 'not_on_sale'\) \{\s*showCheckoutNotice\(\{ title: 'Not on sale right now', text: e\.message \}\);/);
 });
 
 test('no checkbox in the served markup is pre-ticked', () => {
