@@ -1,4 +1,4 @@
-// Shared behaviour of the document pages (/official, /join, /privacy, /terms, /changes).
+// Shared behaviour of the document pages (/join, /privacy, /terms, /changes).
 // The homepage keeps script.js; these pages have no tabs, no server status and no radio.
 
 // ---- Mobile menu ----
