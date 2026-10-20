@@ -148,6 +148,15 @@ if (!productHasColumn('cosmetic_key')) {
 if (!productHasColumn('stock_limit_overrides')) {
   db.exec("ALTER TABLE products ADD COLUMN stock_limit_overrides TEXT");
 }
+// A sale window (saleWindow.js, decision B7 2026-10-20): unix seconds, both optional.
+// Outside it the product is not listed and checkout refuses it; what was already
+// bought is unaffected. NULL on both means always on sale, as every product was.
+if (!productHasColumn('available_from')) {
+  db.exec("ALTER TABLE products ADD COLUMN available_from INTEGER");
+}
+if (!productHasColumn('available_until')) {
+  db.exec("ALTER TABLE products ADD COLUMN available_until INTEGER");
+}
 if (!userHasColumn('discord_id')) {
   db.exec("ALTER TABLE users ADD COLUMN discord_id TEXT");
 }
@@ -852,6 +861,20 @@ if (!orderHasColumn('ip_country')) {
 }
 if (!orderHasColumn('payer_country')) {
   db.exec("ALTER TABLE orders ADD COLUMN payer_country TEXT");
+}
+
+// Unfinished checkouts (decisions A3 and A4, 2026-10-20; tools/checkouts.js).
+// cancelled_reason says why a 'cancelled' row was cancelled when a job did it:
+// 'expired' for a checkout that reached PayPal and never came back within 48 hours.
+// The status stays 'cancelled', which every reader already treats as no
+// entitlement and no sync, and which fulfilment still rescues should the payment
+// land late. finish_reminder_sent_at is the one "finish your purchase" email per
+// order, written before the send so it can never go twice.
+if (!orderHasColumn('cancelled_reason')) {
+  db.exec("ALTER TABLE orders ADD COLUMN cancelled_reason TEXT");
+}
+if (!orderHasColumn('finish_reminder_sent_at')) {
+  db.exec("ALTER TABLE orders ADD COLUMN finish_reminder_sent_at INTEGER");
 }
 
 // When some product first carried a cosmetic key (cosmetics.cosmeticsInUse). From then

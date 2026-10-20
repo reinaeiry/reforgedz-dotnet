@@ -1034,8 +1034,60 @@ async function sendPriorityQueueEnding({ to, displayName, productTitle, serverLa
   }
 }
 
+// "Finish your purchase" (decision A3, 2026-10-20): one email, an hour after a
+// checkout that reached PayPal and never came back, about that order and nothing
+// else. The shop keeps no PayPal approval link and neither API states how long one
+// stays valid, so the link starts the same purchase again from the shop; a product
+// no longer on sale gets the shop front instead. The amount is the order's own.
+function finishCheckoutEmail({ displayName, productTitle, serverLabel = null, amountCents, currency = 'USD', restartUrl, canRestart = true }) {
+  const base = (process.env.BASE_URL || 'https://reforgedz.net').replace(/\/+$/, '');
+  const item = productTitle || 'your purchase';
+  const where = serverLabel ? ` for ${serverLabel}` : '';
+  const amount = Number.isFinite(Number(amountCents)) ? `${money(Number(amountCents), currency)}` : null;
+  const link = restartUrl || `${base}/shop`;
+  const subject = 'Finish your ReforgedZ purchase';
+  const paragraphs = [
+    `You started buying ${item}${where}${amount ? ` for ${amount}` : ''}, but the payment did not go through, so nothing was charged and nothing was delivered.`,
+    canRestart
+      ? 'To finish it, start the purchase again from the shop. It takes a minute.'
+      : 'That item is not on sale right now. The shop has what is.',
+    'If you did not mean to buy it, there is nothing to do.'
+  ];
+  const { html, text } = plainEmail({
+    name: displayName || 'there',
+    paragraphs,
+    button: { label: canRestart ? 'Finish my purchase' : 'Open the shop', href: link },
+    footnote: 'This is the only reminder about this order.',
+    strong: [item, amount].filter(Boolean)
+  });
+  return { subject, html, text };
+}
+
+// Returns { ok, skipped?, error? }. Never throws.
+async function sendFinishCheckout({ to, displayName, productTitle, serverLabel, amountCents, currency, restartUrl, canRestart }) {
+  const tx = getTransport();
+  if (!tx) return { ok: false, skipped: 'smtp_not_configured' };
+  if (!to) return { ok: false, skipped: 'no_recipient' };
+  try {
+    const { subject, html, text } = finishCheckoutEmail({ displayName, productTitle, serverLabel, amountCents, currency, restartUrl, canRestart });
+    await tx.sendMail({
+      from: fromAddress(),
+      to,
+      replyTo: 'contact@reforgedz.net',
+      subject,
+      text,
+      html
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[invoiceMail] finish checkout send failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
 module.exports = {
   sendInvoice, sendSubscriptionInvite, sendSubscriptionCancelled, sendSubscriptionSuspended, sendRefundConfirmation, sendCustomFlagConfirmation,
   sendPaymentFailed, subscriptionUnpaidEmail, sendPaymentRefused, paymentRefusedEmail,
-  sendAccountLink, sendPriorityQueueEnding, priorityQueueEndingEmail
+  sendAccountLink, sendPriorityQueueEnding, priorityQueueEndingEmail,
+  finishCheckoutEmail, sendFinishCheckout
 };

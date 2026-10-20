@@ -1405,3 +1405,10 @@ try {
 } catch (e) {
   console.error('[reminders] could not schedule:', e.message);
 }
+// Unfinished checkouts (tools/checkouts.js): expire after 48 h, one "finish your
+// purchase" email after 1 h.
+try {
+  require('./tools/checkouts').scheduleCheckoutJobs();
+} catch (e) {
+  console.error('[checkouts] could not schedule:', e.message);
+}
