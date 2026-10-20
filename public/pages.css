@@ -20,7 +20,7 @@
 @font-face {
   font-family: 'Oswald Fallback';
   src: local('Arial'), local('Helvetica'), local('Roboto');
-  size-adjust: 80%;
+  size-adjust: 78.5%;   /* tuned to the h1, the only display text that wraps */
 }
 @font-face {
   font-family: 'Inter Fallback';
@@ -79,7 +79,7 @@ html { scroll-padding-top: 84px; }
 .doc-intro {
   font-size: 1rem;
   color: var(--text-dim);
-  max-width: 68ch;
+  max-width: 600px;      /* about 68 characters; in px, not ch, so the box does not change with the font */
   line-height: 1.8;
   text-wrap: pretty;
 }
@@ -214,11 +214,12 @@ html { scroll-padding-top: 84px; }
 .doc-fact { background: var(--bg-dark); padding: 22px 22px; }
 .doc-fact .fact-num {
   font-family: var(--display);
-  font-size: 1.6rem;
+  font-size: clamp(1.15rem, 5vw, 1.6rem);
   font-weight: 700;
   color: #fff;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;   /* one line in every font, so the strip's height never depends on the swap */
 }
 .doc-fact .fact-label {
   font-size: 0.72rem;
@@ -226,6 +227,15 @@ html { scroll-padding-top: 84px; }
   text-transform: uppercase;
   color: var(--text-ghost);
   margin-top: 6px;
+}
+/* One fact per row on phones: a label never wraps, so the strip's height is the same
+   in the fallback font and the web font. */
+@media (max-width: 479px) {
+  .doc-facts { grid-template-columns: 1fr; }
+  .doc-fact { padding: 16px 18px; }
+}
+@media (min-width: 480px) and (max-width: 767px) {
+  .doc-facts { grid-template-columns: 1fr 1fr; }
 }
 
 /* Tables */
@@ -307,7 +317,10 @@ a.code:hover { text-decoration-color: #fff; }
 /* Mod lists reuse .mods-category / .mod-pill from style.css. */
 .doc .mods-category { margin-bottom: 26px; }
 
-/* Changes list */
+/* Changes list. The list arrives by script, so the box starts tall enough that the
+   lines under it (the meta row, the footer) begin below the first screen and do not
+   jump when the entries land. */
+#changesList { min-height: 70vh; }
 .changes-list { list-style: none; margin: 0; padding: 0; }
 .changes-item {
   display: grid;
