@@ -18,6 +18,17 @@ const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
 const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2'];
 const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Faircroft)', eu3: 'EU3 (now EU Dev)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Faircroft)' };
 
+// The purchase terms, one line right above every button whose click can lead to
+// PayPal: each product card, the product box, the in-game ID box and the Custom
+// Flag form (decision F7, 2026-10-19). The wording lives here only; the boxes in
+// shop.html carry an empty data-buy-terms element that is filled below. Plain
+// text, because the site has no rules page to link to yet.
+const BUY_TERMS_TEXT = 'By buying you accept the server rules. A ban for breaking them ends paid perks without a refund.';
+function buyTermsHtml() {
+  return `<p class="buy-terms">${BUY_TERMS_TEXT}</p>`;
+}
+document.querySelectorAll('[data-buy-terms]').forEach((el) => { el.textContent = BUY_TERMS_TEXT; });
+
 // ---- DOM refs (static elements only — re-queried as needed for dynamic ones) ----
 const navAuth = document.getElementById('navAuth');
 const testBanner = document.getElementById('testBanner');
@@ -497,6 +508,8 @@ function setAuthMode(mode) {
   pwLabel.style.display = forgot ? 'none' : '';
   pw.setAttribute('autocomplete', register ? 'new-password' : 'current-password');
   pwLabel.textContent = register ? 'Password (at least 8 characters)' : 'Password';
+  // The news box (G12) belongs to sign-up only, and it is never ticked for the player.
+  document.getElementById('authMarketingRow').style.display = register ? '' : 'none';
   document.getElementById('authSubmit').textContent = register ? 'Create account' : forgot ? 'Email me a link' : 'Sign in';
   document.getElementById('authForgot').style.display = forgot ? 'none' : '';
   document.getElementById('authError').textContent = '';
@@ -513,6 +526,7 @@ function openAuthModal(mode) {
   authEmailSent = false;
   setAuthMode(mode || 'signin');
   document.getElementById('authPassword').value = '';
+  document.getElementById('authMarketing').checked = false;
   // Steam comes back to the shop while a buy is waiting, so it can carry on there;
   // otherwise to the page that sent the player here to sign in.
   const back = readPendingBuy() ? '/shop' : returnTo;
@@ -565,9 +579,11 @@ async function submitAuth(e) {
       authEmailSent = true;
       return;
     }
+    // Sign-up carries the news box as a real boolean; the server records a tick only.
+    const marketingOptIn = mode === 'register' ? document.getElementById('authMarketing').checked === true : undefined;
     const data = await api(mode === 'register' ? '/api/auth/register' : '/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password, marketingOptIn })
     });
     if (data.linkSent) {
       // Registering with an email ReforgedZ already knows: no second account,
@@ -670,6 +686,7 @@ function renderProducts(products) {
           <div class="shop-card-type ${typeClass}">${escHtml(typeLabel)}${stockBadgeHtml(p)}</div>
           <h3>${escHtml(p.title)}</h3>
           <p>${escHtml(p.description || '')}</p>
+          ${buyTermsHtml()}
           <div class="shop-card-footer">
             <span class="shop-card-price">${p.custom_price ? escHtml(formatPriceRange(p)) : formatPrice(p.price_cents, p.currency || 'usd', p.type, p.interval_days)}</span>
             ${buyBtnHtml}
@@ -1988,8 +2005,9 @@ window.hardDeleteProduct = hardDeleteProduct;
 
 init();
 
-// This month's running costs covered, as a percentage (GET /api/shop/funding).
-// Stays hidden unless the shop knows its costs, and never holds up the page.
+// This month's server costs as one whole-dollar figure, and how much of them is
+// covered, as a percentage (GET /api/shop/funding). Stays hidden unless the shop
+// knows its costs, and never holds up the page.
 (async function loadFunding() {
   const box = document.getElementById('fundingMeter');
   if (!box) return;
@@ -1997,8 +2015,9 @@ init();
     const r = await fetch('/api/shop/funding', { headers: { Accept: 'application/json' } });
     if (!r.ok) return;
     const f = await r.json();
-    if (!f || typeof f.coveredPct !== 'number') return;
+    if (!f || typeof f.coveredPct !== 'number' || typeof f.costsDollars !== 'number') return;
     const pct = Math.max(0, Math.min(999, Math.floor(f.coveredPct)));
+    document.getElementById('fundingCosts').textContent = `$${Math.max(0, Math.round(f.costsDollars)).toLocaleString('en-US')}`;
     document.getElementById('fundingPct').textContent = `${pct}% covered`;
     document.getElementById('fundingFill').style.width = `${Math.min(100, pct)}%`;
     document.getElementById('fundingNote').textContent = f.status === 'covered'

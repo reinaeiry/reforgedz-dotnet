@@ -372,8 +372,9 @@ router.get('/api/shop/version', (req, res) => {
   res.json({ sha: require('../tools/lib/version').gitSha(), node: process.version });
 });
 
-// How much of this month's running costs is covered, as one public percentage
-// (funding.js), worked out at most once a minute. No amounts ever leave through here.
+// This month's running costs as one whole-dollar total and the percentage covered
+// (funding.js), worked out at most once a minute. No expense label, host or tool
+// name, or takings figure ever leaves through here.
 router.get('/api/shop/funding', (req, res) => {
   res.set('Cache-Control', 'public, max-age=300');
   res.json(funding.cachedPublicCoverage(db));
@@ -3304,7 +3305,8 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
   const me = db.prepare(`
     SELECT steam_id, persona, avatar_url, platform, gamertag, bm_player_id,
            bi_uid, bi_uid_name, bi_uid_proof, bi_uid_set_at, discord_id, role, created_at, email, email_verified_at,
-           password_hash IS NOT NULL AS has_password
+           password_hash IS NOT NULL AS has_password,
+           marketing_opt_in, marketing_opt_in_at, marketing_opt_in_form
     FROM users WHERE steam_id = ?
   `).get(req.user.steam_id);
   if (!me) return res.status(404).json({ error: 'Account not found' });
@@ -3406,6 +3408,8 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
       createdAt: me.created_at,
       email: me.email || null,
       hasPassword: !!me.has_password,
+      // News by email (G12): the saved choice, when it was set and the wording version.
+      ...webAuth.marketingOptInOf(me),
       // Anyone can change their in-game id, except a console account whose email
       // sign-in is not confirmed yet (see /api/shop/set-bi-uid).
       canEditBiUid: (me.platform !== 'psn' && me.platform !== 'xbox') || !!me.email_verified_at,
@@ -3419,6 +3423,17 @@ router.get('/api/shop/account/summary', requireAuth, (req, res) => {
     subscriptions: subs,
     orders
   });
+});
+
+// News by email (decision G12, 2026-10-19): the account page's box. Only the JSON
+// boolean true turns it on; anything else turns it off, so a stray value can never
+// record an opt-in. The row keeps when the choice was made and under which wording
+// (webAuth.js). Nothing here sends email; it is only the record.
+router.post('/api/shop/account/marketing', requireAuth, (req, res) => {
+  const optIn = webAuth.optInFromBody(req.body && req.body.optIn);
+  const state = webAuth.setMarketingOptIn(db, req.user.steam_id, optIn);
+  if (!state) return res.status(404).json({ error: 'Account not found' });
+  res.json({ ok: true, ...state });
 });
 
 // ---- Buy-flow counters and expiry reminders (plan J5) ------------------------

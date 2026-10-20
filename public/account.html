@@ -135,6 +135,11 @@
     .link-hint.error { color: #f87171; }
     .link-hint.ok { color: #4ade80; }
 
+    /* News by email (G12): one box, the saved choice shown as it is. */
+    .news-check { display: flex; align-items: flex-start; gap: 9px; margin-top: 4px; font-size: 0.88rem; color: var(--text); line-height: 1.45; cursor: pointer; }
+    .news-check input { flex: none; margin: 3px 0 0; width: 15px; height: 15px; accent-color: var(--accent); }
+    .news-check input:disabled { opacity: 0.5; }
+
     /* ---- subscriptions ---- */
     .sub-card {
       border: 1px solid var(--border);
@@ -506,6 +511,22 @@
         `);
       }
 
+      // News by email (decision G12, 2026-10-19): one box, unticked unless this
+      // account ticked it, saved the moment it changes. Only an account with an email
+      // has somewhere for news to go, so the box waits until one is set.
+      if (p.email) {
+        items.push(`
+          <div class="link-item">
+            <div class="link-label">News by email</div>
+            <label class="news-check">
+              <input type="checkbox" id="newsOptIn"${p.marketingOptIn === true ? ' checked' : ''} onchange="saveNewsOptIn(this)">
+              <span>${NEWS_TEXT}</span>
+            </label>
+            <div class="link-hint" id="newsHint">${p.marketingOptIn === true ? NEWS_ON_HINT : NEWS_OFF_HINT}</div>
+          </div>
+        `);
+      }
+
       // In-game identity: what queue priority and perks are delivered to. A
       // placeholder here; renderBiUidCard builds the card itself with the DOM.
       items.push('<div id="biUidCard"></div>');
@@ -789,6 +810,35 @@
         setHint('loginHint', 'Sent. Check your email (and spam folder) for the link.', 'ok');
       } catch (e) {
         setHint('loginHint', 'Could not send: ' + e.message, 'error');
+      }
+    }
+
+    // News by email (G12). The same wording as the sign-up box in the shop; the
+    // server records the tick with its version (webAuth.js MARKETING_FORM).
+    const NEWS_TEXT = 'Email me ReforgedZ news (you can stop any time)';
+    const NEWS_ON_HINT = 'Goes to the email above. Untick any time to stop.';
+    const NEWS_OFF_HINT = 'Off. Tick the box to get news by email.';
+
+    async function saveNewsOptIn(box) {
+      const wanted = box.checked === true;
+      box.disabled = true;
+      setHint('newsHint', 'Saving…');
+      try {
+        const res = await fetch('/api/shop/account/marketing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ optIn: wanted })
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || 'Could not save.');
+        account.profile.marketingOptIn = j.marketingOptIn === true;
+        box.checked = account.profile.marketingOptIn;
+        setHint('newsHint', 'Saved. ' + (account.profile.marketingOptIn ? NEWS_ON_HINT : NEWS_OFF_HINT), 'ok');
+      } catch (e) {
+        box.checked = !wanted;
+        setHint('newsHint', 'Could not save that. Try again.', 'error');
+      } finally {
+        box.disabled = false;
       }
     }
 

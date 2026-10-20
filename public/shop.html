@@ -30,6 +30,7 @@
     .funding-meter[hidden] { display: none; }
     .funding-meter-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; font-size: 0.85rem; }
     .funding-meter-label { color: var(--text-dim); }
+    .funding-meter-label strong { color: #fff; font-weight: 600; }
     .funding-meter-pct { font-weight: 600; color: #fff; }
     .funding-meter-track { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
     .funding-meter-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.6s ease; }
@@ -593,6 +594,18 @@
       margin-bottom: 16px;
     }
 
+    /* The purchase terms line (shop.js BUY_TERMS_TEXT), right above every button
+       that leads to PayPal. Small print, never the card's stretching paragraph. */
+    .shop-card .buy-terms, .detail-modal .buy-terms, .biuid-modal .buy-terms {
+      flex: none;
+      margin: 0 0 10px;
+      font-size: 0.74rem;
+      line-height: 1.45;
+      color: var(--text-dim);
+    }
+    .detail-modal .buy-terms { margin: 14px 0 10px; }
+    .biuid-modal .buy-terms { margin: 14px 0 -6px; }
+
     .shop-card-footer {
       display: flex;
       align-items: center;
@@ -749,7 +762,7 @@
         <p>Cosmetic items and server perks. Everything here is optional and nothing gives you a gameplay advantage.</p>
         <div class="funding-meter" id="fundingMeter" hidden>
           <div class="funding-meter-row">
-            <span class="funding-meter-label">This month's running costs</span>
+            <span class="funding-meter-label">Server costs: <strong id="fundingCosts"></strong> a month</span>
             <span class="funding-meter-pct" id="fundingPct"></span>
           </div>
           <div class="funding-meter-track"><div class="funding-meter-fill" id="fundingFill"></div></div>
@@ -928,6 +941,7 @@
         </ol>
       </details>
       <div class="biuid-error" id="biuidError"></div>
+      <p class="buy-terms" data-buy-terms></p>
       <div class="biuid-actions">
         <button class="biuid-cancel" id="biuidCancel">Cancel</button>
         <button class="biuid-skip" id="biuidSkip">Skip for now</button>
@@ -964,6 +978,7 @@
       <label class="custom-flag-label" for="customFlagImage">Flag Image <span style="font-weight:400;color:var(--text-ghost)">(PNG or JPG, max 16MB)</span></label>
       <input type="file" class="biuid-input" id="customFlagImage" accept="image/png,image/jpeg">
       <div class="biuid-error" id="customFlagError"></div>
+      <p class="buy-terms" data-buy-terms></p>
       <div class="biuid-actions">
         <button class="biuid-cancel" id="customFlagCancel">Cancel</button>
         <button class="biuid-submit" id="customFlagSubmit">Submit &amp; Continue</button>
@@ -984,6 +999,11 @@
         <input type="email" class="console-input" id="authEmail" autocomplete="email" maxlength="254" spellcheck="false">
         <label class="auth-label" for="authPassword" id="authPasswordLabel">Password</label>
         <input type="password" class="console-input" id="authPassword" autocomplete="current-password" maxlength="200">
+        <!-- News by email, sign-up only, never pre-ticked (decision G12, 2026-10-19). -->
+        <label class="auth-check" id="authMarketingRow" style="display:none">
+          <input type="checkbox" id="authMarketing">
+          <span>Email me ReforgedZ news (you can stop any time)</span>
+        </label>
         <div class="console-error" id="authError" role="alert"></div>
         <div class="console-result auth-info" id="authNotice" role="status" style="display:none"></div>
         <div class="console-actions">
@@ -1024,6 +1044,7 @@
           </div>
           <div class="detail-amount-bounds" id="detailAmountBounds"></div>
         </div>
+        <p class="buy-terms" data-buy-terms></p>
         <div class="detail-footer">
           <span class="detail-price" id="detailPrice"></span>
           <button class="shop-buy-btn" id="detailBuy">Purchase</button>
@@ -1560,6 +1581,8 @@
     .auth-tab.active { color: #fff; border-color: rgba(204, 31, 31, 0.5); background: rgba(204, 31, 31, 0.12); }
     .auth-tab:focus-visible { outline: 2px solid rgba(204, 31, 31, 0.6); outline-offset: 2px; }
     .auth-label { display: block; font-size: 0.75rem; color: var(--text-dim); margin: 12px 0 4px; }
+    .auth-check { display: flex; align-items: flex-start; gap: 9px; margin: 14px 0 0; font-size: 0.82rem; color: var(--text-dim); line-height: 1.45; cursor: pointer; }
+    .auth-check input { flex: none; margin: 3px 0 0; width: 15px; height: 15px; accent-color: var(--accent); }
     .console-modal .auth-alt { font-size: 0.78rem; color: var(--text-ghost); margin: 12px 0 0; line-height: 1.6; }
     .console-modal .auth-alt a { color: var(--text-dim); text-decoration: underline; }
     .web-mark { background: var(--accent); }
