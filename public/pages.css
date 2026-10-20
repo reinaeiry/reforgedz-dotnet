@@ -361,6 +361,8 @@ a.code:hover { text-decoration-color: #fff; }
   color: var(--text-ghost);
 }
 .changes-line { font-size: 0.9rem; color: var(--text-dim); line-height: 1.8; margin: 0; }
+.changes-items { margin: 0 0 6px 20px; padding: 0; }
+.changes-items li { font-size: 0.9rem; color: var(--text-dim); line-height: 1.75; margin-bottom: 5px; text-wrap: pretty; }
 .changes-proof { font-size: 0.8rem; color: var(--text-ghost); margin: 8px 0 0; line-height: 1.7; }
 .changes-empty {
   padding: 32px 0;

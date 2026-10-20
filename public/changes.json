@@ -1,12 +1,332 @@
 [
- {"date": "2026-05-28", "title": "Arma Reforger 1.7 and a fresh start", "line": "A tile inventory, vehicle garages, temperature, blood and sickness, key bunkers, a moving oil rig and carrier, Land Rovers, the MH-6, convoys.", "proof": "Change log, May 28"},
- {"date": "2026-06-08", "title": "New hardware", "line": "EU and NA moved to faster machines.", "proof": "Server news, June 8"},
- {"date": "2026-07-04", "title": "Building rebuilt", "line": "A build menu, triangle foundations, garage doors, upgrade paths, every kit salvageable, free placement. Supply drops, abandoned bases, heli crashes you shoot down.", "proof": "Change log, July 4"},
- {"date": "2026-07-24", "title": "A wipe schedule", "line": "Every six weeks, decided with the community. Chernarus servers at 100 slots.", "proof": "Server news, July 24"},
- {"date": "2026-08-25", "title": "Chernarus fixed for PS5", "line": "The northern crash fixed, and a performance gain for everyone.", "proof": "Server news, August 25"},
- {"date": "2026-09-10", "title": "The big update", "line": "Fishing, the inventory back, daily and weekly quests, stock-based traders with weapon tiers, vehicle batteries, base electricity, code locks, animals, harder zombies, a lockpick minigame, a fuel economy, and Faircroft Island as the second map.", "proof": "Change log, September 10"},
- {"date": "2026-09-11", "title": "A new wiki", "line": "reforgedz.net/wiki", "proof": "Server news, September 11"},
- {"date": "2026-09-21", "title": "Stacks, trading and arcades", "line": "Stackable items and faster inventories, item cards that say where to sell, full price on big sales, two arcade machines with weekly prizes.", "proof": "Change log, September 21"},
- {"date": "2026-09-30", "title": "Bases and cooking", "line": "Code locks on tents and sheds, window walls you can shoot from, C4 against locks, bigger generator tanks, cooking at base fireplaces.", "proof": "Change log, September 30"},
- {"date": "2026-10-18", "title": "The first Town Hall", "line": "A community meeting on the Discord stage, and a Community Board.", "proof": "Server news, October 18"}
+ {
+  "date": "2026-10-18",
+  "title": "The first Community Town Hall",
+  "items": [
+   "A community meeting on the Discord stage: the road ahead, gamemode changes, and the server lineup, with questions from the floor.",
+   "Community Board applications opened the next day: six members, three per region, a separate voice from the GM team."
+  ],
+  "source": "Server news, October 15 to 19"
+ },
+ {
+  "date": "2026-09-30",
+  "title": "Bases, cooking, zombies and traders",
+  "items": [
+   "Code locks can go on tent doors again, and on sheds and the greenhouse.",
+   "Built window walls in wood, metal, brick and concrete are no longer bulletproof: the glass shatters, so you can shoot out of your base. Greenhouse glass breaks again too.",
+   "Removing palisades and other parts frees up your base entity count; build plans now reserve a slot, so the cap cannot be bypassed.",
+   "C4 damages built-in locks on doors, gates, hatches, safes and lockers, locked or not, and attaches to doors reliably.",
+   "Built-in locks say Lock or Unlock Door, Gate or Hatch; the keypad on the code-locked palisade gate sits in the middle of the gate.",
+   "Crafted campfires inside your own base no longer vanish after a restart.",
+   "Generator fuel tanks hold 80 litres (was 40); lights and fridges update as soon as a generator moves; a moved generator shows its real fuel.",
+   "Burying a drysack tells you why when it cannot be buried; drysacks holding certain modded weapons can now be buried.",
+   "Base fireplaces accept raw and part-cooked food; fireplaces and cookers refuse food that is already cooked or burnt; unopened cans store in fridges.",
+   "Bloody hands stay under your gloves and never end up in your backpack or on the Marketplace.",
+   "Masks no longer disappear at random.",
+   "Players who turn into a zombie indoors rise where they died, not on the roof.",
+   "Bandit Outpost flags can be captured once every AI is down; sniper contracts say they need a sniper rifle, and the M700 FDE and .338 AWM count.",
+   "Trader attachment information is accurate; white key safes give 4 to 6 items including building supplies, tools and explosives, with a better caps reward and a chance of a bonus key.",
+   "The camo S105 is shop-only and no longer spawns in the world; the T86 Sprinter is gone; police light bars start off."
+  ],
+  "source": "Change log, September 30"
+ },
+ {
+  "date": "2026-09-21",
+  "title": "Stacks, trading and two arcade machines",
+  "items": [
+   "Stackable items (nails, caps, nuggets, ingots, bait, gunpowder, electrical parts and more) are one item with a count: a bag of 400 nails is one tile. Existing stacks convert on load; nothing is lost. Big inventories open much faster.",
+   "Item cards show a Sold at row: which trader buys the item. Trader menus show every item's inventory footprint and, for bags, vests and containers, their storage size before you buy.",
+   "Selling a backpack or vest no longer deletes what is inside: containers only sell when empty.",
+   "Big sales pay full price (they were silently capped); boats and helicopters sell with their engine parts.",
+   "Code-locked hatch walls in all four tiers, craftable and at the trader; new base flags for the recent purchases.",
+   "Base-built salvage stations need generator power.",
+   "No more looting or opening containers through walls, closed doors, floors or buildings; shelves, racks, tables and vehicles still work, so warehouse loot stays reachable.",
+   "Bikes cannot be mounted while being dismantled; downed players cannot use vehicle actions; boats only push near water and cannot go into the vehicle garage; the motorboat trunk has proper storage.",
+   "Safe-zone and settlement pumps are always unlimited; heli-pad pumps no longer run dry.",
+   "Treasure Hunt crates guarantee valuable loot, 4 to 6 items, and pay 5,000 to 10,000 caps (was 1,500); Fallen Soldier drops 1 to 2 guaranteed items including tier-4 loot plus 1,500 to 3,000 caps.",
+   "Several server crashes and the multi-second freezes reported on EU1 that week were fixed; keycard-scanner doors no longer stick when a vehicle is parked in them.",
+   "Base storages show the caps value inside; canteens water crops.",
+   "Two arcade machines: VIPER (snake with bombs, apples and gold bonuses) and DEAD SPRINT (a 20-level zombie platformer with four bosses). Find them on your map or build one at your base with a running generator. 250 caps a go, weekly leaderboards with 25,000, 10,000 and 5,000 caps for the top three on each machine, a full chiptune soundtrack, mouse and controller support."
+  ],
+  "source": "Change log, September 21 and 22"
+ },
+ {
+  "date": "2026-09-14",
+  "title": "After the big update",
+  "items": [
+   "A short minimum timer on a second respawn, so the servers are not flooded with spawn requests; spawn selection work followed.",
+   "Fixes: military AI no longer spawn naked, flag refresh, map icons, the motorbike bought without a spark plug, bike desync, quest hand-ins with several items, zombies spawning in churches moved, the inventory row selection when looting, map markers for the oil rig and the carrier, NV straps and the Subaru at traders, loot stashing and its animation."
+  ],
+  "source": "Change log, September 11; server news, September 14 and 15"
+ },
+ {
+  "date": "2026-09-11",
+  "title": "A new wiki",
+  "items": [
+   "The replacement wiki went live at reforgedz.net/wiki: how ReforgedZ works, where to go, and what will kill you first."
+  ],
+  "source": "Server news, September 11"
+ },
+ {
+  "date": "2026-09-10",
+  "title": "The big update and a fresh start",
+  "items": [
+   "Fishing: craft a rod, add a float and a maggot (from the boat trader or dead bodies), sell your catch at the food trader. Night is the best time.",
+   "The inventory system is back and here to stay: a slot system with rotation and auto-sort; drop items from a storage container straight to the ground.",
+   "Daily and weekly quests.",
+   "Traders buy and sell most things, stock-based: weapon tiers 1 to 2 at the safe zone, 3 to 4 at the black market, the tier shown on the card.",
+   "Vehicles need batteries and spark plugs; batteries drain when a vehicle sits and recharge when driven; a charger and a generator keep them topped up.",
+   "Base electricity: generators run certain items at your base.",
+   "Code locks come pre-installed on base doors; upgrade them with caps and repair them after a failed raid.",
+   "Animals: cows to hunt and skin, more to come.",
+   "Zombies overhauled with new animations and harder hits: 15% health per hit by day, 20% at night, with zombie civilians.",
+   "All keys buffed; the aircraft carrier and the missions carry better loot.",
+   "A lockpick minigame.",
+   "Fuel: gas stations outside the safe zone are free but limited; refill them by taking oil cans to the oil rig for unrefined oil, which gas stations buy. Safe-zone fuel stays full but costs per litre.",
+   "Faircroft Island replaces Everon as the second map: a smaller, different experience, built console-friendly, 60 slots.",
+   "Many bug fixes, new gear and new items; more caps in the world and more ways to earn them, with prices adjusted to match."
+  ],
+  "source": "Change log, September 10"
+ },
+ {
+  "date": "2026-08-25",
+  "title": "Chernarus fixed for console, and a map we can edit",
+  "items": [
+   "The crash console players hit in the northern region since 1.8 was found and fixed, with a noticeable performance gain for everyone, PC included.",
+   "The map's author gave the team an editable version of Chernarus, so the safe zone and other places can be changed by the team from now on."
+  ],
+  "source": "Server news, August 25"
+ },
+ {
+  "date": "2026-08-13",
+  "title": "Arma Reforger 1.8",
+  "items": [
+   "The base game's major update, taken the same day after a long patch session; the early version of the reworked zombies went live with it."
+  ],
+  "source": "Server news, August 13 and 14"
+ },
+ {
+  "date": "2026-07-24",
+  "title": "A fresh start on a schedule",
+  "items": [
+   "A wipe chosen by community poll, and a wipe every six weeks from then on.",
+   "EU1 and NA1 Chernarus at 100 slots; EU2 and NA2 Everon at 80.",
+   "The Faircroft Island test server stayed open through development: animals, traders and the returning inventory system could be tried early."
+  ],
+  "source": "Server news, July 24 and 25"
+ },
+ {
+  "date": "2026-07-09",
+  "title": "Building follow-up",
+  "items": [
+   "The FPS drop when placing base parts that clip into others is fixed.",
+   "Greenhouses go on foundations; palisade fences snap and have proper collision.",
+   "Base storage follows a change of flag owner; night times are back; the tenth base member joins; smelter text and inventory stats positions fixed."
+  ],
+  "source": "Change log, July 9"
+ },
+ {
+  "date": "2026-07-04",
+  "title": "Fortify: building rebuilt",
+  "items": [
+   "A radial build menu: hold your building tool to enter build mode; place a wall and the next one is already previewed.",
+   "New foundations, walls and floors, triangle pieces, large garage doors, upgrade paths, new snap logic, pitch and roll, and free placement without a foundation for most items.",
+   "Brick and mortar: craft mortar from sand and water at a concrete mixer, bricks from water and stone; mortar also drops as loot.",
+   "Every base kit is salvageable for its materials; as a member you can remove yourself from a flag.",
+   "Gold ore spawns and the raid watch sounds an alarm when your base takes damage.",
+   "Ground loot respawns over time; code locks on base doors can be repaired.",
+   "Leaving the game unconscious now kills your character: an exploit closed.",
+   "Flag upkeep maths fixed; salvage stations are not persistent; half-eaten food no longer stacks with full items; vehicle covers need an empty vehicle; moved base items keep their position; multiple code locks on one door fixed; garden beds pack up; garage doors on the pre-built item fixed.",
+   "Attachments are back in the loot pool; spray paint, sewing kits and other items have uses.",
+   "New map icons with toggles for points of interest; weights and footprints adjusted; servers start at 6am.",
+   "Missions: a supply drop; an abandoned base (when upkeep lapses, locks drop and a map icon shows for 24 hours); the heli crash must be shot down, with its loot on the ground around it."
+  ],
+  "source": "Change log, July 4"
+ },
+ {
+  "date": "2026-06-20",
+  "title": "Economy, radio and keycards",
+  "items": [
+   "The first version of the new economy, with weapon mods.",
+   "The radio has a menu, favourites and updated songs.",
+   "Magazine repack: drag two magazines onto each other.",
+   "Keycards spawn in random areas, tier 4 included, instead of being gate-kept on the oil rig.",
+   "Window barricades fit modded buildings; Everon gained custom areas."
+  ],
+  "source": "Change log, June 20"
+ },
+ {
+  "date": "2026-06-16",
+  "title": "June fixes",
+  "items": [
+   "The Land Rover back seat works; keys no longer show a stack menu.",
+   "A short anti-glitch delay on world streaming, and recovery for items that cannot be picked up within three seconds.",
+   "Zombies no longer stand at doors forever; they go back to roaming.",
+   "Electrical parts weigh 200 g (was 2 kg); ladders on gates take no damage; melee is off inside safe zones; many small performance tweaks."
+  ],
+  "source": "Change log, June 16"
+ },
+ {
+  "date": "2026-06-10",
+  "title": "After the hardware move",
+  "items": [
+   "New server hardware for both regions, and Official ReforgedZ Everon live.",
+   "Less sickness; gates return the right kit; all cars visible again; going unconscious in a safe zone no longer leaves you stuck; faster regen when knocked out; weight adjustments; the blood icon shows a plus when rising."
+  ],
+  "source": "Server news, June 8; change log, June 10"
+ },
+ {
+  "date": "2026-06-02",
+  "title": "Stability after 1.7",
+  "items": [
+   "The crash cause found and patched; zombies and missions returned.",
+   "Logging in is optimised, so fewer crashes on join; the flag or base no longer forgets you until you reach it.",
+   "Bags go in clothes when empty; bunker loot is once per bunker and the doors close after 30 minutes; air sirens in the northern towns; ore spawners spread out; days last about 3 hours 15, nights 45 minutes.",
+   "Base storages ignore weight; the console player marker works again; dying at 0% health fixed; inventory crafting persists; tree logs fit in your inventory; batteries yield two plates and iron bars ten nails."
+  ],
+  "source": "Change log, May 30 to June 3"
+ },
+ {
+  "date": "2026-05-28",
+  "title": "Arma Reforger 1.7 and a fresh start",
+  "items": [
+   "Landmines in the loot pool; rock and gold ores across the map, more around the new lakes and quarries.",
+   "Small bunkers opened by keys 1, 2 and 3, with vehicles inside; the big bunker, key 4, moved to Pisy.",
+   "The oil rig and the aircraft carrier move on restart; the black market relocated north; the northern parts of the map set to the right loot tier.",
+   "A vehicle garage at the safe zone and a terminal for your base, hackable with fees; a key is needed to store a vehicle and the vehicle must be empty; a parking sign or helipad lets your base spawn vehicles.",
+   "The MH-6 helicopter and many Land Rover variants, from their authors.",
+   "A craftable watch that sounds an alarm when your base is raided; a leather jacket and a stun grenade; new guns from two weapon teams.",
+   "Temperature; blood on your hands to wash off before eating; food and drink are no longer instant, with new animations; punch and block with empty hands; falling into water from height no longer kills you.",
+   "Rebuilt salvage station and crafting menus; a base management menu with full controller support; a toggleable on-screen HUD; a tile-based inventory with a base craft menu inside it; combine items, such as a knife and a can.",
+   "Scrap value: sell junk at market terminals; a maximum listing price on the player market.",
+   "One flag per base, members included; no bases in spawn towns.",
+   "Convoys, rare; roaming bandits always spawn in random towns, unannounced.",
+   "The fire station arsenal no longer spawns infinite wrenches; the kill-death ratio tracks PvP only; tree cutting is no longer persistent and logs do not stay forever; the move to the 1.7 database for long-term stability."
+  ],
+  "source": "Change log, May 28"
+ },
+ {
+  "date": "2026-05-14",
+  "title": "The last wipe of the old build",
+  "items": [
+   "A short wipe and the final stage of being a test server, to give everyone a stable place to play while 1.7 was built."
+  ],
+  "source": "Server news, May 14"
+ },
+ {
+  "date": "2026-04-13",
+  "title": "April fixes and additions",
+  "items": [
+   "Peppers and pumpkin slices give food; cannabis grows in greenhouses; gold code locks no longer need a gold bar; more salvage resources; heli crash sites clean up; plants show their real state.",
+   "Quests on Everon; the green locked gun rack returns its kit when packed up.",
+   "Second-floor doorways no longer need a crouch, and more than one plan can be placed per piece.",
+   "Combat loggers no longer respawn on their own body; a safeguard against spawning as a new character when loading is slow; anti-cheat adjustments; keycards found at the oil rig no longer despawn.",
+   "Vehicle covers return items; the player market no longer loses items at your listing cap.",
+   "Blood effects and bleeding; tread water with flippers for the shipwreck; keycard spawn rate up; the Javelin key saves.",
+   "Potato and burlap sacks to craft; cut certain bushes with an axe for sticks; leg splints heal a broken leg in ten minutes; painkillers give three minutes of full movement.",
+   "Collectables can go on the player market; all storage uses weight only; build block zones fixed; a Promote base member rank; an unstuck button; servers always start at 7am."
+  ],
+  "source": "Change log, April 6 to 13"
+ },
+ {
+  "date": "2026-04-02",
+  "title": "Wildlife begins",
+  "items": [
+   "More iron nodes, lockers and coastal spawns on Everon.",
+   "ReforgedZ Wildlife: fish spawn around a player in the sea, the first step of a new system.",
+   "The Vans shoe volume, old base entity limits, keycard tracking and the large mill case code lock fixed."
+  ],
+  "source": "Change log, April 2"
+ },
+ {
+  "date": "2026-03-30",
+  "title": "Base furniture",
+  "items": [
+   "Twelve chairs, five beds (rest in one to heal faster; there will never be spawn beds), eight tables, a floor clock, a wall clock, a firepit, four carpets, a shelf and twenty-two paintings to craft.",
+   "Spawn points on Everon are more varied; the tents at NWAF on Chernarus are back; vehicles can be repaired on Everon.",
+   "The restart waits for the save to finish instead of kicking players; gun lockers no longer leave guns behind; water cans and the electrical toolkit have the right volume.",
+   "Zombies' alert radius with suppressed weapons patched; salvage stations and lockers return the right plan; fins give their speed advantage in water; a safeguard against freezing while eating or drinking."
+  ],
+  "source": "Change log, March 30 and 31"
+ },
+ {
+  "date": "2026-03-29",
+  "title": "Farming, drugs, gun racks and base upkeep",
+  "items": [
+   "Farming: find seeds and grow tomatoes, potatoes, pumpkins, peppers and carrots in craftable beds, or faster in a greenhouse bought for your base.",
+   "Drug seeds and processing stations.",
+   "Questing reworked: hero and bandit missions with dedicated givers in the safe zone and at the black market; new Treasure Hunt and Convoy missions.",
+   "Gun rack displays to craft and mount; base upkeep to maintain your structures.",
+   "Halloween pumpkins, sandbag walls and bunker pieces, storage barrels, plank window barricades upgradeable to metal, magazine crafting for many weapons, new crafting resources, treasure chests around the world.",
+   "Flippers (faster underwater, slower on land) and a rebreather; the Stashfinder 3000 works.",
+   "The Gators vehicle pack.",
+   "Cancelled placements no longer drop objects between your legs; the sawmill returns the right item; save timing aligned with restarts; the building tool is required for tin fences and gates; more items at the salvage station; no-build zones at key locations; object move mode; prices adjusted; car keys left on you unlock doors.",
+   "Everon on server 2."
+  ],
+  "source": "Change log, March 29"
+ },
+ {
+  "date": "2026-03-16",
+  "title": "The interactive map",
+  "items": [
+   "The interactive map at reforgedz.net/map, with the map author's permission: mark your own locations and share them with your group."
+  ],
+  "source": "Server news, March 16"
+ },
+ {
+  "date": "2026-03-11",
+  "title": "Map update and vehicle covers",
+  "items": [
+   "The latest build of the map.",
+   "Vehicle covers to craft and find: protect vehicles from splash damage and hide them in the wild; salvage one for camo fabric.",
+   "The wooden gate returns its kit when dismantled; wooden fence snap points fixed; more ammo to craft; furnace and sawmill plans return; covered trucks fixed.",
+   "Modest AI Radio syncs across the network.",
+   "Log out at the oil rig and you return at a random spawn point; dead bodies despawn after about 30 minutes."
+  ],
+  "source": "Change log, March 11"
+ },
+ {
+  "date": "2026-03-08",
+  "title": "Modest AI Radio online",
+  "items": [
+   "Listen to the radio outside the game at reforgedz.net/radio."
+  ],
+  "source": "Server news, March 8"
+ },
+ {
+  "date": "2026-03-06",
+  "title": "Quests arrive",
+  "items": [
+   "The first version of the quest framework.",
+   "The loot economy continued: many more spawners, weapons and magazines separated in the tables, collectables, and a chance of collectables in locked containers.",
+   "Military AI at Balata airport and the evacuation site, with their own kill stat and leaderboard: the very start of the outbreak, and the military are not friendly.",
+   "Bandit missions for negative humanity, cycling with hero missions.",
+   "Mission clean-up so tents no longer stack; a stats UI fix.",
+   "The website reforgedz.net launched."
+  ],
+  "source": "Change log, March 6"
+ },
+ {
+  "date": "2026-03-04",
+  "title": "Zombies and the early economy",
+  "items": [
+   "Zombie damage reduced slightly; they are still a threat.",
+   "Guns sometimes spawn with magazines beside them, the first part of the economy changes.",
+   "Base snap positions adjusted; a door sync fix; smoother joins; the katana faces the right way."
+  ],
+  "source": "Change log, March 4"
+ },
+ {
+  "date": "2026-03-02",
+  "title": "Early March fixes",
+  "items": [
+   "The FPS drop when snapping base parts fixed.",
+   "Ghillie suits and face masks can be equipped; tactical pants hold items.",
+   "Selling several items at once no longer loses your caps, with a message if you have no room for them.",
+   "Door sync fixed; correct prices on base upgrades; more cars spawn; leaving the toxic zone and removing the suit no longer keeps hurting you.",
+   "Move items inside your base with the tool in hand; a vehicle flip you can do yourself; storage shows the right weight; the crafting menu fixed for console and PC.",
+   "The Arma 2 bags are back, and a new revolver with its own animations, both from community contributors; zombies have new clothes."
+  ],
+  "source": "Change log, March 2"
+ }
 ]
