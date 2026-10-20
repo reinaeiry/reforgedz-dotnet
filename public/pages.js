@@ -66,7 +66,7 @@
         if (/^\d{4}-\d{2}-\d{2}$/.test(e.date || '')) time.setAttribute('datetime', e.date);
         li.appendChild(time);
         const body = el('div');
-        const h = el('h3', 'changes-title', String(e.title || ''));
+        const h = el('h2', 'changes-title', String(e.title || ''));   // h1 is the page title; entries are the next level
         if (e.status !== 'confirmed') {
           h.appendChild(document.createTextNode(' '));
           h.appendChild(el('span', 'changes-status', 'Being confirmed'));
