@@ -1,4 +1,4 @@
-// Shared behaviour of the document pages (/official, /join, /privacy, /terms, /changes).
+// Shared behaviour of the document pages (/join, /privacy, /terms, /changes).
 // The homepage keeps script.js; these pages have no tabs, no server status and no radio.
 
 // ---- Mobile menu ----
@@ -24,10 +24,10 @@
 })();
 
 // ---- What's changed: render public/changes.json ----
-// Each entry is { date: "YYYY-MM-DD", title, line, proof, status? }. proof is where the change
-// was announced, or a URL. An entry is shown as final only when status is "confirmed" (someone
-// checked it on the live servers); until then it carries a "being confirmed" mark. Everything
-// is inserted as text, never as HTML, so a bad entry cannot run on the page.
+// The full change log. Each entry is { date: "YYYY-MM-DD", title, items: [..], source }:
+// a dated heading, the items as a bulleted list, the source as a small line. Newest
+// first. Everything is inserted as text, never as HTML, so a bad entry cannot run on
+// the page.
 (function () {
   const list = document.getElementById('changesList');
   if (!list) return;
@@ -55,7 +55,7 @@
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(entries => {
       if (!Array.isArray(entries) || entries.length === 0) {
-        showEmpty('Nothing listed yet. Entries appear here once each change has been checked on the live servers.');
+        showEmpty('Nothing listed yet.');
         return;
       }
       const sorted = entries.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
@@ -66,25 +66,14 @@
         if (/^\d{4}-\d{2}-\d{2}$/.test(e.date || '')) time.setAttribute('datetime', e.date);
         li.appendChild(time);
         const body = el('div');
-        const h = el('h2', 'changes-title', String(e.title || ''));   // h1 is the page title; entries are the next level
-        if (e.status !== 'confirmed') {
-          h.appendChild(document.createTextNode(' '));
-          h.appendChild(el('span', 'changes-status', 'Being confirmed'));
+        body.appendChild(el('h2', 'changes-title', String(e.title || '')));   // h1 is the page title; entries are the next level
+        const items = Array.isArray(e.items) ? e.items : [];
+        if (items.length) {
+          const il = el('ul', 'changes-items');
+          for (const it of items) il.appendChild(el('li', null, String(it)));
+          body.appendChild(il);
         }
-        body.appendChild(h);
-        if (e.line) body.appendChild(el('p', 'changes-line', String(e.line)));
-        if (e.proof) {
-          const p = el('p', 'changes-proof', (e.status === 'confirmed' ? 'Checked on the live servers. Announced: ' : 'Announced: '));
-          const proof = String(e.proof);
-          if (/^https?:\/\//.test(proof)) {
-            const a = el('a', 'inline', proof);
-            a.href = proof; a.rel = 'noopener'; a.target = '_blank';
-            p.appendChild(a);
-          } else {
-            p.appendChild(document.createTextNode(proof));
-          }
-          body.appendChild(p);
-        }
+        if (e.source) body.appendChild(el('p', 'changes-proof', 'Source: ' + String(e.source)));
         li.appendChild(body);
         ul.appendChild(li);
       }
