@@ -10,6 +10,22 @@
 .doc {
   --accent-text: #e4524e;
   --text-ghost: #8f8f8f;
+  /* Metric-matched fallbacks: until Oswald and Inter arrive from Google Fonts, Arial is
+     drawn at the width the web fonts will take, so the first paint does not move when
+     they swap in. Measured in Chromium on 2026-10-20: Oswald 700 at 64 px is 78.6% of
+     Arial's width (83.1% at 16.8 px with letter-spacing), Inter 400 is 106.4%. */
+  --display: 'Oswald', 'Oswald Fallback', sans-serif;
+  --body: 'Inter', 'Inter Fallback', sans-serif;
+}
+@font-face {
+  font-family: 'Oswald Fallback';
+  src: local('Arial'), local('Helvetica'), local('Roboto');
+  size-adjust: 80%;
+}
+@font-face {
+  font-family: 'Inter Fallback';
+  src: local('Arial'), local('Helvetica'), local('Roboto');
+  size-adjust: 106.4%;
 }
 
 .skip-link {
@@ -316,6 +332,20 @@ a.code:hover { text-decoration-color: #fff; }
   letter-spacing: 0.5px;
   color: #fff;
   margin: 0 0 6px;
+}
+.changes-status {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-hover);
+  border-radius: 4px;
+  font-family: var(--body);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-ghost);
 }
 .changes-line { font-size: 0.9rem; color: var(--text-dim); line-height: 1.8; margin: 0; }
 .changes-proof { font-size: 0.8rem; color: var(--text-ghost); margin: 8px 0 0; line-height: 1.7; }
