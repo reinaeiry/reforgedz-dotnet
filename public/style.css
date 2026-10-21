@@ -753,7 +753,7 @@ img { display: block; max-width: 100%; }
 
 /* the NattiiGuard mark beside the name, as the app and its reports draw it. Its colours live in
    the svg (the fault line is the bar's #101010, so it reads as a gap), so a cached older
-   stylesheet only loses this sizing. The fault line shows only where the mark's diagonal, about
+   stylesheet only loses this sizing and the hiding below. The fault line shows only where the mark's diagonal, about
    4.2 CSS px here, is 7.5 screen pixels or more -- the size below which the app icon leaves it out
    because it reads as a smudge, not a crack. */
 .ng-mark {
