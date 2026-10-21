@@ -1,7 +1,7 @@
 {
-    "version":  "3.3.0",
-    "file":  "NattiiGuard-Setup-3.3.0.exe",
-    "url":  "https://reforgedz.net/downloads/NattiiGuard-Setup-3.3.0.exe",
-    "sha256":  "575476d6a1105ebd70721d4ff863867e49fa94d44325695cfceb3464829f7b65",
-    "notes":  "The biggest update yet: finds game crashes Windows never recorded (WARDOGS included), explains every verdict, and keeps your reports private."
+    "version":  "3.3.1",
+    "file":  "NattiiGuard-Setup-3.3.1.exe",
+    "url":  "https://reforgedz.net/downloads/NattiiGuard-Setup-3.3.1.exe",
+    "sha256":  "8afb777e755c797d37a33dd603c5a084210c801e0cf6a9804ab165791ad6d254",
+    "notes":  "New look: the Fault-line N icon, sharp at every size. Reports keep their own title on every PC."
 }
