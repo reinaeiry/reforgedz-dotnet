@@ -751,6 +751,16 @@ img { display: block; max-width: 100%; }
 
 .ng-red { color: var(--accent); }
 
+/* the NattiiGuard mark beside the name, as the app and its reports draw it. Its colours live in
+   the svg (the fault line is the bar's #101010, so it reads as a gap), so a cached older
+   stylesheet only loses this sizing. */
+.ng-mark {
+  width: 0.96em;
+  height: 1.05em;
+  margin-right: 0.5em;
+  vertical-align: -0.16em;
+}
+
 .ng-report-tag {
   font-family: var(--display);
   font-size: 0.68rem;
