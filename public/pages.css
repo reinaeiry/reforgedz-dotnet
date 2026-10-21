@@ -371,8 +371,31 @@ a.code:hover { text-decoration-color: #fff; }
   color: var(--text-ghost);
   font-size: 0.9rem;
 }
+/* Coming soon: the team's preview of the next update, boxed and set apart from the dated
+   log, with its own heading and one for the log beneath it. */
+.changes-section-title {
+  font-family: var(--display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent-text);
+  margin: 0 0 14px;
+}
+.changes-coming {
+  margin: 0 0 40px;
+  padding: 26px 28px;
+  border: 1px solid var(--border-hover);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.changes-coming .changes-section-title { margin-bottom: 8px; }
+.changes-coming-note { font-size: 0.9rem; color: var(--text-dim); line-height: 1.8; margin: 0 0 18px; }
+.changes-coming-entry + .changes-coming-entry { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--border); }
 @media (max-width: 640px) {
   .changes-item { grid-template-columns: 1fr; gap: 6px; }
+  .changes-coming { padding: 20px 18px; margin-bottom: 32px; }
 }
 
 /* Meta line at the foot of a document */

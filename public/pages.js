@@ -59,25 +59,55 @@
         return;
       }
       const sorted = entries.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+      // An entry with `coming: true` is the team's preview of the next update: shown apart
+      // from the dated log, so nothing reads as live before it is. Its log entry follows
+      // when it ships.
+      const coming = sorted.filter(e => e && e.coming === true);
+      const shipped = sorted.filter(e => !(e && e.coming === true));
+      const out = [];
+
+      function itemsOf(e) {
+        const items = Array.isArray(e.items) ? e.items : [];
+        if (!items.length) return null;
+        const il = el('ul', 'changes-items');
+        for (const it of items) il.appendChild(el('li', null, String(it)));
+        return il;
+      }
+
+      if (coming.length) {
+        const sec = el('section', 'changes-coming');
+        sec.id = 'coming';
+        sec.appendChild(el('h2', 'changes-section-title', 'Coming soon'));
+        sec.appendChild(el('p', 'changes-coming-note', 'What the team has shown but not yet shipped. The change log below follows when it goes live.'));
+        for (const e of coming) {
+          const box = el('div', 'changes-coming-entry');
+          box.appendChild(el('h3', 'changes-title', String(e.title || '')));
+          const il = itemsOf(e);
+          if (il) box.appendChild(il);
+          if (e.source) box.appendChild(el('p', 'changes-proof', 'Source: ' + String(e.source)));
+          sec.appendChild(box);
+        }
+        out.push(sec);
+        out.push(el('h2', 'changes-section-title', 'Live on the servers'));
+      }
+
       const ul = el('ul', 'changes-list');
-      for (const e of sorted) {
+      for (const e of shipped) {
         const li = el('li', 'changes-item');
         const time = el('time', 'changes-date', prettyDate(e.date));
         if (/^\d{4}-\d{2}-\d{2}$/.test(e.date || '')) time.setAttribute('datetime', e.date);
         li.appendChild(time);
         const body = el('div');
-        body.appendChild(el('h2', 'changes-title', String(e.title || '')));   // h1 is the page title; entries are the next level
-        const items = Array.isArray(e.items) ? e.items : [];
-        if (items.length) {
-          const il = el('ul', 'changes-items');
-          for (const it of items) il.appendChild(el('li', null, String(it)));
-          body.appendChild(il);
-        }
+        // h1 is the page title; entries sit under the section heading when there is one
+        body.appendChild(el(coming.length ? 'h3' : 'h2', 'changes-title', String(e.title || '')));
+        const il = itemsOf(e);
+        if (il) body.appendChild(il);
         if (e.source) body.appendChild(el('p', 'changes-proof', 'Source: ' + String(e.source)));
         li.appendChild(body);
         ul.appendChild(li);
       }
-      list.replaceChildren(ul);
+      out.push(ul);
+      list.replaceChildren(...out);
       list.setAttribute('aria-busy', 'false');
     })
     .catch(() => showEmpty('The list could not be loaded just now. Try again in a moment.'));
