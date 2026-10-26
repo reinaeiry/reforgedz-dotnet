@@ -15,6 +15,7 @@
 //   node tools/healthReport.js            run now and post (the card says "Manual run")
 //   node tools/healthReport.js --no-post  run now, print only
 //   node tools/healthReport.js --dry-run  report missing roles without granting
+if (require.main === module) require('../tlsRoots'); // run on its own: server.js's trusted roots (tlsRoots.js)
 const path = require('path');
 if (require.main === module) require('dotenv').config({ path: process.env.ENV_FILE || path.join(__dirname, '..', '.env'), quiet: true });
 

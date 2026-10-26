@@ -18,6 +18,7 @@
 // printed a confident "would close: 15" while silently omitting one real
 // suspension. A sweep that under-reports is worse than no sweep, so an
 // incomplete picture is now a hard stop rather than a footnote.
+if (require.main === module) require('../tlsRoots'); // run on its own: server.js's trusted roots (tlsRoots.js)
 const path = require('path');
 if (require.main === module) require('dotenv').config({ path: process.env.ENV_FILE || path.join(__dirname, '..', '.env'), quiet: true });
 

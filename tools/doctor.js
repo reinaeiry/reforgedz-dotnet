@@ -15,6 +15,7 @@
 // Every check is read-only. SHOP_REHEARSAL=1 turns a blanked outbound
 // credential into a SKIP instead of a FAIL, so a restored copy can be judged
 // on what it is meant to have.
+if (require.main === module) require('../tlsRoots'); // run on its own: server.js's trusted roots (tlsRoots.js)
 const fs = require('fs');
 const path = require('path');
 const APP_DIR = path.join(__dirname, '..');

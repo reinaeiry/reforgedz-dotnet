@@ -175,6 +175,7 @@ function scheduleNightlyBackups() {
 module.exports = { runBackup, lastBackupStatus, scheduleNightlyBackups, offsiteTargets, listSorted, STALE_AFTER_MS };
 
 if (require.main === module) {
+  require('../tlsRoots'); // run on its own: server.js's trusted roots (tlsRoots.js)
   require('dotenv').config({ path: process.env.ENV_FILE || path.join(__dirname, '..', '.env'), quiet: true });
   runBackup({ reason: 'manual' }).then(s => process.exit(s.ok && !s.errors.length ? 0 : 1));
 }

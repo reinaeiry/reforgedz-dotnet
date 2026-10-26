@@ -10,6 +10,7 @@
 // Stops at the first window PayPal does not answer and says which; the windows
 // before it stay filled, because each row is true on its own, so a re-run picks up
 // where it stopped. Live PayPal only; sandbox rows are never touched.
+if (require.main === module) require('../tlsRoots'); // run on its own: server.js's trusted roots (tlsRoots.js)
 const path = require('path');
 if (require.main === module) require('dotenv').config({ path: process.env.ENV_FILE || path.join(__dirname, '..', '.env'), quiet: true });
 

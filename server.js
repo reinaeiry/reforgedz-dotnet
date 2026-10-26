@@ -1,3 +1,5 @@
+// First, before anything can open a connection: stop trusting the emSign roots behind the leaked eMudhra keys.
+require('./tlsRoots');
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
