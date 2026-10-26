@@ -219,10 +219,12 @@ check('paypal.sandbox', 'payments', {}, () => paypalCheck(true));
 check('smtp', 'email', {}, async () => {
   if (!process.env.SMTP_HOST) return REHEARSAL ? skip('SMTP blanked for rehearsal') : fail('SMTP_HOST not set: no receipts or billing emails');
   const nodemailer = require('nodemailer');
+  const secure = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
   const tx = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || '587', 10),
-    secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    secure,
+    requireTLS: !secure, // as invoiceMail.js: no STARTTLS, no login
     auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS || '' } : undefined,
     connectionTimeout: 10000, greetingTimeout: 10000
   });

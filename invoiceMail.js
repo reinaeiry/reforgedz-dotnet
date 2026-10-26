@@ -18,10 +18,14 @@ let transporter = null;
 function getTransport() {
   if (transporter) return transporter;
   if (!process.env.SMTP_HOST) return null;
+  const secure = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || '587', 10),
-    secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    secure,
+    // Without implicit TLS (port 587), send nothing unless STARTTLS succeeds: otherwise anyone on the path can
+    // delete STARTTLS from the server's reply and read the login and every email in clear text.
+    requireTLS: !secure,
     auth: process.env.SMTP_USER
       ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS || '' }
       : undefined
