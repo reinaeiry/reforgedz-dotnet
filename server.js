@@ -17,7 +17,7 @@ const { dataPath } = require('./dataDir');
 const sessionDb = new Database(dataPath('sessions-store.db'));
 sessionDb.pragma('journal_mode = WAL');
 const passport = require('passport');
-const SteamStrategy = require('passport-steam').Strategy;
+const { steamStrategy } = require('./lib/steam-signin');
 const db = require('./db');
 const { cleanGamertag, findPlayers, asReforgerUuid } = require('./playerLookup');
 const fx = require('./fx');
@@ -68,24 +68,10 @@ passport.deserializeUser((steamId, done) => {
   done(null, user || null);
 });
 
-passport.use(new SteamStrategy({
-  returnURL: BASE_URL + '/auth/steam/callback',
-  realm: BASE_URL + '/',
-  apiKey: process.env.STEAM_API_KEY
-}, (identifier, profile, done) => {
-  const steamId = profile.id;
-  const persona = profile.displayName;
-  const avatar = profile.photos && profile.photos[2] ? profile.photos[2].value : (profile.photos && profile.photos[0] ? profile.photos[0].value : '');
-  const role = ADMIN_IDS.includes(steamId) ? 'admin' : 'user';
-
-  db.prepare(`
-    INSERT INTO users (steam_id, persona, avatar_url, role) VALUES (?, ?, ?, ?)
-    ON CONFLICT(steam_id) DO UPDATE SET persona = excluded.persona, avatar_url = excluded.avatar_url, role = ?
-  `).run(steamId, persona, avatar, role, role);
-
-  const user = db.prepare('SELECT * FROM users WHERE steam_id = ?').get(steamId);
-  done(null, user);
-}));
+// The account, and the ADMIN_STEAM_IDS check, come from the SteamID in Steam's verified OpenID answer; the name and
+// avatar from Steam's Web API over HTTPS. passport-steam's own profile lookup sent STEAM_API_KEY over plain HTTP and
+// let whoever answered it choose the account (lib/steam-signin.js).
+passport.use(steamStrategy({ baseUrl: BASE_URL, db, adminIds: ADMIN_IDS, apiKey: process.env.STEAM_API_KEY }));
 
 // Behind Pterodactyl/nginx, so the client's real IP is in X-Forwarded-For.
 // trust proxy = 1 means trust one hop of proxy; needed for rate-limit to key by real IP.
