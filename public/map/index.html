@@ -429,7 +429,7 @@
     <div class="layer-section" style="border-bottom:none;">
         <h3>About</h3>
         <div style="font-size:11px;color:var(--text-dim);line-height:1.5;">
-            The in-game maps for the ReforgedZ servers, with every place the game names on them. On Chernarus the ReforgedZ map icons are here too, and the ones the game keeps off until you switch them on start off here as well. Coordinates match the ones you see in game, so you can copy a spot here and find it there. Custom markers stay in your browser, per map.
+            The in-game maps for the ReforgedZ servers, with every place the game names on them. On Chernarus the roads, buildings and water are drawn from the game's own map data, and the ReforgedZ map icons are here too: the ones the game keeps off until you switch them on start off here as well. Coordinates match the ones you see in game, so you can copy a spot here and find it there. Custom markers stay in your browser, per map.
         </div>
         <div class="thanks-block">
             <h3>Special thanks</h3>
@@ -450,7 +450,8 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="map-data.js"></script>
 <script>
-// The map art is 4096 px across, so zoom 3 (8 px per metre) is as close as it stays sharp.
+// Chernarus is tiled down to zoom -1 (half a pixel per metre) and Faircroft's art is 4096 px across;
+// closer than that the browser enlarges the finest tiles, and zoom 3 (8 px per metre) is the limit.
 const MAX_ZOOM = 3;
 const MIN_ZOOM = -4;
 const DEFAULT_MAP = 'chernarus';
@@ -489,6 +490,12 @@ const map = L.map('map', {
     attributionControl: false
 });
 L.control.zoom({ position: 'topright' }).addTo(map);
+
+// Tiled base maps (Chernarus): files are <url>/<-z>/<x>/<y>.webp with y counted up from the southern edge
+// (Leaflet's own tile y runs negative from the south in CRS.Simple, so the file y is -y - 1).
+const RZTiles = L.TileLayer.extend({
+    getTileUrl(c) { return `${this._url}/${-c.z}/${c.x}/${-c.y - 1}.webp`; }
+});
 
 let currentId = null, current = null;
 let baseLayer = null, satLayer = null, borderLayer = null;
@@ -538,7 +545,9 @@ function switchMap(id) {
     const S = current.size;
 
     map.setMaxBounds([[-S * 0.35, -S * 0.35], [S * 1.35, S * 1.35]]);
-    baseLayer = L.imageOverlay(current.image, [[0, 0], [S, S]]).addTo(map);
+    baseLayer = current.tiles
+        ? new RZTiles(current.tiles.url, { tileSize: 256, minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM, minNativeZoom: current.tiles.minNativeZoom, maxNativeZoom: current.tiles.maxNativeZoom, noWrap: true, bounds: [[0, 0], [S, S]], keepBuffer: 4 }).addTo(map)
+        : L.imageOverlay(current.image, [[0, 0], [S, S]]).addTo(map);
     borderLayer = L.rectangle([[0, 0], [S, S]], { color: '#000', weight: 2, fill: false, interactive: false }).addTo(map);
     buildGrid(S);
     document.getElementById('toggle-sat-row').hidden = !current.satellite;

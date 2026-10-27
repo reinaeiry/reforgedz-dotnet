@@ -19,6 +19,9 @@ const MAP_DATA = {
         short: "Chernarus",
         size: 15360,
         image: "chernarus-map.jpg",
+        // Base map tiles: the terrain's map image with the roads, buildings and water the game draws from
+        // map/ChernarusMinusBeta.topo, rendered 2026-10-27 from Chernarus-RZ 1.0.12 (the live version).
+        tiles: {"url": "tiles/chernarus", "minNativeZoom": -4, "maxNativeZoom": -1},
         satellite: {"image": "map-image-hires.jpg", "bounds": [[72, 178], [15432, 15538]]},
         credit: "Chernarus by Bonzi & Soap",
         thanks: "Special thanks to Bonzi & Soap for reimagining Chernarus for ReforgedZ.",
