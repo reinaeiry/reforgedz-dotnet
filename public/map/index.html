@@ -172,6 +172,10 @@
         .layer-icon { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; flex-shrink: 0; }
         .layer-count { margin-left: auto; font-size: 10px; color: var(--text-ghost); font-variant-numeric: tabular-nums; }
         .layer-toggle[hidden] { display: none; }
+        .poi-icon { width: 18px; height: 18px; margin-right: 7px; flex-shrink: 0; }
+        .poi-subhead { font-size: 10px; color: var(--text-ghost); margin: 8px 0 2px; }
+        .leaflet-marker-icon.rz-poi { filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+        .type-badge img { width: 12px; height: 12px; vertical-align: -2px; margin-right: 3px; }
 
         /* Coords */
         #coords-display {
@@ -376,6 +380,11 @@
         </label>
     </div>
 
+    <div class="layer-section" id="poi-section" hidden>
+        <h3>Map Icons</h3>
+        <div id="poi-toggles"></div>
+    </div>
+
     <div class="user-marker-form">
         <h3>Custom Markers</h3>
         <input type="text" id="custom-name" placeholder="Marker name..." />
@@ -420,7 +429,7 @@
     <div class="layer-section" style="border-bottom:none;">
         <h3>About</h3>
         <div style="font-size:11px;color:var(--text-dim);line-height:1.5;">
-            The in-game maps for the ReforgedZ servers, with every place the game names on them. Coordinates match the ones you see in game, so you can copy a spot here and find it there. Custom markers stay in your browser, per map.
+            The in-game maps for the ReforgedZ servers, with every place the game names on them. On Chernarus the ReforgedZ map icons are here too, and the ones the game keeps off until you switch them on start off here as well. Coordinates match the ones you see in game, so you can copy a spot here and find it there. Custom markers stay in your browser, per map.
         </div>
         <div class="thanks-block">
             <h3>Special thanks</h3>
@@ -485,6 +494,7 @@ let currentId = null, current = null;
 let baseLayer = null, satLayer = null, borderLayer = null;
 let gridLayer = L.layerGroup();
 let layerGroups = {}, layerCounts = {};
+let poiGroups = {};
 let customMarkers = [], customLeafletMarkers = {};
 let placingMarker = false;
 
@@ -514,6 +524,8 @@ function clearMap() {
     if (borderLayer) { map.removeLayer(borderLayer); borderLayer = null; }
     Object.values(layerGroups).forEach(g => map.removeLayer(g));
     layerGroups = {}; layerCounts = {};
+    Object.values(poiGroups).forEach(g => map.removeLayer(g));
+    poiGroups = {};
     customMarkers = []; customLeafletMarkers = {};
     gridLayer.clearLayers();
     document.getElementById('toggle-sat').checked = false;
@@ -532,6 +544,7 @@ function switchMap(id) {
     document.getElementById('toggle-sat-row').hidden = !current.satellite;
 
     loadMarkers();
+    loadPois();
     loadCustomMarkers();
     loadLayerPrefs();
 
@@ -540,7 +553,8 @@ function switchMap(id) {
     else map.fitBounds([[0, 0], [S, S]]);
 
     document.getElementById('map-title').innerHTML = `${esc(current.short.toUpperCase())} <span>MAP</span>`;
-    document.getElementById('map-sub').textContent = `${(S / 1000).toFixed(2).replace(/\.?0+$/, '')} km × ${(S / 1000).toFixed(2).replace(/\.?0+$/, '')} km · ${current.markers.length} places`;
+    const nPois = (current.pois || []).length;
+    document.getElementById('map-sub').textContent = `${(S / 1000).toFixed(2).replace(/\.?0+$/, '')} km × ${(S / 1000).toFixed(2).replace(/\.?0+$/, '')} km · ${current.markers.length} places` + (nPois ? ` · ${nPois} map icons` : '');
     document.querySelector('#map-credit-badge .badge-title').textContent = current.credit || '';
     document.querySelector('#map-credit-badge .badge-thanks').textContent = current.thanks || '';
     document.getElementById('map-credit-badge').hidden = !current.credit;
@@ -611,6 +625,62 @@ const loadLayerPrefs = () => {
     });
 };
 
+// ---- ReforgedZ map icons ----
+// Same defaults as the in-game map: the kinds its icon menu hides start off here too.
+const poiTypeOf = p => (current.poiTypes || {})[p.icon] || { label: p.icon, hidden: false };
+
+function createPoiPopup(p) {
+    const t = poiTypeOf(p);
+    const kind = [t.label !== p.name ? esc(t.label) : '', p.count ? `${p.count} here` : ''].filter(Boolean).join(' &middot; ');
+    return `<div class="popup-title">${esc(p.name)}</div>
+        ${kind ? `<div class="popup-type">${kind}</div>` : ''}
+        <div class="popup-coords">X: ${Math.round(p.x)} | Z: ${Math.round(p.z)}</div>`;
+}
+
+function loadPois() {
+    const pois = current.pois || [];
+    document.getElementById('poi-section').hidden = !pois.length;
+    if (!pois.length) { document.getElementById('poi-toggles').innerHTML = ''; return; }
+    Object.keys(current.poiTypes).forEach(k => { poiGroups[k] = L.layerGroup(); });
+    pois.forEach(p => {
+        const icon = L.icon({ iconUrl: `icons/${p.icon}.png`, iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -12], className: 'rz-poi' });
+        L.marker([p.z, p.x], { icon, title: p.name, alt: p.name, zIndexOffset: 500 }).bindPopup(createPoiPopup(p)).addTo(poiGroups[p.icon]);
+    });
+    const saved = store.get(`poiPrefs:${currentId}`, {});
+    Object.entries(current.poiTypes).forEach(([k, t]) => {
+        const on = k in saved ? !!saved[k] : !t.hidden;
+        if (on) poiGroups[k].addTo(map);
+    });
+    buildPoiToggles();
+}
+
+function buildPoiToggles() {
+    const c = document.getElementById('poi-toggles');
+    c.innerHTML = '';
+    const kinds = Object.entries(current.poiTypes);
+    const row = ([k, t]) => {
+        const n = current.pois.filter(p => p.icon === k).length;
+        const label = document.createElement('label');
+        label.className = 'layer-toggle';
+        label.innerHTML = `<input type="checkbox" ${map.hasLayer(poiGroups[k]) ? 'checked' : ''} data-poi="${k}" /><img class="poi-icon" src="icons/${k}.png" alt="" />${esc(t.label)}<span class="layer-count">${n}</span>`;
+        label.querySelector('input').addEventListener('change', function() {
+            this.checked ? map.addLayer(poiGroups[k]) : map.removeLayer(poiGroups[k]);
+            savePoiPrefs();
+        });
+        c.appendChild(label);
+    };
+    kinds.filter(([, t]) => !t.hidden).forEach(row);
+    if (kinds.some(([, t]) => t.hidden)) {
+        const h = document.createElement('div');
+        h.className = 'poi-subhead';
+        h.textContent = 'Off in game until switched on';
+        c.appendChild(h);
+        kinds.filter(([, t]) => t.hidden).forEach(row);
+    }
+}
+
+const savePoiPrefs = () => { const p = {}; document.querySelectorAll('#poi-toggles input[data-poi]').forEach(cb => p[cb.dataset.poi] = cb.checked); store.set(`poiPrefs:${currentId}`, p); };
+
 // ---- Search ----
 const searchBox = document.getElementById('search-box'), searchResults = document.getElementById('search-results');
 searchBox.addEventListener('input', function() {
@@ -630,6 +700,20 @@ searchBox.addEventListener('input', function() {
                 if (!map.hasLayer(g)) { map.addLayer(g); const cb = document.querySelector(`#layer-toggles input[data-layer="${m.type}"]`); if (cb) cb.checked = true; }
                 g.eachLayer(l => { const ll = l.getLatLng(); if (ll.lat === m.z && ll.lng === m.x) l.openPopup(); });
             }
+        });
+        searchResults.appendChild(div);
+    });
+    (current.pois || []).filter(p => `${p.name} ${poiTypeOf(p).label}`.toLowerCase().includes(q)).slice(0, 12).forEach(p => {
+        const t = poiTypeOf(p);
+        const div = document.createElement('div');
+        div.className = 'search-result';
+        div.innerHTML = `${esc(p.name)} <span class="type-badge" style="background:rgba(255,255,255,0.12);color:var(--text);"><img src="icons/${p.icon}.png" alt="" />${esc(t.label)}</span>`;
+        div.addEventListener('click', () => {
+            map.setView([p.z, p.x], -1); searchResults.innerHTML = ''; searchBox.value = p.name;
+            const g = poiGroups[p.icon];
+            if (!g) return;
+            if (!map.hasLayer(g)) { map.addLayer(g); const cb = document.querySelector(`#poi-toggles input[data-poi="${p.icon}"]`); if (cb) cb.checked = true; savePoiPrefs(); }
+            g.eachLayer(l => { const ll = l.getLatLng(); if (ll.lat === p.z && ll.lng === p.x) l.openPopup(); });
         });
         searchResults.appendChild(div);
     });
@@ -753,6 +837,7 @@ function updateStats() {
     const rows = [
         ['Terrain Size', `${km} × ${km} km`],
         ['Named Places', current.markers.length],
+        ...((current.pois || []).length ? [['Map Icons', current.pois.length]] : []),
         ['Custom Markers', customMarkers.length],
         ['Zoom Level', map.getZoom()],
     ];
