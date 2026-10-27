@@ -91,7 +91,8 @@ docker compose run --rm -v "$PWD:/restore" shop node tools/restore.js /restore/s
 ```
 
 The tunnel: in Zero Trust → Networks → Tunnels → the tunnel → **Published application
-routes**, point `reforgedz.net` and `wifi.reforgedz.net` at `http://shop:3000`. Either reuse
+routes**, point `reforgedz.net` and `wifi.reforgedz.net` (the retired WiFi Room Tester's host: the app
+only redirects it to the site, since 2026-10-26) at `http://shop:3000`. Either reuse
 the existing tunnel's token on the new host (the old connector keeps working until you stop
 it; two connectors on one tunnel is fine) or create a new tunnel and move the routes.
 

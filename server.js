@@ -166,54 +166,6 @@ const authLimiter = rateLimit({
 
 app.use(globalLimiter);
 
-// ---- wifi.reforgedz.net ----
-// The Cloudflare tunnel points the wifi subdomain at this same container, so
-// route by Host before sessions/static kick in. Besides the page itself, the
-// subdomain serves its own speed-test endpoints, because the site's CSP is
-// connect-src 'self': the tester may only talk to its own origin.
-//
-//   /ping.bin        32 B, edge-cached  -> latency to the nearest Cloudflare PoP
-//   /blob-<n>m.bin   incompressible bulk, edge-cached -> download measures the
-//                    user's access network, not the tunnel back to this box
-//   /upload          POST, drained and counted here -> upload DOES traverse to
-//                    this box; the page labels it accordingly
-//
-// The .bin extension matters: it is on Cloudflare's default-cacheable list, so
-// with Cache-Control public the edge keeps these and only /upload and the page
-// itself ever reach this process once a PoP is warm.
-const wifiPage = path.join(__dirname, 'public', 'wifi', 'index.html');
-// 1 MiB of noise, repeated per-request below. gzip's 32 KB window cannot fold
-// the repetition, so the wire size is the advertised size.
-const wifiChunk = crypto.randomBytes(1024 * 1024);
-const WIFI_BLOBS = { '/blob-1m.bin': 1, '/blob-10m.bin': 10, '/blob-25m.bin': 25 };
-const WIFI_UPLOAD_CAP = 40 * 1024 * 1024;
-// Blob requests that reach this process are edge misses: a speed test misses only on a cold PoP, a handful
-// of times, then reads from the edge. More than this per minute from one address is someone pulling bulk
-// data through the tunnel on purpose.
-const wifiBlobLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 30,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'Too many requests. Slow down.' }
-});
-
-function sendWifiBlob(res, mib) {
-  res.writeHead(200, {
-    'Content-Type': 'application/octet-stream',
-    'Content-Length': String(mib * wifiChunk.length),
-    'Cache-Control': 'public, max-age=86400, immutable'
-  });
-  let left = mib;
-  (function pump() {
-    while (left > 0) {
-      left--;
-      if (!res.write(wifiChunk)) { res.once('drain', pump); return; }
-    }
-    res.end();
-  })();
-}
-
 // The hostname the visitor asked for, as the Cloudflare tunnel delivers it in Host. Not req.hostname: with
 // trust proxy on, that reads X-Forwarded-Host, which the client sets and Cloudflare passes through, so one
 // request to reforgedz.net could be answered (and edge-cached) as the wiki or wifi host.
@@ -236,36 +188,18 @@ app.use((req, res, next) => {
   res.end();
 });
 
+// ---- wifi.reforgedz.net: the retired WiFi Room Tester's host, every request 301s to the site ----
+// Retired 2026-10-26 (owner). The tunnel still routes the subdomain here, and without this it would serve the
+// site itself under that host; old links land on the homepage instead.
 app.use((req, res, next) => {
   if (tunnelHost(req) !== 'wifi.reforgedz.net') return next();
-
-  if (req.method === 'POST' && req.path === '/upload') {
-    let received = 0;
-    req.on('data', (c) => {
-      received += c.length;
-      if (received > WIFI_UPLOAD_CAP) req.destroy();
-    });
-    req.on('end', () => res.json({ received }));
-    req.on('error', () => { try { res.destroy(); } catch {} });
-    return;
-  }
-
-  if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).end();
-  const mib = WIFI_BLOBS[req.path];
-  // The edge caches by full URL, so /blob-25m.bin?<anything new> was a guaranteed miss that streamed 25 MiB
-  // out of this box, over the NIC the game servers use. The page never adds a query; send any request that
-  // does to the bare, cached URL.
-  if ((mib || req.path === '/ping.bin') && req.originalUrl.includes('?')) return res.redirect(301, req.path);
-  if (req.path === '/ping.bin') {
-    res.writeHead(200, {
-      'Content-Type': 'application/octet-stream',
-      'Content-Length': '32',
-      'Cache-Control': 'public, max-age=86400, immutable'
-    });
-    return res.end(wifiChunk.subarray(0, 32));
-  }
-  if (mib) return wifiBlobLimiter(req, res, () => sendWifiBlob(res, mib));
-  res.sendFile(wifiPage);
+  res.writeHead(301, {
+    Location: 'https://reforgedz.net/',
+    // A day, not forever, as for the old wiki host.
+    'Cache-Control': 'public, max-age=86400',
+    'Content-Length': '0'
+  });
+  res.end();
 });
 
 // ---- Middleware ----

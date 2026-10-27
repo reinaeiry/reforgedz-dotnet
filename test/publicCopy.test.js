@@ -143,6 +143,27 @@ test('B7: the admin form has the two sale-window fields, in UTC, and the shop ma
   assert.match(shopJs, /if \(e\.code === 'not_on_sale'\) \{\s*showCheckoutNotice\(\{ title: 'Not on sale right now', text: e\.message \}\);/);
 });
 
+// ---- NattiiGuard on the homepage (2026-10-26) ----------------------------------------
+
+test('NattiiGuard: the homepage download, version and size match the update manifest and the installer', () => {
+  // A release swaps the installer and the manifest in one commit; the homepage must say the same thing.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nattiiguard-version.json'), 'utf8'));
+  assert.ok(indexHtml.includes(`<a href="/downloads/${manifest.file}" class="btn-filled ng-dl" download>`),
+    'the button downloads the version the updater offers');
+  assert.ok(indexHtml.includes(`<p class="ng-meta">Version ${manifest.version} &middot; `), 'the line under it names that version');
+  const bytes = fs.statSync(path.join(__dirname, '..', 'public', 'downloads', manifest.file)).size;
+  const mb = (bytes / (1024 * 1024)).toFixed(1);
+  assert.ok(indexHtml.includes(` &middot; ${mb}&nbsp;MB &middot; `), `the size shown is the installer's (${mb} MB)`);
+});
+
+test('the WiFi Room Tester is gone: no link, no page, no speed-test endpoints, and its host redirects to the site', () => {
+  assert.doesNotMatch(indexHtml, /wifi\.reforgedz\.net|WiFi Room/i);
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'public', 'wifi')), false, 'no page left to serve at /wifi/');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.doesNotMatch(server, /blob-\d+m\.bin|ping\.bin|wifiChunk|WIFI_/);
+  assert.match(server, /if \(tunnelHost\(req\) !== 'wifi\.reforgedz\.net'\) return next\(\);\s*res\.writeHead\(301, \{\s*Location: 'https:\/\/reforgedz\.net\/'/);
+});
+
 test('no checkbox in the served markup is pre-ticked', () => {
   for (const [name, text] of [['shop.html', shopHtml], ['account.html', accountHtml], ['index.html', indexHtml], ['monetization.html', pub('monetization.html')]]) {
     for (const m of text.matchAll(/<input[^>]*type="checkbox"[^>]*>/g)) {

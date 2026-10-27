@@ -4,8 +4,9 @@
 #   mkdir -p data && sudo chown -R 1000:1000 data
 #   TUNNEL_TOKEN=... GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build
 #
-# In Zero Trust the tunnel's published route for reforgedz.net (and wifi.)
-# points at http://shop:3000, the service name on this compose network.
+# In Zero Trust the tunnel's published route for reforgedz.net (and wifi., which
+# only redirects to the site since 2026-10-26) points at http://shop:3000, the
+# service name on this compose network.
 # Nothing is published on the host; only the tunnel reaches the app.
 services:
   shop:
