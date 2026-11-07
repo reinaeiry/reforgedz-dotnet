@@ -1,3 +1,5 @@
+// EU2 and NA2 were retired on 2026-11-07; these tests keep the four-server layout to cover the multi-server logic.
+process.env.RZ_SERVER_IDS = 'eu1,eu2,na1,na2,dev1';
 // Tests for the game.admins sync (sync.js): which staff roles cover which server,
 // when a lapsed shop-owned entry is released or stripped, the ceiling alert, and the
 // entitlement builders the sync writes from. The builders run against the REAL

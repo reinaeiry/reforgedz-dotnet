@@ -6,8 +6,11 @@
 // ALL_SERVER_IDS is every server we can still reach for admin tooling. The save
 // inspector needs the second — dropping eu3 from the first must not take its
 // saves away with it.
-const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2', 'dev1'];
-const ALL_SERVER_IDS = ['eu1', 'eu2', 'eu3', 'na1', 'na2', 'dev1'];
+// EU2 and NA2 were retired on 2026-11-07 (one EU and one NA server now): not sold, synced or listed. Their live
+// subscriptions moved to EU1 / NA1; their labels stay so ended orders still render a name.
+// RZ_SERVER_IDS overrides the list (the tests pin the old four-server layout to keep the multi-server logic covered).
+const SERVER_IDS = (process.env.RZ_SERVER_IDS || 'eu1,na1,dev1').split(',').map(s => s.trim()).filter(Boolean);
+const ALL_SERVER_IDS = [...SERVER_IDS.filter(id => id.startsWith('eu')), 'eu3', ...SERVER_IDS.filter(id => !id.startsWith('eu'))];
 // What a buyer may pick at checkout. dev1 stays in SERVER_IDS because the sync
 // writes to it and staff grant there, but the shop page never offers it, so a
 // checkout naming it could only come from a crafted request.
@@ -72,7 +75,8 @@ function listAllServers() {
     { id: 'na2', region: 'na', host: naHost, port: naPort, user: naUser, path: na[1] || null },
     { id: 'dev1', region: 'na', host: naHost, port: naPort, user: naUser, path: naDev || null },
   ];
-  return all.filter(s => s.host && s.path).map(s => ({
+  // A retired server (not in ALL_SERVER_IDS) is never reached, even while its path is still in the env.
+  return all.filter(s => s.host && s.path && ALL_SERVER_IDS.includes(s.id)).map(s => ({
     ...s,
     configPath: configPathFromShopPath(s.path),
     savePath: saveGamePathFromShopPath(s.path)

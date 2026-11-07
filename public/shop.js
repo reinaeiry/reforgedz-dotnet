@@ -15,7 +15,8 @@ const PLATFORM_LABELS = { steam: 'Steam', xbox: 'Xbox', psn: 'PlayStation' };
 // EU3 is now the EU dev server. EU2 and NA2 run Faircroft (was Everon). 'eu3' stays out of
 // SERVER_IDS so it isn't offered for purchase; its label is kept for historical
 // order display.
-const SERVER_IDS = ['eu1', 'eu2', 'na1', 'na2'];
+// EU2 and NA2 were retired on 2026-11-07.
+const SERVER_IDS = ['eu1', 'na1'];
 const SERVER_LABELS = { eu1: 'EU1 (Chernarus)', eu2: 'EU2 (Faircroft)', eu3: 'EU3 (now EU Dev)', na1: 'NA1 (Chernarus)', na2: 'NA2 (Faircroft)' };
 
 // The purchase terms, one line right above every button whose click can lead to

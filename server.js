@@ -1077,7 +1077,8 @@ async function pollServerStatus() {
       // the same panel through — a Palworld server named "eirys goonserver" showed
       // up as a phantom entry. Dev builds are tagged "[EU Dev]"/"[NA Dev]" (no
       // digit after the region), so they stay excluded as before.
-      if (!/\[(?:EU|NA)\d+\]/i.test(attr.name || '')) continue;
+      // EU2 and NA2 were retired on 2026-11-07 and may stay on the panel stopped, so only the two live tags count.
+      if (!/\[(?:EU1|NA1)\]/i.test(attr.name || '')) continue;
 
       const region = detectRegion(attr.name, attr.node);
 

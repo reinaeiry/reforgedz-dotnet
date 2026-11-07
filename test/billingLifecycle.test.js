@@ -1,3 +1,5 @@
+// EU2 and NA2 were retired on 2026-11-07; these tests keep the four-server layout to cover the multi-server logic.
+process.env.RZ_SERVER_IDS = 'eu1,eu2,na1,na2,dev1';
 // Tests for the billing lifecycle (paymentEvents.js): a renewal that is not paid
 // ends the subscription at once, a payment the shop cannot honour is refunded, a
 // subscription only starts while its server has a slot, a lost dispute takes the

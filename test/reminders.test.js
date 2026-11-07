@@ -1,3 +1,5 @@
+// EU2 and NA2 were retired on 2026-11-07; these tests keep the four-server layout to cover the multi-server logic.
+process.env.RZ_SERVER_IDS = 'eu1,eu2,na1,na2,dev1';
 // Tests for the "your priority queue ends soon" run (tools/reminders.js) and its
 // email (invoiceMail.priorityQueueEndingEmail) against the REAL schema: db.js is
 // loaded with DATA_DIR pointed at a throwaway folder, so every migration runs
