@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maps | ReforgedZ</title>
-    <meta property="og:title" content="ReforgedZ - Interactive Maps">
-    <meta property="og:description" content="Interactive in-game maps of Chernarus and Faircroft Islands for the ReforgedZ servers, with every named place.">
+    <title>Chernarus Map | ReforgedZ</title>
+    <meta property="og:title" content="ReforgedZ - Interactive Chernarus Map">
+    <meta property="og:description" content="Interactive Chernarus map for the ReforgedZ servers: every named place, loot tiers, safe zones, black market spots, bunkers and more.">
     <meta name="theme-color" content="#cc1f1f">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -172,6 +172,11 @@
         .layer-icon { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; flex-shrink: 0; }
         .layer-count { margin-left: auto; font-size: 10px; color: var(--text-ghost); font-variant-numeric: tabular-nums; }
         .layer-toggle[hidden] { display: none; }
+        .layer-img { width: 16px; height: 16px; margin-right: 6px; flex-shrink: 0; }
+        .layer-subhead { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-ghost); margin: 8px 0 2px; }
+        .layer-subhead:first-child { margin-top: 0; }
+        .tier-legend { display: flex; flex-wrap: wrap; gap: 3px 10px; padding: 2px 0 6px 21px; font-size: 10px; color: var(--text-dim); }
+        .tier-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 
         /* Coords */
         #coords-display {
@@ -338,10 +343,6 @@
     </div>
 </nav>
 
-<div id="map-switch" role="tablist" aria-label="Choose a map">
-    <button type="button" role="tab" data-map="chernarus">Chernarus</button>
-    <button type="button" role="tab" data-map="faircroft">Faircroft</button>
-</div>
 
 <div id="sidebar">
     <div class="sidebar-header">
@@ -412,18 +413,16 @@
             <div class="control-row"><span>Zoom</span><span>Scroll / +&minus;</span></div>
             <div class="control-row"><span>Copy Coords</span><span class="controls-hint-coords">Right-click</span></div>
             <div class="control-row"><span>Location Info</span><span>Click marker</span></div>
-            <div class="control-row"><span>Switch Map</span><span>Buttons at the top</span></div>
         </div>
     </div>
 
     <div class="layer-section" style="border-bottom:none;">
         <h3>About</h3>
         <div style="font-size:11px;color:var(--text-dim);line-height:1.5;">
-            The in-game maps for the ReforgedZ servers, with every place the game names on them. Coordinates match the ones you see in game, so you can copy a spot here and find it there. Custom markers stay in your browser, per map.
+            The in-game map for the ReforgedZ servers, with every place the game names on them, plus the safe zones, black market spots, bunkers, loot tiers and the other places on the in-game map, with the same icons. Coordinates match the ones you see in game, so you can copy a spot here and find it there. Custom markers stay in your browser, per map.
         </div>
         <div class="thanks-block">
             <h3>Special thanks</h3>
-            <div class="thanks-line"><strong>Faircroft Islands</strong> by Lakes Dan</div>
             <div class="thanks-line"><strong>Chernarus</strong> by Bonzi &amp; Soap</div>
         </div>
     </div>
@@ -439,6 +438,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="map-data.js"></script>
+<script src="map-layers.js"></script>
 <script>
 // The map art is 4096 px across, so zoom 3 (8 px per metre) is as close as it stays sharp.
 const MAX_ZOOM = 3;
@@ -458,12 +458,34 @@ const MARKER_STYLES = {
     base:       { label: 'Base',        color: '#00cc66', icon: '🏕️', size: 24 },
     danger:     { label: 'Danger',      color: '#cc1f1f', icon: '☠️', size: 24 },
     loot:       { label: 'Loot',        color: '#ffcc00', icon: '💰', size: 22 },
-    objective:  { label: 'Objective',   color: '#ff66cc', icon: '🎯', size: 24 }
+    objective:  { label: 'Objective',   color: '#ff66cc', icon: '🎯', size: 24 },
+    // Game layers (map-layers.js): the same places and icons players see on the in-game map.
+    tiers:       { label: 'Loot tiers',             color: '#f08c14', game: true },
+    safezone:    { label: 'Safe zones',             color: '#e05a4a', game: true, img: 'Safezone', size: 34 },
+    blackmarket: { label: 'Black market spots',     color: '#e05a4a', game: true, img: 'Blackmarket', size: 30,
+                   description: 'The black market moves between these spots.' },
+    police:      { label: 'Police stations',        color: '#e05a4a', game: true, img: 'Police', size: 28 },
+    bunkers:     { label: 'Bunkers',                color: '#e05a4a', game: true, img: 'bunker', size: 28 },
+    airfields:   { label: 'Airfields',              color: '#e05a4a', game: true, img: 'airfield', size: 30 },
+    services:    { label: 'Hospitals & fire stations', color: '#e05a4a', game: true, img: 'Hospital', size: 26 },
+    crafting:    { label: 'Furnaces, sawmills & salvage', color: '#e05a4a', game: true, img: 'Sawmill', size: 26 },
+    traders:     { label: 'Traders',                color: '#e05a4a', game: true, img: 'Boat_Trader', size: 28 },
+    landmarks:   { label: 'Landmarks & arcades',    color: '#e05a4a', game: true, img: 'Oil_Rig', size: 28 },
+    workbench:   { label: 'Workbenches & mixers',   color: '#e05a4a', game: true, img: 'Crafting_Workbench', size: 22 }
 };
 const BASE_TYPES = ['city', 'town', 'village', 'settlement', 'military', 'poi', 'terrain', 'water'];
-const OFF_BY_DEFAULT = new Set(['terrain', 'water']);
+const GAME_TYPES = ['tiers', 'safezone', 'blackmarket', 'police', 'bunkers', 'airfields', 'services', 'crafting', 'traders', 'landmarks', 'workbench'];
+const OFF_BY_DEFAULT = new Set(['terrain', 'water', 'tiers', 'workbench']);
+const TIERS = {
+    1: { color: '#46beff', text: 'Coast' },
+    2: { color: '#f0dc28', text: 'Inland' },
+    3: { color: '#ff8c14', text: 'Airfields' },
+    4: { color: '#e62828', text: 'High risk' },
+    5: { color: '#be5aff', text: 'Bunkers, airdrops, missions' }
+};
+const GAME = typeof MAP_LAYERS !== 'undefined' ? MAP_LAYERS : {};
 
-// Everything the browser remembers is keyed per map, so Chernarus pins never show on Faircroft.
+// Everything the browser remembers is keyed per map.
 const store = {
     get(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v === null || v === undefined ? d : v; } catch (e) { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
@@ -487,8 +509,12 @@ let layerGroups = {}, layerCounts = {};
 let customMarkers = [], customLeafletMarkers = {};
 let placingMarker = false;
 
-function createMarkerIcon(type) {
+function createMarkerIcon(type, img) {
     const s = MARKER_STYLES[type] || MARKER_STYLES.custom;
+    if (img || s.img) {
+        const n = s.size || 26;
+        return L.icon({ iconUrl: `icons/${img || s.img}.png`, iconSize: [n, n], iconAnchor: [n / 2, n / 2], popupAnchor: [0, -n / 2] });
+    }
     return L.divIcon({
         html: `<div class="custom-marker" style="background:${s.color};width:${s.size}px;height:${s.size}px;">${s.icon}</div>`,
         iconSize: [s.size, s.size], iconAnchor: [s.size/2, s.size/2], className: ''
@@ -578,25 +604,66 @@ function loadMarkers() {
         L.marker([m.z, m.x], { icon: createMarkerIcon(m.type), title: m.name }).bindPopup(createPopup(m)).addTo(layerGroups[m.type]);
         layerCounts[m.type]++;
     });
+    loadGameLayers();
     if (!layerGroups.custom) layerGroups.custom = L.layerGroup();
     Object.entries(layerGroups).forEach(([t, g]) => { if (!OFF_BY_DEFAULT.has(t)) g.addTo(map); });
     buildLayerToggles();
 }
 
+// Game places: points with the in-game icons, and the loot tier zones (largest drawn first, so small zones stay on top).
+let gamePoints = [];
+function loadGameLayers() {
+    gamePoints = [];
+    const g = GAME[currentId];
+    if (!g) return;
+    GAME_TYPES.forEach(t => { layerGroups[t] = L.layerGroup(); layerCounts[t] = 0; });
+    const area = p => Math.abs(p.reduce((a, q, i) => { const r = p[(i + 1) % p.length]; return a + q[0] * r[1] - r[0] * q[1]; }, 0)) / 2;
+    g.tiers.slice().sort((a, b) => area(b.points) - area(a.points)).forEach(z => {
+        const t = TIERS[z.tier] || TIERS[1];
+        L.polygon(z.points.map(p => [p[1], p[0]]), { color: t.color, weight: 2, fillColor: t.color, fillOpacity: 0.22 })
+            .bindPopup(`<div class="popup-title">Tier ${z.tier} loot</div><div class="popup-type" style="color:${t.color}">${esc(t.text)}</div>`)
+            .addTo(layerGroups.tiers);
+        layerCounts.tiers++;
+    });
+    g.points.forEach(p => {
+        const m = { name: p.name, type: p.layer, x: p.x, z: p.z, img: p.icon, description: (MARKER_STYLES[p.layer] || {}).description };
+        L.marker([p.z, p.x], { icon: createMarkerIcon(p.layer, p.icon), title: p.name }).bindPopup(createPopup(m)).addTo(layerGroups[p.layer]);
+        layerCounts[p.layer] = (layerCounts[p.layer] || 0) + 1;
+        gamePoints.push(m);
+    });
+}
+
+function toggleRow(type) {
+    const s = MARKER_STYLES[type] || MARKER_STYLES.custom;
+    const label = document.createElement('label');
+    label.className = 'layer-toggle';
+    const swatch = s.img ? `<img class="layer-img" src="icons/${s.img}.png" alt="">` : `<span class="layer-icon" style="background:${s.color};"></span>`;
+    label.innerHTML = `<input type="checkbox" ${map.hasLayer(layerGroups[type]) ? 'checked' : ''} data-layer="${type}" />${swatch}${esc(s.label || type)}<span class="layer-count">${layerCounts[type] || 0}</span>`;
+    label.querySelector('input').addEventListener('change', function() {
+        this.checked ? map.addLayer(layerGroups[type]) : map.removeLayer(layerGroups[type]);
+        saveLayerPrefs();
+    });
+    return label;
+}
+
 function buildLayerToggles() {
     const c = document.getElementById('layer-toggles');
     c.innerHTML = '';
-    Object.keys(layerGroups).filter(t => layerCounts[t] > 0).forEach(type => {
-        const s = MARKER_STYLES[type] || MARKER_STYLES.custom;
-        const label = document.createElement('label');
-        label.className = 'layer-toggle';
-        label.innerHTML = `<input type="checkbox" ${map.hasLayer(layerGroups[type]) ? 'checked' : ''} data-layer="${type}" /><span class="layer-icon" style="background:${s.color};"></span>${esc(s.label || type)}<span class="layer-count">${layerCounts[type] || 0}</span>`;
-        c.appendChild(label);
-        label.querySelector('input').addEventListener('change', function() {
-            this.checked ? map.addLayer(layerGroups[type]) : map.removeLayer(layerGroups[type]);
-            saveLayerPrefs();
+    const shown = Object.keys(layerGroups).filter(t => layerCounts[t] > 0);
+    const game = GAME_TYPES.filter(t => shown.includes(t));
+    if (game.length) {
+        const h = document.createElement('div'); h.className = 'layer-subhead'; h.textContent = 'In game'; c.appendChild(h);
+        game.forEach(t => {
+            c.appendChild(toggleRow(t));
+            if (t === 'tiers') {
+                const lg = document.createElement('div'); lg.className = 'tier-legend';
+                lg.innerHTML = Object.entries(TIERS).map(([n, v]) => `<span><i style="background:${v.color}"></i>T${n} ${esc(v.text)}</span>`).join('');
+                c.appendChild(lg);
+            }
         });
-    });
+        const h2 = document.createElement('div'); h2.className = 'layer-subhead'; h2.textContent = 'Places'; c.appendChild(h2);
+    }
+    shown.filter(t => !GAME_TYPES.includes(t)).forEach(t => c.appendChild(toggleRow(t)));
 }
 
 const saveLayerPrefs = () => { const p = {}; document.querySelectorAll('#layer-toggles input[data-layer]').forEach(cb => p[cb.dataset.layer] = cb.checked); store.set(`layerPrefs:${currentId}`, p); };
@@ -616,12 +683,12 @@ searchBox.addEventListener('input', function() {
     const q = this.value.toLowerCase().trim();
     searchResults.innerHTML = '';
     if (q.length < 2 || !current) return;
-    const all = current.markers.concat(customMarkers);
+    const all = current.markers.concat(gamePoints, customMarkers);
     all.filter(m => m.name.toLowerCase().includes(q)).slice(0, 12).forEach(m => {
         const s = MARKER_STYLES[m.type] || MARKER_STYLES.custom;
         const div = document.createElement('div');
         div.className = 'search-result';
-        div.innerHTML = `${esc(m.name)} <span class="type-badge" style="background:${s.color};color:#000;">${esc(s.label || m.type)}</span>`;
+        div.innerHTML = `${esc(m.name)} <span class="type-badge" style="background:${s.game ? '#ddd' : s.color};color:#000;">${esc(s.label || m.type)}</span>`;
         div.addEventListener('click', () => {
             map.setView([m.z, m.x], -1); searchResults.innerHTML = ''; searchBox.value = m.name;
             const g = layerGroups[m.type];
@@ -752,6 +819,7 @@ function updateStats() {
     const rows = [
         ['Terrain Size', `${km} × ${km} km`],
         ['Named Places', current.markers.length],
+        ...(gamePoints.length ? [['Game Places', gamePoints.length]] : []),
         ['Custom Markers', customMarkers.length],
         ['Zoom Level', map.getZoom()],
     ];

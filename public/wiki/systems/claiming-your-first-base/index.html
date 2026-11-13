@@ -23,7 +23,7 @@
       <span>Search the wiki</span><kbd>/</kbd>
     </button>
     <nav class="wk-site-links" aria-label="reforgedz.net">
-      <a href="https://reforgedz.net/">Home</a><a href="https://reforgedz.net/map">Map</a><a href="https://reforgedz.net/shop">Shop</a><a href="https://discord.gg/reforgedz">Discord</a>
+      <a href="https://reforgedz.net/">Home</a><a href="https://reforgedz.net/changes">Changes</a><a href="https://reforgedz.net/map">Map</a><a href="https://reforgedz.net/shop">Shop</a><a href="https://discord.gg/reforgedz">Discord</a>
     </nav>
     <button class="wk-menu" type="button" data-menu aria-controls="wk-side" aria-expanded="false" aria-label="Wiki sections">
       <span></span><span></span><span></span>
@@ -43,7 +43,7 @@
     </div>
     <div class="wk-side-group">
       <a class="wk-side-title" href="/wiki/locations/">Locations</a>
-      <ul><li><a href="/wiki/locations/where-to-go/">Where to Go for What</a></li><li><a href="/wiki/locations/chernarus/">Chernarus</a></li><li><a href="/wiki/locations/faircroft-islands/">Faircroft Islands</a></li><li><a href="/wiki/locations/the-safezone/">The Safezone</a></li><li><a href="/wiki/locations/the-black-market/">The Black Market</a></li><li><a href="/wiki/locations/rify/">Rify</a></li><li><a href="/wiki/locations/the-oil-rigs/">The Oil Rigs</a></li></ul>
+      <ul><li><a href="/wiki/locations/where-to-go/">Where to Go for What</a></li><li><a href="/wiki/locations/chernarus/">Chernarus</a></li><li><a href="/wiki/locations/the-safezone/">The Safezone</a></li><li><a href="/wiki/locations/the-black-market/">The Black Market</a></li><li><a href="/wiki/locations/rify/">Rify</a></li><li><a href="/wiki/locations/the-oil-rigs/">The Oil Rigs</a></li></ul>
     </div>
     <div class="wk-side-group">
       <a class="wk-side-title" href="/wiki/mechanics/">Gameplay Mechanics</a>
@@ -55,7 +55,7 @@
     </div>
     <div class="wk-side-group">
       <a class="wk-side-title" href="/wiki/about/">About</a>
-      <ul><li><a href="/wiki/about/about-this-wiki/">About This Wiki</a></li></ul>
+      <ul><li><a href="/wiki/about/rules/">Server Rules</a></li><li><a href="/wiki/about/about-this-wiki/">About This Wiki</a></li></ul>
     </div>
   </nav>
 <main class="wk-main" id="wk-main">
@@ -81,7 +81,7 @@
 </tr>
 <tr>
 <td><strong>Size limit</strong></td>
-<td>200 base parts</td>
+<td>200 parts, counted as <em>Base Entities</em> in the base menu</td>
 </tr>
 <tr>
 <td><strong>Upkeep</strong></td>
@@ -129,15 +129,22 @@
 </tr>
 </tbody>
 </table></div>
-<p>The server rules add more: no bases in Balota on Chernarus, and none within 400 m of military zones, safe zones, bandit camps and other points of interest. A base that breaks the rules is deleted by staff. See Server Rules.</p>
+<p>The server rules add more: no bases in Balota on Chernarus, and none within 400 m of military zones, safe zones, bandit camps and other points of interest. A base that breaks the rules is deleted by staff. See <a href="/wiki/about/rules/">Server Rules</a>.</p>
 <h2 id="building-inside-your-circle">Building inside your circle</h2>
 <p>Everything you build is placed from a kit, in two steps: put the kit down as a see-through plan, then hit the plan with the Building Tool until it’s finished.</p>
 <ul>
 <li><strong>Open build mode</strong> with the Building Tool in your hands: <kbd>B</kbd>, or the right trigger on a controller. Every key is on <a href="/wiki/start/controls/">Controls</a>.</li>
 <li><strong>Stay inside the circle.</strong> Outside it you’ll see <em>Outside your base area (within 25 m of your flag)</em>.</li>
 <li><strong>See the circle.</strong> The flag has a <em>Show Flag Radius</em> action that draws your territory ring on the ground.</li>
-<li><strong>Take a piece back</strong> with <em>Remove Base Part</em>, and you get its kit back. Storage has to be empty first. A built-in lock keeps its tier in the kit: <em>Tier 2 lock stored in the kit</em>.</li>
-<li><strong>200 parts, then stop.</strong> The base menu shows <em>Base Entities: 120 / 200</em>. At the limit: <em>Max base entities reached</em>.</li>
+<li><strong>Take a piece back</strong> with its remove action, and you get its kit back. It reads <em>Remove Base Part</em>, or is named for the piece, like <em>Remove Wall</em> or <em>Pick Up Lamp</em>. Storage has to be empty first. A built-in lock keeps its tier in the kit: <em>Tier 2 lock stored in the kit</em>.</li>
+</ul>
+<h3 id="the-200-part-limit">The 200-part limit</h3>
+<p>A flag base holds 200 parts, a tent base 15. Finished pieces inside your circle count toward it: walls, floors, doors and stairs, but also storage, furniture and lights. The flag itself doesn’t. At the limit nothing more goes down, and you’ll see <em>Max base entities reached</em>.</p>
+<ul>
+<li><strong>Your count is in the corner.</strong> Open the flag’s base menu (its <em>Base Managment</em> action): <em>Base Entities: 120 / 200</em> sits in the bottom-right corner, on every tab. It isn’t in the <strong>UPKEEP</strong> list. <em>Free Entities: 25 / 25</em> there counts the 25 parts you pay no upkeep for, not your limit.</li>
+<li><strong>Plans count too.</strong> A plan takes its place the moment you put it down, but the corner count shows finished parts only. At <em>Base Entities: 190 / 200</em> with 10 plans down, you’re already full: finish those 10 and you’re at 200 / 200.</li>
+<li><strong>See what’s using it.</strong> The <strong>UPKEEP</strong> list’s QTY column shows how many of each kind of part you have.</li>
+<li><strong>Make room</strong> by taking back a part you don’t need, or a plan you won’t finish (<em>Remove Plan</em> on most plans). Either way you get the kit back.</li>
 </ul>
 <h3 id="per-base-limits">Per-base limits</h3>
 <div class="tablewrap"><table>
