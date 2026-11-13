@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maps | ReforgedZ</title>
+    <title>Chernarus Map | ReforgedZ</title>
     <meta property="og:title" content="ReforgedZ - Interactive Maps">
-    <meta property="og:description" content="Interactive in-game maps of Chernarus and Faircroft Islands for the ReforgedZ servers, with every named place.">
+    <meta property="og:description" content="Interactive Chernarus map for the ReforgedZ servers: every named place, loot tiers, the safe zone, black market spots, bunkers and the in-game map icons.">
     <meta name="theme-color" content="#cc1f1f">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -174,6 +174,9 @@
         .layer-toggle[hidden] { display: none; }
         .poi-icon { width: 18px; height: 18px; margin-right: 7px; flex-shrink: 0; }
         .poi-subhead { font-size: 10px; color: var(--text-ghost); margin: 8px 0 2px; }
+        .tier-swatch { width: 18px; height: 12px; margin-right: 7px; flex-shrink: 0; border-radius: 2px; background: linear-gradient(90deg, #46beff 25%, #f0dc28 25% 50%, #ff8c14 50% 75%, #e62828 75%); }
+        .tier-legend { display: flex; flex-wrap: wrap; gap: 3px 10px; padding: 2px 0 8px 21px; font-size: 10px; color: var(--text-dim); }
+        .tier-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
         .leaflet-marker-icon.rz-poi { filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
         .type-badge img { width: 12px; height: 12px; vertical-align: -2px; margin-right: 3px; }
 
@@ -345,7 +348,6 @@
 
 <div id="map-switch" role="tablist" aria-label="Choose a map">
     <button type="button" role="tab" data-map="chernarus">Chernarus</button>
-    <button type="button" role="tab" data-map="faircroft">Faircroft</button>
 </div>
 
 <div id="sidebar">
@@ -422,7 +424,6 @@
             <div class="control-row"><span>Zoom</span><span>Scroll / +&minus;</span></div>
             <div class="control-row"><span>Copy Coords</span><span class="controls-hint-coords">Right-click</span></div>
             <div class="control-row"><span>Location Info</span><span>Click marker</span></div>
-            <div class="control-row"><span>Switch Map</span><span>Buttons at the top</span></div>
         </div>
     </div>
 
@@ -433,7 +434,6 @@
         </div>
         <div class="thanks-block">
             <h3>Special thanks</h3>
-            <div class="thanks-line"><strong>Faircroft Islands</strong> by Lakes Dan</div>
             <div class="thanks-line"><strong>Chernarus</strong> by Bonzi &amp; Soap</div>
         </div>
     </div>
@@ -449,8 +449,9 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="map-data.js"></script>
+<script src="map-layers.js"></script>
 <script>
-// Chernarus is tiled down to zoom -1 (half a pixel per metre) and Faircroft's art is 4096 px across;
+// Chernarus is tiled down to zoom -1 (half a pixel per metre);
 // closer than that the browser enlarges the finest tiles, and zoom 3 (8 px per metre) is the limit.
 const MAX_ZOOM = 3;
 const MIN_ZOOM = -4;
@@ -474,7 +475,26 @@ const MARKER_STYLES = {
 const BASE_TYPES = ['city', 'town', 'village', 'settlement', 'military', 'poi', 'terrain', 'water'];
 const OFF_BY_DEFAULT = new Set(['terrain', 'water']);
 
-// Everything the browser remembers is keyed per map, so Chernarus pins never show on Faircroft.
+// map-layers.js (tools/map/build_layers.py): loot tiers, every spot the moving black market can open at,
+// bunkers and airfields. The black market spots replace the single extracted icon.
+const TIERS = {
+    1: { color: '#46beff', text: 'Coast' },
+    2: { color: '#f0dc28', text: 'Inland' },
+    3: { color: '#ff8c14', text: 'Airfields' },
+    4: { color: '#e62828', text: 'High risk' }
+};
+if (typeof MAP_LAYERS !== 'undefined') {
+    Object.entries(MAP_LAYERS).forEach(([id, extra]) => {
+        const d = MAP_DATA[id];
+        if (!d) return;
+        d.pois = (d.pois || []).filter(p => p.icon !== 'blackmarket').concat(extra.pois);
+        d.poiTypes = Object.assign({}, d.poiTypes, extra.poiTypes);
+        d.poiTypes.blackmarket = { label: 'Black Market (moves between these)', hidden: false };
+        d.tiers = extra.tiers;
+    });
+}
+
+// Everything the browser remembers is keyed per map.
 const store = {
     get(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v === null || v === undefined ? d : v; } catch (e) { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
@@ -656,6 +676,18 @@ function loadPois() {
         L.marker([p.z, p.x], { icon, title: p.name, alt: p.name, zIndexOffset: 500 }).bindPopup(createPoiPopup(p)).addTo(poiGroups[p.icon]);
     });
     const saved = store.get(`poiPrefs:${currentId}`, {});
+    if (current.tiers && current.tiers.length) {
+        // Largest zones first, so the small ones stay clickable on top. Off until switched on.
+        poiGroups.__tiers = L.layerGroup();
+        const area = p => Math.abs(p.reduce((a, q, i) => { const r = p[(i + 1) % p.length]; return a + q[0] * r[1] - r[0] * q[1]; }, 0)) / 2;
+        current.tiers.slice().sort((a, b) => area(b.points) - area(a.points)).forEach(z => {
+            const t = TIERS[z.tier] || TIERS[1];
+            L.polygon(z.points.map(p => [p[1], p[0]]), { color: t.color, weight: 2, fillColor: t.color, fillOpacity: 0.22 })
+                .bindPopup(`<div class="popup-title">Tier ${z.tier} loot</div><div class="popup-type">${esc(t.text)}</div>`)
+                .addTo(poiGroups.__tiers);
+        });
+        if (saved.__tiers) poiGroups.__tiers.addTo(map);
+    }
     Object.entries(current.poiTypes).forEach(([k, t]) => {
         const on = k in saved ? !!saved[k] : !t.hidden;
         if (on) poiGroups[k].addTo(map);
@@ -667,6 +699,20 @@ function buildPoiToggles() {
     const c = document.getElementById('poi-toggles');
     c.innerHTML = '';
     const kinds = Object.entries(current.poiTypes);
+    if (poiGroups.__tiers) {
+        const label = document.createElement('label');
+        label.className = 'layer-toggle';
+        label.innerHTML = `<input type="checkbox" ${map.hasLayer(poiGroups.__tiers) ? 'checked' : ''} data-poi="__tiers" /><span class="tier-swatch"></span>Loot tiers<span class="layer-count">${current.tiers.length}</span>`;
+        label.querySelector('input').addEventListener('change', function() {
+            this.checked ? map.addLayer(poiGroups.__tiers) : map.removeLayer(poiGroups.__tiers);
+            savePoiPrefs();
+        });
+        c.appendChild(label);
+        const legend = document.createElement('div');
+        legend.className = 'tier-legend';
+        legend.innerHTML = Object.entries(TIERS).map(([n, v]) => `<span><i style="background:${v.color}"></i>T${n} ${esc(v.text)}</span>`).join('');
+        c.appendChild(legend);
+    }
     const row = ([k, t]) => {
         const n = current.pois.filter(p => p.icon === k).length;
         const label = document.createElement('label');
